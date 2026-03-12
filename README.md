@@ -54,11 +54,13 @@ py run.py
 ├─ HANDOFF.md
 ├─ screening_state.duckdb
 ├─ logs/
+│  └─ debug/
 ├─ cache/
 │  └─ strategy_features/
 ├─ scripts/
 │  ├─ README.md
-│  └─ prepare_maintenance_refactor.py
+│  ├─ prepare_maintenance_refactor.py
+│  └─ migrate_db_debug_logs_to_files.py
 ├─ strategies/
 │  ├─ __init__.py
 │  ├─ engine_commons.py
@@ -94,7 +96,8 @@ py run.py
 8. `app/services/kline_maintenance.py`：K 线维护执行引擎，支持最新更新与历史回填。
 9. `app/services/concept_manager.py`：概念更新任务生命周期管理。
 10. `app/services/concept_maintenance.py`：概念数据抓取、过滤、写库与进度汇总。
-11. `strategies/groups/strategy_2/*`：新策略模板，重点说明 specialized 入口契约、payload 时间窗口合同与概念过滤写法。
+11. `app/services/simple_api_bridge.py`：统一隔离 zsdtdx simple_api 导入与进程池生命周期，提供自动清理抓取器的上下文封装。
+12. `strategies/groups/strategy_2/*`：新策略模板，重点说明 specialized 入口契约、payload 时间窗口合同与概念过滤写法。
 
 ## 5. 配置与依赖要点
 
@@ -106,7 +109,7 @@ py run.py
 2. `cache`：策略缓存根目录与容量上限。
 3. `specialized_engine`：并发槽位、工作线程上限、默认降级策略。
 4. `timeframes`：周期顺序与 DuckDB 表映射。
-5. `maintenance`：维护窗口、批量参数、停止超时、重试轮次和调试开关。
+5. `maintenance`：维护窗口、批量参数、停止超时与重试轮次。
 6. `concept`：概念抓取超时、并发数、重试次数与板块过滤名单。
 7. `parallel_log`、`maintenance_log`、`log_keep`：并行抓取日志压缩策略和日志保留策略。
 8. `app`：启动预热与停机优雅等待时间。
@@ -223,7 +226,8 @@ py run.py
 
 1. `screening_state.duckdb`
 2. `logs/app.log*`
-3. `cache/strategy_features/<strategy_group_id>/...`
+3. `logs/debug/*.jsonl`（维护与概念任务的 debug 明细，按 job_id 分文件存储）
+4. `cache/strategy_features/<strategy_group_id>/...`
 
 文档协同约束：
 

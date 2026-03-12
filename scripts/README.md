@@ -7,6 +7,7 @@
 ## 文件清单
 
 - `prepare_maintenance_refactor.py`
+- `migrate_db_debug_logs_to_files.py`：一次性脚本，将状态库中历史 debug 日志迁移到 `logs/debug/` JSONL 文件并清理 DB 中的 debug 行。
 
 ## 使用方式
 

@@ -29,6 +29,7 @@ from app.db.state_db import StateDB
 from app.services.concept_manager import ConceptManager
 from app.services.maintenance_manager import MaintenanceManager
 from app.services.maintenance_logger import compact_maintenance_detail_for_app_log
+from app.services.simple_api_bridge import destroy_parallel_fetcher_safely
 from app.services.strategy_registry import StrategyRegistry
 from app.services.task_manager import TaskManager
 from app.settings import (
@@ -318,8 +319,7 @@ def on_shutdown() -> None:
         logger.exception("task_manager shutdown 失败: %s", exc)
     # 优雅销毁 zsdtdx 并行进程池，释放 worker 连接与进程资源。
     try:
-        from zsdtdx.simple_api import destroy_parallel_fetcher
-        summary = destroy_parallel_fetcher()
+        summary = destroy_parallel_fetcher_safely()
         logger.info("zsdtdx 并行拣取器已销毁 | %s", json.dumps(summary, ensure_ascii=False, default=str))
     except Exception as exc:
         logger.warning("zsdtdx 并行拣取器销毁异常: %s", exc)

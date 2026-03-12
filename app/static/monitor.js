@@ -1052,6 +1052,7 @@ async function createTask(runMode = "full") {
     sample_size: sampleSize,
     strategy_group_id: groupId,
     group_params: groupParams,
+    skip_coverage_filter: $("skipCoverageFilter").checked,
   };
 
   const resp = await postJSON("/api/tasks", payload);

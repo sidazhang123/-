@@ -100,7 +100,6 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     "maintenance_log": {
         "app_compact_enabled": True,
         "app_show_step_heartbeat": False,
-        "db_debug_detail_enabled": True,
         "app_policy": "progress_stage_warning",
     },
     "log_keep": {
@@ -514,10 +513,6 @@ def _build_runtime_settings(raw_config: dict[str, Any]) -> dict[str, Any]:
         maintenance_log_cfg.get("app_show_step_heartbeat"),
         "maintenance_log.app_show_step_heartbeat",
     )
-    maintenance_log_db_debug_detail_enabled = _expect_bool(
-        maintenance_log_cfg.get("db_debug_detail_enabled"),
-        "maintenance_log.db_debug_detail_enabled",
-    )
     maintenance_log_app_policy = _expect_str(
         maintenance_log_cfg.get("app_policy"),
         "maintenance_log.app_policy",
@@ -619,7 +614,6 @@ def _build_runtime_settings(raw_config: dict[str, Any]) -> dict[str, Any]:
         "PARALLEL_LOG_INCLUDE_FULL_TASKS_DEBUG": parallel_log_include_full_tasks_debug,
         "MAINTENANCE_LOG_APP_COMPACT_ENABLED": maintenance_log_app_compact_enabled,
         "MAINTENANCE_LOG_APP_SHOW_STEP_HEARTBEAT": maintenance_log_app_show_step_heartbeat,
-        "MAINTENANCE_LOG_DB_DEBUG_DETAIL_ENABLED": maintenance_log_db_debug_detail_enabled,
         "MAINTENANCE_LOG_APP_POLICY": maintenance_log_app_policy,
         "CONCEPT_REQUEST_TIMEOUT_SECONDS": concept_request_timeout_seconds,
         "CONCEPT_MAX_WORKERS": concept_max_workers,
@@ -687,7 +681,6 @@ PARALLEL_LOG_SAMPLE_SIZE = _RUNTIME_SETTINGS["PARALLEL_LOG_SAMPLE_SIZE"]
 PARALLEL_LOG_INCLUDE_FULL_TASKS_DEBUG = _RUNTIME_SETTINGS["PARALLEL_LOG_INCLUDE_FULL_TASKS_DEBUG"]
 MAINTENANCE_LOG_APP_COMPACT_ENABLED = _RUNTIME_SETTINGS["MAINTENANCE_LOG_APP_COMPACT_ENABLED"]
 MAINTENANCE_LOG_APP_SHOW_STEP_HEARTBEAT = _RUNTIME_SETTINGS["MAINTENANCE_LOG_APP_SHOW_STEP_HEARTBEAT"]
-MAINTENANCE_LOG_DB_DEBUG_DETAIL_ENABLED = _RUNTIME_SETTINGS["MAINTENANCE_LOG_DB_DEBUG_DETAIL_ENABLED"]
 MAINTENANCE_LOG_APP_POLICY = _RUNTIME_SETTINGS["MAINTENANCE_LOG_APP_POLICY"]
 CONCEPT_REQUEST_TIMEOUT_SECONDS = _RUNTIME_SETTINGS["CONCEPT_REQUEST_TIMEOUT_SECONDS"]
 CONCEPT_MAX_WORKERS = _RUNTIME_SETTINGS["CONCEPT_MAX_WORKERS"]

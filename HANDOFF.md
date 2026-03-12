@@ -38,10 +38,12 @@
 ├─ requirements.txt
 ├─ screening_state.duckdb
 ├─ logs/
+│  └─ debug/
 ├─ cache/
 ├─ scripts/
 │  ├─ README.md
-│  └─ prepare_maintenance_refactor.py
+│  ├─ prepare_maintenance_refactor.py
+│  └─ migrate_db_debug_logs_to_files.py
 ├─ strategies/
 │  ├─ engine_commons.py
 │  └─ groups/

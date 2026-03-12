@@ -30,6 +30,7 @@ class CreateTaskRequest(BaseModel):
     sample_size: int = Field(default=20, ge=1, le=5000)
     strategy_group_id: str = Field(min_length=1)
     group_params: dict[str, Any] = Field(default_factory=dict)
+    skip_coverage_filter: bool = Field(default=True, description="跳过数据完整性过滤（默认跳过）")
 
 
 class CreateTaskResponse(BaseModel):

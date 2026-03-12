@@ -544,50 +544,44 @@ class StateDB:
         keys = [str(item or "").strip() for item in task_keys if str(item or "").strip()]
         if not keys:
             return {}
+
+        def _op(con: duckdb.DuckDBPyConnection) -> list[tuple[Any, ...]]:
+            return con.execute(
+                """
+                select
+                    m.task_key,
+                    m.mode,
+                    m.code,
+                    m.freq,
+                    m.start_date,
+                    m.end_date,
+                    m.attempt_count,
+                    m.last_status,
+                    m.last_error,
+                    m.created_at,
+                    m.updated_at
+                from maintenance_retry_tasks m
+                where m.task_key in (select unnest($keys::varchar[]))
+                """,
+                {"keys": keys},
+            ).fetchall()
+
+        rows = self._with_read_connection(_op)
         result: dict[str, dict[str, Any]] = {}
-
-        batch_size = int(query_batch_size or self.RETRY_TASK_QUERY_BATCH_SIZE)
-        batch_size = max(1, batch_size)
-        for offset in range(0, len(keys), batch_size):
-            batch_keys = keys[offset : offset + batch_size]
-            placeholders = ",".join(["?"] * len(batch_keys))
-
-            def _op(con: duckdb.DuckDBPyConnection) -> list[tuple[Any, ...]]:
-                return con.execute(
-                    f"""
-                    select
-                        task_key,
-                        mode,
-                        code,
-                        freq,
-                        start_date,
-                        end_date,
-                        attempt_count,
-                        last_status,
-                        last_error,
-                        created_at,
-                        updated_at
-                    from maintenance_retry_tasks
-                    where task_key in ({placeholders})
-                    """,
-                    batch_keys,
-                ).fetchall()
-
-            rows = self._with_read_connection(_op)
-            for row in rows:
-                result[str(row[0])] = {
-                    "task_key": row[0],
-                    "mode": row[1],
-                    "code": row[2],
-                    "freq": row[3],
-                    "start_date": row[4],
-                    "end_date": row[5],
-                    "attempt_count": int(row[6] or 0),
-                    "last_status": row[7],
-                    "last_error": row[8],
-                    "created_at": row[9],
-                    "updated_at": row[10],
-                }
+        for row in rows:
+            result[str(row[0])] = {
+                "task_key": row[0],
+                "mode": row[1],
+                "code": row[2],
+                "freq": row[3],
+                "start_date": row[4],
+                "end_date": row[5],
+                "attempt_count": int(row[6] or 0),
+                "last_status": row[7],
+                "last_error": row[8],
+                "created_at": row[9],
+                "updated_at": row[10],
+            }
         return result
 
     def insert_maintenance_retry_tasks(self, rows: list[dict[str, Any]]) -> int:
@@ -644,38 +638,21 @@ class StateDB:
             输出：
             1. 无返回值。
             用途：
-            1. 通过临时表合并批量插入 retry 任务，减少多次短写事务。
+            1. 通过 unnest 向量化批量插入 retry 任务。
             边界条件：
             1. 已存在 task_key 继续保持忽略语义。
             """
-            con.execute("drop table if exists _tmp_maintenance_retry_insert")
-            con.execute(
-                """
-                create temp table _tmp_maintenance_retry_insert (
-                    task_key varchar,
-                    mode varchar,
-                    code varchar,
-                    freq varchar,
-                    start_date varchar,
-                    end_date varchar,
-                    attempt_count integer,
-                    last_status varchar,
-                    last_error varchar,
-                    created_at timestamp,
-                    updated_at timestamp
-                )
-                """
-            )
-            con.executemany(
-                """
-                insert into _tmp_maintenance_retry_insert(
-                    task_key, mode, code, freq, start_date, end_date,
-                    attempt_count, last_status, last_error, created_at, updated_at
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                payload,
-            )
+            cols_task_key = [r[0] for r in payload]
+            cols_mode = [r[1] for r in payload]
+            cols_code = [r[2] for r in payload]
+            cols_freq = [r[3] for r in payload]
+            cols_start_date = [r[4] for r in payload]
+            cols_end_date = [r[5] for r in payload]
+            cols_attempt_count = [r[6] for r in payload]
+            cols_last_status = [r[7] for r in payload]
+            cols_last_error = [r[8] for r in payload]
+            cols_created_at = [r[9] for r in payload]
+            cols_updated_at = [r[10] for r in payload]
             con.execute(
                 """
                 insert into maintenance_retry_tasks(
@@ -694,15 +671,40 @@ class StateDB:
                     src.last_error,
                     src.created_at,
                     src.updated_at
-                from _tmp_maintenance_retry_insert src
+                from (
+                    select
+                        unnest($task_key::varchar[]) as task_key,
+                        unnest($mode::varchar[]) as mode,
+                        unnest($code::varchar[]) as code,
+                        unnest($freq::varchar[]) as freq,
+                        unnest($start_date::varchar[]) as start_date,
+                        unnest($end_date::varchar[]) as end_date,
+                        unnest($attempt_count::integer[]) as attempt_count,
+                        unnest($last_status::varchar[]) as last_status,
+                        unnest($last_error::varchar[]) as last_error,
+                        unnest($created_at::timestamp[]) as created_at,
+                        unnest($updated_at::timestamp[]) as updated_at
+                ) src
                 where not exists (
                     select 1
                     from maintenance_retry_tasks target
                     where target.task_key = src.task_key
                 )
-                """
+                """,
+                {
+                    "task_key": cols_task_key,
+                    "mode": cols_mode,
+                    "code": cols_code,
+                    "freq": cols_freq,
+                    "start_date": cols_start_date,
+                    "end_date": cols_end_date,
+                    "attempt_count": cols_attempt_count,
+                    "last_status": cols_last_status,
+                    "last_error": cols_last_error,
+                    "created_at": cols_created_at,
+                    "updated_at": cols_updated_at,
+                },
             )
-            con.execute("drop table if exists _tmp_maintenance_retry_insert")
 
         self._with_write_connection(_op)
         return len(payload)
@@ -776,31 +778,15 @@ class StateDB:
             输出：
             1. 无返回值。
             用途：
-            1. 通过临时表一次性合并批量更新 retry 状态，避免逐行短写库。
+            1. 通过 unnest 向量化一次性合并批量更新 retry 状态。
             边界条件：
             1. 只更新命中的 task_key；不存在记录保持无影响。
             """
-            con.execute("drop table if exists _tmp_maintenance_retry_update")
-            con.execute(
-                """
-                create temp table _tmp_maintenance_retry_update (
-                    attempt_count integer,
-                    last_status varchar,
-                    last_error varchar,
-                    updated_at timestamp,
-                    task_key varchar
-                )
-                """
-            )
-            con.executemany(
-                """
-                insert into _tmp_maintenance_retry_update(
-                    attempt_count, last_status, last_error, updated_at, task_key
-                )
-                values (?, ?, ?, ?, ?)
-                """,
-                payload,
-            )
+            cols_attempt_count = [r[0] for r in payload]
+            cols_last_status = [r[1] for r in payload]
+            cols_last_error = [r[2] for r in payload]
+            cols_updated_at = [r[3] for r in payload]
+            cols_task_key = [r[4] for r in payload]
             con.execute(
                 """
                 update maintenance_retry_tasks as target
@@ -809,11 +795,24 @@ class StateDB:
                     last_status = src.last_status,
                     last_error = src.last_error,
                     updated_at = src.updated_at
-                from _tmp_maintenance_retry_update as src
+                from (
+                    select
+                        unnest($attempt_count::integer[]) as attempt_count,
+                        unnest($last_status::varchar[]) as last_status,
+                        unnest($last_error::varchar[]) as last_error,
+                        unnest($updated_at::timestamp[]) as updated_at,
+                        unnest($task_key::varchar[]) as task_key
+                ) as src
                 where target.task_key = src.task_key
-                """
+                """,
+                {
+                    "attempt_count": cols_attempt_count,
+                    "last_status": cols_last_status,
+                    "last_error": cols_last_error,
+                    "updated_at": cols_updated_at,
+                    "task_key": cols_task_key,
+                },
             )
-            con.execute("drop table if exists _tmp_maintenance_retry_update")
 
         self._with_write_connection(_op)
         return len(payload)
@@ -833,28 +832,27 @@ class StateDB:
         keys = [str(item or "").strip() for item in task_keys if str(item or "").strip()]
         if not keys:
             return 0
-        placeholders = ",".join(["?"] * len(keys))
 
         def _op(con: duckdb.DuckDBPyConnection) -> int:
             count = int(
                 con.execute(
-                    f"""
+                    """
                     select count(*)
                     from maintenance_retry_tasks
-                    where task_key in ({placeholders})
+                    where task_key in (select unnest($keys::varchar[]))
                     """,
-                    keys,
+                    {"keys": keys},
                 ).fetchone()[0]
                 or 0
             )
             if count <= 0:
                 return 0
             con.execute(
-                f"""
+                """
                 delete from maintenance_retry_tasks
-                where task_key in ({placeholders})
+                where task_key in (select unnest($keys::varchar[]))
                 """,
-                keys,
+                {"keys": keys},
             )
             return count
 

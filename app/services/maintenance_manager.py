@@ -466,7 +466,7 @@ class MaintenanceManager:
             progress_state["value"] = safe_progress
             progress_state["ts"] = now_ts
             if isinstance(detail, dict):
-                maint_logger.debug("进度更新", {k: v for k, v in detail.items() if k != "rows"})
+                maint_logger.debug_lazy("进度更新", lambda d=detail: {k: v for k, v in d.items() if k != "rows"})
 
         self.state_db.update_maintenance_job_fields(
             job_id,
@@ -554,6 +554,8 @@ class MaintenanceManager:
                 finished_at=datetime.now(),
                 error_message=err_text,
             )
+        finally:
+            maint_logger.flush_debug()
 
     def shutdown(self, grace_seconds: int, forced_status: str = "failed") -> None:
         """

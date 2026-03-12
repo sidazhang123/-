@@ -3,7 +3,7 @@
 
 职责：
 1. 统一维护任务摘要日志写入（app.log + maintenance_logs）。
-2. 支持按任务运行时开关控制 debug 明细落库。
+2. debug 明细写入 logs/debug/ 文件而非数据库，避免大对象占用写锁和内存。
 3. 保持主程序对明细裁剪函数的兼容调用。
 """
 
@@ -11,9 +11,15 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable
 
 from app.db.state_db import StateDB
+
+_DEBUG_LOG_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent.parent / "logs" / "debug"
+_DEBUG_BATCH_SIZE = 32
 
 
 def compact_maintenance_detail_for_app_log(message: str, detail: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -69,6 +75,7 @@ class MaintenanceLogger:
         self.state_db = state_db
         self.logger = logger
         self.debug_enabled = bool(debug_enabled)
+        self._debug_buffer: list[str] = []
 
     def _format_text(self, message: str, detail: dict[str, Any] | None) -> str:
         """
@@ -170,13 +177,72 @@ class MaintenanceLogger:
         输出：
         1. 无返回值。
         用途：
-        1. 在 debug 模式下写入 maintenance_logs.debug。
+        1. 在 debug 模式下写入 logs/debug/ 文件。
         边界条件：
-        1. debug 关闭时直接忽略，不写 app.log。
+        1. debug 关闭时直接忽略。
         """
 
         if not self.debug_enabled:
             return
         if not isinstance(detail, dict):
             detail = None
-        self._append_db_log(level="debug", message=message, detail=detail)
+        self._buffer_debug_record(message=message, detail=detail)
+
+    def debug_lazy(self, message: str, detail_fn: Callable[[], dict[str, Any] | None]) -> None:
+        """
+        输入：
+        1. message: debug 日志消息。
+        2. detail_fn: 延迟求值回调，仅在 debug 开启时调用。
+        输出：
+        1. 无返回值。
+        用途：
+        1. 避免大对象在 debug 关闭时仍被构造。
+        边界条件：
+        1. detail_fn 抛异常时记录错误信息。
+        """
+
+        if not self.debug_enabled:
+            return
+        try:
+            detail = detail_fn()
+        except Exception as exc:
+            detail = {"_debug_lazy_error": f"{type(exc).__name__}: {exc}"}
+        if not isinstance(detail, dict):
+            detail = None
+        self._buffer_debug_record(message=message, detail=detail)
+
+    def flush_debug(self) -> None:
+        """将缓冲区中的 debug 记录批量写入文件。任务结束时必须调用。"""
+        self._flush_debug_buffer()
+
+    def _buffer_debug_record(self, *, message: str, detail: dict[str, Any] | None) -> None:
+        """将 debug 记录序列化后放入缓冲区，达到阈值时自动刷盘。"""
+        record: dict[str, Any] = {
+            "ts": datetime.now().isoformat(),
+            "job_id": self.job_id,
+            "level": "debug",
+            "message": message,
+        }
+        if detail is not None:
+            record["detail"] = detail
+        try:
+            self._debug_buffer.append(json.dumps(record, ensure_ascii=False, default=str))
+        except Exception:
+            return
+        if len(self._debug_buffer) >= _DEBUG_BATCH_SIZE:
+            self._flush_debug_buffer()
+
+    def _flush_debug_buffer(self) -> None:
+        """将缓冲区内容一次性写入 JSONL 文件并清空。"""
+        if not self._debug_buffer:
+            return
+        lines = self._debug_buffer
+        self._debug_buffer = []
+        try:
+            _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            path = _DEBUG_LOG_DIR / f"maintenance_{self.job_id}.jsonl"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+                f.write("\n")
+        except Exception:
+            pass

@@ -137,9 +137,6 @@ maintenance_log:
   # false 时仅落 maintenance_logs(debug)。
   app_show_step_heartbeat: false
 
-  # 是否把完整 detail 额外写入 maintenance_logs(debug)。
-  db_debug_detail_enabled: true
-
   # app.log 输出策略。
   # progress_stage_warning: 保留阶段摘要、进度与告警；抑制高频并行明细。
   app_policy: "progress_stage_warning"

@@ -6,7 +6,7 @@
   <title>任务监控 - 量价筛选系统</title>
   <link rel="stylesheet" href="/static/vendor/codemirror/codemirror.min.css" />
   <link rel="stylesheet" href="/static/vendor/codemirror/theme/material-darker.min.css" />
-  <link rel="stylesheet" href="/static/styles.css?v=20260311-compact-button-groups" />
+  <link rel="stylesheet" href="/static/styles.css?v=20260312-monitor-switch-yes-no" />
 </head>
 <body>
   <div class="app-shell">
@@ -74,12 +74,21 @@
         <textarea id="groupParams" rows="12"></textarea>
       </label>
 
-      <div class="btn-row">
+      <div class="btn-row monitor-action-row">
+        <div class="monitor-switch-row">
+          <span class="monitor-switch-label">跳过数据完整性过滤</span>
+          <label class="rocker-switch" for="skipCoverageFilter">
+            <input type="checkbox" id="skipCoverageFilter" checked />
+            <span class="rocker-switch-body" aria-hidden="true">
+              <span class="rocker-switch-face rocker-switch-face-yes">是</span>
+              <span class="rocker-switch-face rocker-switch-face-no">否</span>
+            </span>
+          </label>
+        </div>
         <div class="button-cluster">
           <button id="saveFormSettingsBtn" type="button" class="ghost">保存参数设置</button>
           <button id="createTaskFullBtn">启动筛选任务（全量）</button>
         </div>
-        <span id="settingsSaveHint" class="hint">参数修改后请点“保存参数设置”。</span>
       </div>
     </section>
 

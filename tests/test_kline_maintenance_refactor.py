@@ -12,7 +12,7 @@ from __future__ import annotations
 import queue
 import tempfile
 import unittest
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -41,6 +41,13 @@ class _DummyLogger:
         _ = message
         _ = detail
 
+    def debug_lazy(self, message: str, detail_fn: object = None) -> None:
+        _ = message
+        _ = detail_fn
+
+    def flush_debug(self) -> None:
+        pass
+
 
 class _FakeJob:
     """simple_api 异步任务桩。"""
@@ -56,6 +63,11 @@ class _FakeJob:
     def result(self, timeout: float | None = None) -> list[dict]:
         _ = timeout
         return []
+
+
+@contextmanager
+def _yield_fake_job(job: _FakeJob):
+    yield job
 
 
 class TestKlineMaintenanceRefactor(unittest.TestCase):
@@ -119,7 +131,7 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
         用途：
         1. 验证 historical_backfill 步骤1/2/3。
         边界条件：
-        1. 步骤2会先删除异常分钟数据。
+        1. 步骤2只标记异常分钟数据，实际删除推迟到抓到非空新数据后。
         """
 
         self._insert_row("klines_d", code="sh.600000", dt="2026-02-10 15:00:00")
@@ -142,6 +154,20 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
         step2_signs = {task.signature() for task in step2}
         self.assertIn("sh.600000|60|2026-02-10|2026-02-10", step2_signs)
         self.assertGreaterEqual(removed_rows, 3)
+        with duckdb.connect(str(self.db_path), read_only=True) as con:
+            remaining_rows = int(
+                con.execute(
+                    """
+                    select count(*)
+                    from klines_60
+                    where code = ?
+                      and cast(datetime as date) = ?
+                    """,
+                    ["sh.600000", "2026-02-10"],
+                ).fetchone()[0]
+                or 0
+            )
+        self.assertEqual(remaining_rows, 3)
 
         step3_signs = {task.signature() for task in step3}
         self.assertIn("sh.600000|w|2026-01-03|2026-01-20", step3_signs)
@@ -236,7 +262,7 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
 
         with (
             mock.patch.object(km, "get_tdx_client", side_effect=lambda: nullcontext()),
-            mock.patch.object(km, "get_stock_kline", side_effect=lambda **kwargs: fake_jobs.pop(0)) as mock_fetch,
+            mock.patch.object(km, "managed_stock_kline_job", side_effect=lambda **kwargs: _yield_fake_job(fake_jobs.pop(0))) as mock_managed_job,
         ):
             stats = self.service._execute_fetch_and_write(
                 mode="latest_update",
@@ -245,7 +271,7 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
                 progress_end=95.0,
             )
 
-        self.assertEqual(mock_fetch.call_count, 2)
+        self.assertEqual(mock_managed_job.call_count, 2)
         self.assertEqual(stats.retry_rounds_used, 2)
         self.assertEqual(stats.total_tasks, 2)
         self.assertEqual(stats.success_tasks, 2)

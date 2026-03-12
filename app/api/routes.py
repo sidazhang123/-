@@ -671,6 +671,7 @@ def create_task(payload: CreateTaskRequest, request: Request) -> CreateTaskRespo
             source_db=payload.source_db,
             run_mode=payload.run_mode,
             sample_size=payload.sample_size,
+            skip_coverage_filter=payload.skip_coverage_filter,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1284,7 +1285,7 @@ def stop_concept_job(job_id: str, request: Request) -> ConceptControlResponse:
 def get_concept_logs(
     job_id: str,
     request: Request,
-    level: str = Query(default="all", pattern="^(all|info|error|debug)$"),
+    level: str = Query(default="all", pattern="^(all|info|error)$"),
     after_log_id: int | None = Query(default=None, ge=0),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=300, ge=1, le=5000),
@@ -1412,7 +1413,7 @@ def stop_maintenance_job(job_id: str, request: Request) -> MaintenanceControlRes
 def get_maintenance_logs(
     job_id: str,
     request: Request,
-    level: str = Query(default="all", pattern="^(all|info|error|debug)$"),
+    level: str = Query(default="all", pattern="^(all|info|error)$"),
     after_log_id: int | None = Query(default=None, ge=0),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=300, ge=1, le=5000),

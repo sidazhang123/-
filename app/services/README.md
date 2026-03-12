@@ -20,6 +20,7 @@
 12. `concept_maintenance.py`：概念抓取、过滤、进度统计与写库执行器。
 13. `concept_formula.py`：概念过滤公式解析与标准化。
 14. `source_schema_migration.py`：源库 schema 迁移辅助逻辑。
+15. `simple_api_bridge.py`：统一隔离 zsdtdx simple_api 导入与进程池生命周期，自动在 get_stock_kline 结束后销毁并行抓取器。
 
 ## 关键约束
 

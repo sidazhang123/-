@@ -235,7 +235,7 @@ class ConceptManager:
             progress_state["value"] = safe_progress
             progress_state["ts"] = now_ts
             if isinstance(detail, dict):
-                concept_logger.debug("进度更新", detail)
+                concept_logger.debug_lazy("进度更新", lambda d=detail: d)
 
         self.state_db.update_concept_job_fields(
             job_id,
@@ -318,6 +318,8 @@ class ConceptManager:
                 finished_at=datetime.now(),
                 error_message=err_text,
             )
+        finally:
+            concept_logger.flush_debug()
 
     def shutdown(self) -> None:
         """

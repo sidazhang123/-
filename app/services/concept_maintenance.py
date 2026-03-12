@@ -419,12 +419,16 @@ class ConceptMaintenanceService:
         with self._connect_source_db() as con:
             con.execute("delete from stock_concepts")
             if deduplicated_records:
-                con.executemany(
+                codes = [code for code, _, _ in deduplicated_records]
+                board_names = [board_name for _, board_name, _ in deduplicated_records]
+                reasons = [reason for _, _, reason in deduplicated_records]
+                timestamps = [now] * len(deduplicated_records)
+                con.execute(
                     """
                     insert into stock_concepts(code, board_name, selected_reason, updated_at)
-                    values (?, ?, ?, ?)
+                    select unnest($1), unnest($2), unnest($3), unnest($4)
                     """,
-                    [(code, board_name, reason, now) for code, board_name, reason in deduplicated_records],
+                    [codes, board_names, reasons, timestamps],
                 )
         return len(deduplicated_records)
 

@@ -24,23 +24,20 @@ from app.db.duckdb_utils import connect_duckdb_compatible
 from app.db.state_db import StateDB
 from app.services.maintenance_calendar import weekdays_between_exclusive, week_monday_and_friday
 from app.services.maintenance_codecs import normalize_code_for_storage, normalize_code_set
+from app.services.simple_api_bridge import (
+    get_runtime_failures,
+    get_runtime_metadata,
+    get_stock_code_name,
+    get_tdx_client,
+    get_stock_kline,
+    managed_stock_kline_job,
+)
 from app.settings import (
     MAINTENANCE_QUEUE_POLL_TIMEOUT_SECONDS,
     MAINTENANCE_RETRY_ROUNDS,
     MAINTENANCE_SOURCE_DEFAULT_START_DATE,
     MAINTENANCE_WRITE_FLUSH_ROWS,
 )
-
-try:  # pragma: no cover - 运行时依赖环境
-    from zsdtdx.simple_api import get_client as get_tdx_client
-    from zsdtdx.simple_api import get_stock_code_name, get_stock_kline
-    from zsdtdx.simple_api import get_runtime_failures, get_runtime_metadata
-except Exception:  # pragma: no cover
-    get_tdx_client = None
-    get_stock_code_name = None
-    get_stock_kline = None
-    get_runtime_failures = None
-    get_runtime_metadata = None
 
 
 KLINE_FREQ_ORDER: list[str] = ["15", "30", "60", "d", "w"]
@@ -51,13 +48,17 @@ KLINE_TABLE_BY_FREQ: dict[str, str] = {
     "d": "klines_d",
     "w": "klines_w",
 }
-_LATEST_START_DELTA: dict[str, timedelta] = {
-    "15": timedelta(minutes=15),
-    "30": timedelta(minutes=30),
-    "60": timedelta(minutes=60),
-    "d": timedelta(days=1),
-    "w": timedelta(days=7),
-}
+def _compute_latest_start_time(freq: str, latest_dt: datetime) -> datetime:
+    """根据周期计算更新最新数据的 start_time。
+
+    15/30/60/d: 最新 datetime 前一天 09:30。
+    w: 最新 datetime 7 天前 09:30。
+    """
+    if freq == "w":
+        base_date = latest_dt.date() - timedelta(days=7)
+    else:
+        base_date = latest_dt.date() - timedelta(days=1)
+    return datetime.combine(base_date, dt_time(9, 30, 0))
 _HIST_MINUTE_EXPECTED: dict[str, int] = {"60": 4, "30": 8, "15": 16}
 _TASK_RETRY_ROUNDS: int = max(1, int(MAINTENANCE_RETRY_ROUNDS))
 _QUEUE_POLL_TIMEOUT_SECONDS: float = max(0.2, float(MAINTENANCE_QUEUE_POLL_TIMEOUT_SECONDS))
@@ -523,9 +524,12 @@ class MarketDataMaintenanceService:
         with self._connect_source_db(read_only=False) as con:
             con.execute("delete from stocks")
             if normalized_map:
-                con.executemany(
-                    "insert into stocks(code, name) values (?, ?)",
-                    [(code, normalized_map[code]) for code in sorted(normalized_map.keys())],
+                sorted_codes = sorted(normalized_map.keys())
+                codes = sorted_codes
+                names = [normalized_map[c] for c in sorted_codes]
+                con.execute(
+                    "insert into stocks(code, name) select unnest($1), unnest($2)",
+                    [codes, names],
                 )
         return normalized_map
 
@@ -586,11 +590,10 @@ class MarketDataMaintenanceService:
 
         for freq in KLINE_FREQ_ORDER:
             self._check_stop()
-            delta = _LATEST_START_DELTA[freq]
             for idx, (code, latest_dt) in enumerate(latest_by_freq.get(freq, {}).items(), start=1):
                 if idx % 1024 == 0:
                     self._check_stop()
-                start_time = latest_dt - delta
+                start_time = _compute_latest_start_time(freq, latest_dt)
                 task = self._make_task(
                     code=code,
                     freq=freq,
@@ -679,11 +682,11 @@ class MarketDataMaintenanceService:
         输入：
         1. 无。
         输出：
-        1. (分钟异常任务列表, 已删除异常行数)。
+        1. (分钟异常任务列表, 识别出的异常行数)。
         用途：
         1. 执行 historical_backfill 步骤2。
         边界条件：
-        1. 仅针对 60/30/15，计数不符会先删后补。
+        1. 仅针对 60/30/15，计数不符会标记回补任务；实际删除推迟到抓到非空新数据后。
         """
 
         tasks: list[MaintenanceTask] = []
@@ -719,7 +722,7 @@ class MarketDataMaintenanceService:
                 for pair_idx, (code, trade_day) in enumerate(bad_pairs, start=1):
                     if pair_idx % 256 == 0:
                         self._check_stop()
-                    delete_count = int(
+                    affected_count = int(
                         con.execute(
                             f"""
                             select count(*)
@@ -731,15 +734,7 @@ class MarketDataMaintenanceService:
                         ).fetchone()[0]
                         or 0
                     )
-                    con.execute(
-                        f"""
-                        delete from {table}
-                        where code = ?
-                          and cast(datetime as date) = ?
-                        """,
-                        [code, trade_day],
-                    )
-                    removed_rows += delete_count
+                    removed_rows += affected_count
                     task = self._make_task(
                         code=code,
                         freq=freq,
@@ -837,6 +832,7 @@ class MarketDataMaintenanceService:
         if self.state_db is None or not tasks:
             return tasks, {}, 0
 
+        t0 = time.monotonic()
         entries: list[tuple[MaintenanceTask, str, str]] = []
         task_key_by_signature: dict[str, str] = {}
         for task in tasks:
@@ -845,7 +841,18 @@ class MarketDataMaintenanceService:
             entries.append((task, signature, task_key))
             task_key_by_signature[signature] = task_key
         task_keys = list(task_key_by_signature.values())
+        t1 = time.monotonic()
+        self.logger.info(
+            "retry 准备：构建 task_keys 完成",
+            {"task_key_count": len(task_keys), "duration_seconds": round(t1 - t0, 4)},
+        )
+
         existing_map = self.state_db.get_maintenance_retry_tasks(task_keys)
+        t2 = time.monotonic()
+        self.logger.info(
+            "retry 准备：查询已有 retry 记录完成",
+            {"existing_count": len(existing_map), "duration_seconds": round(t2 - t1, 4)},
+        )
 
         executable: list[MaintenanceTask] = []
         skipped = 0
@@ -889,15 +896,37 @@ class MarketDataMaintenanceService:
             executable.append(task)
             executable_signatures.add(signature)
 
+        t3 = time.monotonic()
+        self.logger.info(
+            "retry 准备：分类处理完成",
+            {
+                "new_count": len(new_rows),
+                "retry_count": len(retry_updates),
+                "skipped": skipped,
+                "duration_seconds": round(t3 - t2, 4),
+            },
+        )
+
         if retry_updates:
             self.state_db.update_maintenance_retry_tasks(retry_updates)
+        t4 = time.monotonic()
 
         if new_rows:
             self.state_db.insert_maintenance_retry_tasks(new_rows)
+        t5 = time.monotonic()
 
-        self.logger.debug(
-            "历史维护 retry 明细",
+        self.logger.info(
+            "retry 准备：写入完成",
             {
+                "update_duration_seconds": round(t4 - t3, 4),
+                "insert_duration_seconds": round(t5 - t4, 4),
+                "total_duration_seconds": round(t5 - t0, 4),
+            },
+        )
+
+        self.logger.debug_lazy(
+            "历史维护 retry 明细",
+            lambda: {
                 "raw_task_count": len(tasks),
                 "executable_task_count": len(executable),
                 "retry_skipped_tasks": skipped,
@@ -1048,14 +1077,42 @@ class MarketDataMaintenanceService:
         temp_name = f"_tmp_maintenance_rows_{freq}_{self._temp_index}"
         con.register(temp_name, frame)
         try:
-            con.execute(
-                f"""
-                delete from {table} as t
-                using {temp_name} as s
-                where t.code = s.code
-                  and t.datetime = s.datetime
-                """
-            )
+            if freq in {"15", "30", "60"}:
+                # 分钟级：按 (code, 日期) 删除当日全部旧行后插入
+                con.execute(
+                    f"""
+                    delete from {table} as t
+                    using (
+                        select distinct code, cast(datetime as date) as dt
+                        from {temp_name}
+                    ) as s
+                    where t.code = s.code
+                      and cast(t.datetime as date) = s.dt
+                    """
+                )
+            elif freq == "w":
+                # 周线：按 (code, 自然周) 删除整周旧行后插入
+                con.execute(
+                    f"""
+                    delete from {table} as t
+                    using (
+                        select distinct code, date_trunc('week', datetime) as wk
+                        from {temp_name}
+                    ) as s
+                    where t.code = s.code
+                      and date_trunc('week', t.datetime) = s.wk
+                    """
+                )
+            else:
+                # 日线：精确匹配 (code, datetime) 删除
+                con.execute(
+                    f"""
+                    delete from {table} as t
+                    using {temp_name} as s
+                    where t.code = s.code
+                      and t.datetime = s.datetime
+                    """
+                )
             con.execute(
                 f"""
                 insert into {table} (code, datetime, open, high, low, close, volume, amount)
@@ -1094,14 +1151,14 @@ class MarketDataMaintenanceService:
             buffered_count = len(rows)
             written = self._flush_freq_rows(con, freq=freq, rows=rows)
             rows_written_by_freq[freq] += written
-            self.logger.debug(
+            self.logger.debug_lazy(
                 "批量刷盘明细",
-                {
-                    "freq": freq,
-                    "buffered_rows": buffered_count,
-                    "written_rows": written,
-                    "cumulative_written_rows": rows_written_by_freq[freq],
-                    "duration_seconds": round(time.monotonic() - flush_started, 4),
+                lambda _f=freq, _bc=buffered_count, _w=written, _cw=rows_written_by_freq[freq], _fs=flush_started: {
+                    "freq": _f,
+                    "buffered_rows": _bc,
+                    "written_rows": _w,
+                    "cumulative_written_rows": _cw,
+                    "duration_seconds": round(time.monotonic() - _fs, 4),
                 },
             )
             buffers[freq] = []
@@ -1213,12 +1270,14 @@ class MarketDataMaintenanceService:
                     "task_count": len(current_tasks),
                 },
             )
-            self.logger.debug(
+            self.logger.debug_lazy(
                 "拉取请求参数",
-                {
+                lambda: {
                     "mode": mode,
                     "round": retry_rounds_used,
-                    "tasks": [task.to_api_payload() for task in current_tasks],
+                    "task_count": len(current_tasks),
+                    "task_sample_head": [task.to_api_payload() for task in current_tasks[:20]],
+                    "task_sample_tail": [task.to_api_payload() for task in current_tasks[-20:]],
                 },
             )
 
@@ -1229,74 +1288,74 @@ class MarketDataMaintenanceService:
             pool_broken = False
 
             with self._connect_source_db(read_only=False) as con:
-                with get_tdx_client() as _client:
-                    job = get_stock_kline(
-                        task=[task.to_api_payload() for task in current_tasks],
-                        mode="async",
-                        queue=None,
-                        preprocessor_operator=preprocessor,
-                    )
                 try:
-                    while True:
-                        self._check_stop()
-                        try:
-                            event = job.queue.get(timeout=_QUEUE_POLL_TIMEOUT_SECONDS)
-                        except queue.Empty:
-                            if job.done():
-                                break
-                            continue
+                    with get_tdx_client() as _client:
+                        with managed_stock_kline_job(
+                            task=[task.to_api_payload() for task in current_tasks],
+                            mode="async",
+                            queue=None,
+                            preprocessor_operator=preprocessor,
+                        ) as job:
+                            while True:
+                                self._check_stop()
+                                try:
+                                    event = job.queue.get(timeout=_QUEUE_POLL_TIMEOUT_SECONDS)
+                                except queue.Empty:
+                                    if job.done():
+                                        break
+                                    continue
 
-                        if not isinstance(event, dict):
-                            continue
-                        event_type = str(event.get("event") or "").strip().lower()
-                        if event_type == "done":
-                            break
-                        if event_type != "data":
-                            continue
+                                if not isinstance(event, dict):
+                                    continue
+                                event_type = str(event.get("event") or "").strip().lower()
+                                if event_type == "done":
+                                    break
+                                if event_type != "data":
+                                    continue
 
-                        event_task = self._normalize_event_task(event.get("task") if isinstance(event.get("task"), dict) else {})
-                        if event_task is None:
-                            continue
-                        sign = event_task.signature()
-                        if sign not in task_map:
-                            continue
-                        processed_count += 1
+                                event_task = self._normalize_event_task(event.get("task") if isinstance(event.get("task"), dict) else {})
+                                if event_task is None:
+                                    continue
+                                sign = event_task.signature()
+                                if sign not in task_map:
+                                    continue
+                                processed_count += 1
 
-                        error_text = str(event.get("error") or "").strip()
-                        if error_text:
-                            round_failures.add(sign)
-                            failed_errors[sign] = error_text
-                        else:
-                            rows = event.get("rows") if isinstance(event.get("rows"), list) else []
-                            round_rows_appended += self._append_event_rows_to_buffers(
-                                task=event_task,
-                                rows=rows,
-                                buffers=buffers,
-                            )
-                            success_signatures.add(sign)
-                            round_failures.discard(sign)
+                                error_text = str(event.get("error") or "").strip()
+                                if error_text:
+                                    round_failures.add(sign)
+                                    failed_errors[sign] = error_text
+                                else:
+                                    rows = event.get("rows") if isinstance(event.get("rows"), list) else []
+                                    round_rows_appended += self._append_event_rows_to_buffers(
+                                        task=event_task,
+                                        rows=rows,
+                                        buffers=buffers,
+                                    )
+                                    success_signatures.add(sign)
+                                    round_failures.discard(sign)
 
-                        need_flush = any(len(buffers[freq]) >= _WRITE_FLUSH_ROWS for freq in KLINE_FREQ_ORDER)
-                        if need_flush:
+                                need_flush = any(len(buffers[freq]) >= _WRITE_FLUSH_ROWS for freq in KLINE_FREQ_ORDER)
+                                if need_flush:
+                                    self._flush_all_buffers(con, buffers, rows_written_by_freq)
+
+                                ratio = float(processed_count) / float(max(1, total_count))
+                                progress = progress_start + (progress_end - progress_start) * ratio
+                                self._report_progress(
+                                    progress,
+                                    phase="running",
+                                    detail={
+                                        "mode": mode,
+                                        "round": retry_rounds_used,
+                                        "processed": processed_count,
+                                        "total": total_count,
+                                        "failed": len(round_failures),
+                                    },
+                                )
+
                             self._flush_all_buffers(con, buffers, rows_written_by_freq)
-
-                        ratio = float(processed_count) / float(max(1, total_count))
-                        progress = progress_start + (progress_end - progress_start) * ratio
-                        self._report_progress(
-                            progress,
-                            phase="running",
-                            detail={
-                                "mode": mode,
-                                "round": retry_rounds_used,
-                                "processed": processed_count,
-                                "total": total_count,
-                                "failed": len(round_failures),
-                            },
-                        )
-
-                    self._flush_all_buffers(con, buffers, rows_written_by_freq)
-                    con.commit()
-                    job.result()
+                            con.commit()
+                            job.result()
                 except BrokenProcessPool as exc:
                     pool_broken = True
                     self.logger.warning(
@@ -1312,8 +1371,6 @@ class MarketDataMaintenanceService:
                         con.commit()
                     except Exception:
                         pass
-                finally:
-                    job = None
 
             if pool_broken:
                 for sign in current_signatures:
@@ -1349,17 +1406,17 @@ class MarketDataMaintenanceService:
                     "failed": len(pending_signatures),
                 },
             )
-            self.logger.debug(
+            self.logger.debug_lazy(
                 "拉取与写入轮次明细",
-                {
+                lambda: {
                     "mode": mode,
                     "round": retry_rounds_used,
                     "task_count": len(current_tasks),
                     "processed": processed_count,
                     "failed_task_count": len(pending_signatures),
                     "round_rows_appended": round_rows_appended,
-                    "success_task_sample": list(sorted(success_signatures))[:10],
-                    "failed_task_sample": list(sorted(pending_signatures))[:10],
+                    "success_count": len(success_signatures),
+                    "failed_task_sample": pending_signatures[:10],
                     "rows_written_by_freq": dict(rows_written_by_freq),
                     "duration_seconds": round(time.monotonic() - round_started, 4),
                 },
@@ -1414,7 +1471,7 @@ class MarketDataMaintenanceService:
         all_codes = normalize_code_set(stock_map.keys())
         steps_completed = 1
         self.logger.info("步骤0完成", {"stock_count": len(all_codes)})
-        self.logger.debug("步骤0明细", {"stocks_preview": list(sorted(all_codes))[:20], "stock_count": len(all_codes)})
+        self.logger.debug_lazy("步骤0明细", lambda: {"stocks_preview": list(sorted(all_codes))[:20], "stock_count": len(all_codes)})
         self._report_progress(10.0, phase="prepare")
 
         self.logger.info("步骤1开始：计算本周周五日期")
@@ -1428,7 +1485,7 @@ class MarketDataMaintenanceService:
         latest_count_by_freq = {freq: len(latest_by_freq.get(freq, {})) for freq in KLINE_FREQ_ORDER}
         steps_completed = 3
         self.logger.info("步骤2完成", {"latest_count_by_freq": latest_count_by_freq})
-        self.logger.debug("步骤2明细", {"latest_count_by_freq": latest_count_by_freq})
+        self.logger.debug_lazy("步骤2明细", lambda: {"latest_count_by_freq": latest_count_by_freq})
         self._report_progress(30.0, phase="prepare")
 
         self.logger.info("步骤3开始：设置统一 end_time")
@@ -1526,9 +1583,9 @@ class MarketDataMaintenanceService:
         tasks_step1 = self._build_historical_gap_tasks_from_daily()
         steps_completed = 1
         self.logger.info("步骤1完成", {"task_count": len(tasks_step1)})
-        self.logger.debug(
+        self.logger.debug_lazy(
             "步骤1明细",
-            {
+            lambda: {
                 "task_count": len(tasks_step1),
                 "task_sample": [task.to_api_payload() for task in tasks_step1[:10]],
                 "duration_seconds": round(time.monotonic() - step_started, 4),
@@ -1536,7 +1593,7 @@ class MarketDataMaintenanceService:
         )
         self._report_progress(15.0, phase="prepare")
 
-        self.logger.info("步骤2开始：检查 60/30/15 每日条数并先删后补")
+        self.logger.info("步骤2开始：检查 60/30/15 每日条数并标记异常日回补")
         step_started = time.monotonic()
         tasks_step2, removed_corrupted_rows = self._build_historical_minute_count_tasks()
         steps_completed = 2
@@ -1544,14 +1601,14 @@ class MarketDataMaintenanceService:
             "步骤2完成",
             {
                 "task_count": len(tasks_step2),
-                "removed_corrupted_rows": removed_corrupted_rows,
+                "corrupted_existing_rows": removed_corrupted_rows,
             },
         )
-        self.logger.debug(
+        self.logger.debug_lazy(
             "步骤2明细",
-            {
+            lambda: {
                 "task_count": len(tasks_step2),
-                "removed_corrupted_rows": removed_corrupted_rows,
+                "corrupted_existing_rows": removed_corrupted_rows,
                 "task_sample": [task.to_api_payload() for task in tasks_step2[:10]],
                 "duration_seconds": round(time.monotonic() - step_started, 4),
             },
@@ -1563,9 +1620,9 @@ class MarketDataMaintenanceService:
         tasks_step3 = self._build_historical_weekly_gap_tasks()
         steps_completed = 3
         self.logger.info("步骤3完成", {"task_count": len(tasks_step3)})
-        self.logger.debug(
+        self.logger.debug_lazy(
             "步骤3明细",
-            {
+            lambda: {
                 "task_count": len(tasks_step3),
                 "task_sample": [task.to_api_payload() for task in tasks_step3[:10]],
                 "duration_seconds": round(time.monotonic() - step_started, 4),
@@ -1586,9 +1643,9 @@ class MarketDataMaintenanceService:
                 "retry_skipped_tasks": retry_skipped,
             },
         )
-        self.logger.debug(
+        self.logger.debug_lazy(
             "步骤4明细",
-            {
+            lambda: {
                 "merged_task_count": len(merged_tasks),
                 "executable_task_count": len(executable_tasks),
                 "retry_skipped_tasks": retry_skipped,
@@ -1638,9 +1695,9 @@ class MarketDataMaintenanceService:
                 )
             if failed_updates:
                 self.state_db.update_maintenance_retry_tasks(failed_updates)
-            self.logger.debug(
+            self.logger.debug_lazy(
                 "步骤5-7 retry 回写明细",
-                {
+                lambda: {
                     "success_retry_delete_count": len(success_task_keys),
                     "failed_retry_update_count": len(failed_updates),
                     "failed_retry_sample": failed_updates[:10],

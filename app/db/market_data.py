@@ -384,28 +384,17 @@ class MarketDataDB:
         unique_codes = list(dict.fromkeys(code for code in codes if code))
         if not unique_codes:
             return {}
-        placeholders = ",".join(["?"] * len(unique_codes))
+        query = """
+            select code, board_name, selected_reason, updated_at
+            from stock_concepts
+            where code in (select unnest($1))
+            order by code asc, board_name asc
+        """
         if con is not None:
-            rows = con.execute(
-                f"""
-                select code, board_name, selected_reason, updated_at
-                from stock_concepts
-                where code in ({placeholders})
-                order by code asc, board_name asc
-                """,
-                unique_codes,
-            ).fetchall()
+            rows = con.execute(query, [unique_codes]).fetchall()
         else:
             with self._connect() as own_con:
-                rows = own_con.execute(
-                    f"""
-                    select code, board_name, selected_reason, updated_at
-                    from stock_concepts
-                    where code in ({placeholders})
-                    order by code asc, board_name asc
-                    """,
-                    unique_codes,
-                ).fetchall()
+                rows = own_con.execute(query, [unique_codes]).fetchall()
         result: dict[str, list[dict[str, Any]]] = {code: [] for code in unique_codes}
         for code, board_name, selected_reason, updated_at in rows:
             result.setdefault(str(code), []).append(
@@ -611,9 +600,9 @@ class MarketDataDB:
 
         con.execute("drop table if exists _tmp_candidate_codes")
         con.execute("create temp table _tmp_candidate_codes (code varchar)")
-        con.executemany(
-            "insert into _tmp_candidate_codes(code) values (?)",
-            [(code,) for code in unique_codes],
+        con.execute(
+            "insert into _tmp_candidate_codes(code) select unnest($1)",
+            [unique_codes],
         )
 
         for tf in required_timeframes:

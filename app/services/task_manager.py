@@ -90,6 +90,7 @@ class TaskManager:
         source_db: str | None,
         run_mode: str,
         sample_size: int,
+        skip_coverage_filter: bool = True,
     ) -> str:
         """
         输入：
@@ -141,6 +142,7 @@ class TaskManager:
                 "group_params": merged_group_params,
                 "run_mode": run_mode,
                 "sample_size": sample_size,
+                "skip_coverage_filter": skip_coverage_filter,
             },
         )
         self._submit_task(task_id)
@@ -559,6 +561,7 @@ class TaskManager:
         group_params: dict[str, Any] = params.get("group_params") or {}
         run_mode: str = params.get("run_mode") or "full"
         sample_size: int = int(params.get("sample_size") or 20)
+        skip_coverage_filter: bool = bool(params.get("skip_coverage_filter", True))
 
         source_db = task.get("source_db") or str(SOURCE_DB_PATH)
         start_ts = task.get("start_ts")
@@ -637,7 +640,7 @@ class TaskManager:
                     unresolved_inputs = resolution.unresolved
                     code_to_name.update(resolution.code_to_name)
 
-                    if start_ts is not None and end_ts is not None and codes:
+                    if start_ts is not None and end_ts is not None and codes and not skip_coverage_filter:
                         required_timeframes = self._required_timeframes_for_filtering(
                             strategy_engine,
                             configured=configured_timeframes,
