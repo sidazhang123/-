@@ -13,12 +13,69 @@ from pathlib import Path
 from unittest import mock
 
 import duckdb
+import pandas as pd
 
 from app.db.market_data import MarketDataDB
 
 
 class TestMarketDataConnectionFallback(unittest.TestCase):
     """MarketDataDB 连接容错测试。"""
+
+    def test_open_read_session_reuses_single_connection_for_multiple_reads(self) -> None:
+        """任务级只读会话应在多次读取间复用同一条连接。"""
+
+        db = MarketDataDB("D:/quant.duckdb")
+        mock_conn = mock.MagicMock()
+        stock_cursor = mock.MagicMock()
+        stock_cursor.fetchall.return_value = [("000001", "平安银行"), ("000002", "万科A")]
+        kline_cursor = mock.MagicMock()
+        kline_cursor.fetchdf.return_value = pd.DataFrame(
+            [{
+                "datetime": "2026-03-10 15:00:00",
+                "open": 10.0,
+                "high": 10.5,
+                "low": 9.8,
+                "close": 10.2,
+                "volume": 1000.0,
+                "amount": 10000.0,
+            }]
+        )
+        mock_conn.execute.side_effect = [stock_cursor, stock_cursor, kline_cursor]
+
+        with mock.patch.object(db, "_connect", return_value=mock_conn) as mocked_connect:
+            with db.open_read_session() as session:
+                all_stocks = session.get_all_stocks()
+                resolution = session.resolve_stock_inputs(["平安银行"])
+                df = session.fetch_ohlcv(
+                    code="000001",
+                    timeframe="d",
+                    start_ts=None,
+                    end_ts=None,
+                )
+
+        mocked_connect.assert_called_once_with()
+        mock_conn.close.assert_called_once_with()
+        self.assertEqual(all_stocks, [("000001", "平安银行"), ("000002", "万科A")])
+        self.assertEqual(resolution.codes, ["000001"])
+        self.assertFalse(df.empty)
+
+    def test_resolve_stock_inputs_reuses_prefetched_rows(self) -> None:
+        """已传入股票快照时，不应再次创建数据库连接。"""
+
+        db = MarketDataDB("D:/quant.duckdb")
+        stock_rows = [
+            ("000001", "平安银行"),
+            ("000002", "万科A"),
+            ("600000", "浦发银行"),
+        ]
+
+        with mock.patch.object(db, "_connect") as mocked_connect:
+            resolution = db.resolve_stock_inputs(["平安银行", "600000", "未知"], stock_rows=stock_rows)
+
+        mocked_connect.assert_not_called()
+        self.assertEqual(resolution.codes, ["000001", "600000"])
+        self.assertEqual(resolution.unresolved, ["未知"])
+        self.assertEqual(resolution.code_to_name["000002"], "万科A")
 
     def test_connect_fallback_to_read_write_on_config_conflict(self) -> None:
         """后台已持有读写连接时，前台读请求应自动回退到兼容配置。"""

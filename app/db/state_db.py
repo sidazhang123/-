@@ -603,6 +603,7 @@ class StateDB:
         """
 
         payload: list[tuple[Any, ...]] = []
+        seen_task_keys: set[str] = set()
         now = datetime.now()
         for item in rows:
             if not isinstance(item, dict):
@@ -615,6 +616,9 @@ class StateDB:
             end_date = str(item.get("end_date") or "").strip()
             if not task_key or not mode or not code or not freq or not start_date or not end_date:
                 continue
+            if task_key in seen_task_keys:
+                continue
+            seen_task_keys.add(task_key)
             payload.append(
                 (
                     task_key,
@@ -634,17 +638,71 @@ class StateDB:
             return 0
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
+            """
+            输入：
+            1. con: 状态库写连接。
+            输出：
+            1. 无返回值。
+            用途：
+            1. 通过临时表合并批量插入 retry 任务，减少多次短写事务。
+            边界条件：
+            1. 已存在 task_key 继续保持忽略语义。
+            """
+            con.execute("drop table if exists _tmp_maintenance_retry_insert")
+            con.execute(
+                """
+                create temp table _tmp_maintenance_retry_insert (
+                    task_key varchar,
+                    mode varchar,
+                    code varchar,
+                    freq varchar,
+                    start_date varchar,
+                    end_date varchar,
+                    attempt_count integer,
+                    last_status varchar,
+                    last_error varchar,
+                    created_at timestamp,
+                    updated_at timestamp
+                )
+                """
+            )
             con.executemany(
+                """
+                insert into _tmp_maintenance_retry_insert(
+                    task_key, mode, code, freq, start_date, end_date,
+                    attempt_count, last_status, last_error, created_at, updated_at
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                payload,
+            )
+            con.execute(
                 """
                 insert into maintenance_retry_tasks(
                     task_key, mode, code, freq, start_date, end_date,
                     attempt_count, last_status, last_error, created_at, updated_at
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict(task_key) do nothing
-                """,
-                payload,
+                select
+                    src.task_key,
+                    src.mode,
+                    src.code,
+                    src.freq,
+                    src.start_date,
+                    src.end_date,
+                    src.attempt_count,
+                    src.last_status,
+                    src.last_error,
+                    src.created_at,
+                    src.updated_at
+                from _tmp_maintenance_retry_insert src
+                where not exists (
+                    select 1
+                    from maintenance_retry_tasks target
+                    where target.task_key = src.task_key
+                )
+                """
             )
+            con.execute("drop table if exists _tmp_maintenance_retry_insert")
 
         self._with_write_connection(_op)
         return len(payload)
@@ -689,14 +747,14 @@ class StateDB:
         """
 
         now = datetime.now()
-        payload: list[tuple[Any, ...]] = []
+        deduped_by_task_key: dict[str, tuple[Any, ...]] = {}
         for item in rows:
             if not isinstance(item, dict):
                 continue
             task_key = str(item.get("task_key") or "").strip()
             if not task_key:
                 continue
-            payload.append(
+            deduped_by_task_key[task_key] = (
                 (
                     int(item.get("attempt_count") or 0),
                     str(item.get("last_status") or "pending"),
@@ -706,18 +764,56 @@ class StateDB:
                 )
             )
 
+        payload = list(deduped_by_task_key.values())
+
         if not payload:
             return 0
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
+            """
+            输入：
+            1. con: 状态库写连接。
+            输出：
+            1. 无返回值。
+            用途：
+            1. 通过临时表一次性合并批量更新 retry 状态，避免逐行短写库。
+            边界条件：
+            1. 只更新命中的 task_key；不存在记录保持无影响。
+            """
+            con.execute("drop table if exists _tmp_maintenance_retry_update")
+            con.execute(
+                """
+                create temp table _tmp_maintenance_retry_update (
+                    attempt_count integer,
+                    last_status varchar,
+                    last_error varchar,
+                    updated_at timestamp,
+                    task_key varchar
+                )
+                """
+            )
             con.executemany(
                 """
-                update maintenance_retry_tasks
-                set attempt_count = ?, last_status = ?, last_error = ?, updated_at = ?
-                where task_key = ?
+                insert into _tmp_maintenance_retry_update(
+                    attempt_count, last_status, last_error, updated_at, task_key
+                )
+                values (?, ?, ?, ?, ?)
                 """,
                 payload,
             )
+            con.execute(
+                """
+                update maintenance_retry_tasks as target
+                set
+                    attempt_count = src.attempt_count,
+                    last_status = src.last_status,
+                    last_error = src.last_error,
+                    updated_at = src.updated_at
+                from _tmp_maintenance_retry_update as src
+                where target.task_key = src.task_key
+                """
+            )
+            con.execute("drop table if exists _tmp_maintenance_retry_update")
 
         self._with_write_connection(_op)
         return len(payload)
@@ -1248,6 +1344,7 @@ class StateDB:
                 """,
                 [job_id, now, now, "queued", source_db, mode, params_json],
             )
+            self._trim_maintenance_logs(con)
 
         self._with_write_connection(_op)
 
@@ -1273,6 +1370,7 @@ class StateDB:
                 """,
                 [job_id, now, now, "queued", source_db, params_json],
             )
+            self._trim_concept_logs(con)
 
         self._with_write_connection(_op)
 
@@ -1345,7 +1443,6 @@ class StateDB:
                 """,
                 [job_id, now, level, message, detail_json],
             )
-            self._trim_maintenance_logs(con)
 
         self._with_write_connection(_op)
 
@@ -1370,7 +1467,6 @@ class StateDB:
                 """,
                 [job_id, now, level, message, detail_json],
             )
-            self._trim_concept_logs(con)
 
         self._with_write_connection(_op)
 
@@ -1448,15 +1544,18 @@ class StateDB:
         keep_limit = int(LOG_KEEP_TASK_PER_TASK or 0)
         if keep_limit <= 0:
             return
-        overflow_row = con.execute(
+        counts_row = con.execute(
             """
-            select count(*) - ?
-            from task_logs
+            select info_log_count, error_log_count
+            from tasks
             where task_id = ?
             """,
-            [keep_limit, task_id],
+            [task_id],
         ).fetchone()
-        overflow = int(overflow_row[0] or 0) if overflow_row else 0
+        if not counts_row:
+            return
+        total_logs = int(counts_row[0] or 0) + int(counts_row[1] or 0)
+        overflow = total_logs - keep_limit
         if overflow <= 0:
             return
 
@@ -2518,18 +2617,33 @@ class StateDB:
         边界条件：
         1. 关键边界与异常分支按函数体内判断与调用约定处理。
         """
-        def _op(con: duckdb.DuckDBPyConnection):
+        processed_codes, _ = self.get_task_recovery_snapshot(task_id)
+        return processed_codes
+
+    def get_task_recovery_snapshot(self, task_id: str) -> tuple[set[str], set[str]]:
+        """
+        输入：
+        1. task_id: 任务 ID。
+        输出：
+        1. 返回 `(processed_codes, signal_code_set)` 二元组。
+        用途：
+        1. 在单次读连接访问中同时读取任务恢复所需的“已处理股票集合”和“已有信号股票集合”。
+        边界条件：
+        1. 不改变既有 completed/failed 口径与 task_results 去重口径。
+        """
+
+        def _op(con: duckdb.DuckDBPyConnection) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
             """
             输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
+            1. con: 状态库读连接。
             输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
+            1. 返回已处理股票行与结果股票行。
             用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
+            1. 复用同一条读连接，减少任务恢复阶段的重复独立查询。
             边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
+            1. 查询为空时返回空列表，由外层统一转为集合。
             """
-            return con.execute(
+            processed_rows = con.execute(
                 """
                 select code
                 from task_stock_states
@@ -2538,9 +2652,18 @@ class StateDB:
                 """,
                 [task_id],
             ).fetchall()
+            signal_rows = con.execute(
+                """
+                select distinct code
+                from task_results
+                where task_id = ?
+                """,
+                [task_id],
+            ).fetchall()
+            return processed_rows, signal_rows
 
-        rows = self._with_read_connection(_op)
-        return {row[0] for row in rows}
+        processed_rows, signal_rows = self._with_read_connection(_op)
+        return ({row[0] for row in processed_rows}, {row[0] for row in signal_rows})
 
     def get_result_code_set(self, task_id: str) -> set[str]:
         """
@@ -2553,28 +2676,8 @@ class StateDB:
         边界条件：
         1. 关键边界与异常分支按函数体内判断与调用约定处理。
         """
-        def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
-            return con.execute(
-                """
-                select distinct code
-                from task_results
-                where task_id = ?
-                """,
-                [task_id],
-            ).fetchall()
-
-        rows = self._with_read_connection(_op)
-        return {row[0] for row in rows}
+        _, signal_code_set = self.get_task_recovery_snapshot(task_id)
+        return signal_code_set
 
     def get_result_stock_summaries(self, task_id: str) -> list[dict[str, Any]]:
         """

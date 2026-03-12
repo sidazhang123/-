@@ -895,6 +895,18 @@ class MarketDataMaintenanceService:
         if new_rows:
             self.state_db.insert_maintenance_retry_tasks(new_rows)
 
+        self.logger.debug(
+            "历史维护 retry 明细",
+            {
+                "raw_task_count": len(tasks),
+                "executable_task_count": len(executable),
+                "retry_skipped_tasks": skipped,
+                "new_retry_rows": len(new_rows),
+                "retry_update_rows": len(retry_updates),
+                "task_sample": [task.to_api_payload() for task in executable[:10]],
+            },
+        )
+
         filtered_key_map = {
             signature: task_key
             for signature, task_key in task_key_by_signature.items()
@@ -1078,8 +1090,20 @@ class MarketDataMaintenanceService:
             rows = buffers.get(freq) or []
             if not rows:
                 continue
+            flush_started = time.monotonic()
+            buffered_count = len(rows)
             written = self._flush_freq_rows(con, freq=freq, rows=rows)
             rows_written_by_freq[freq] += written
+            self.logger.debug(
+                "批量刷盘明细",
+                {
+                    "freq": freq,
+                    "buffered_rows": buffered_count,
+                    "written_rows": written,
+                    "cumulative_written_rows": rows_written_by_freq[freq],
+                    "duration_seconds": round(time.monotonic() - flush_started, 4),
+                },
+            )
             buffers[freq] = []
 
     def _append_event_rows_to_buffers(
@@ -1178,6 +1202,8 @@ class MarketDataMaintenanceService:
                 break
             retry_rounds_used = round_index + 1
             current_tasks = [task_map[sign] for sign in current_signatures]
+            round_started = time.monotonic()
+            round_rows_appended = 0
             self.logger.info(
                 "拉取与写入开始",
                 {
@@ -1242,7 +1268,11 @@ class MarketDataMaintenanceService:
                             failed_errors[sign] = error_text
                         else:
                             rows = event.get("rows") if isinstance(event.get("rows"), list) else []
-                            self._append_event_rows_to_buffers(task=event_task, rows=rows, buffers=buffers)
+                            round_rows_appended += self._append_event_rows_to_buffers(
+                                task=event_task,
+                                rows=rows,
+                                buffers=buffers,
+                            )
                             success_signatures.add(sign)
                             round_failures.discard(sign)
 
@@ -1317,6 +1347,21 @@ class MarketDataMaintenanceService:
                     "processed": processed_count,
                     "total": total_count,
                     "failed": len(pending_signatures),
+                },
+            )
+            self.logger.debug(
+                "拉取与写入轮次明细",
+                {
+                    "mode": mode,
+                    "round": retry_rounds_used,
+                    "task_count": len(current_tasks),
+                    "processed": processed_count,
+                    "failed_task_count": len(pending_signatures),
+                    "round_rows_appended": round_rows_appended,
+                    "success_task_sample": list(sorted(success_signatures))[:10],
+                    "failed_task_sample": list(sorted(pending_signatures))[:10],
+                    "rows_written_by_freq": dict(rows_written_by_freq),
+                    "duration_seconds": round(time.monotonic() - round_started, 4),
                 },
             )
             if pending_signatures and round_index + 1 < _TASK_RETRY_ROUNDS:
@@ -1477,12 +1522,22 @@ class MarketDataMaintenanceService:
         self.ensure_runtime_schema()
 
         self.logger.info("步骤1开始：扫描 d 周期缺口并扩展 d/60/30/15 任务")
+        step_started = time.monotonic()
         tasks_step1 = self._build_historical_gap_tasks_from_daily()
         steps_completed = 1
         self.logger.info("步骤1完成", {"task_count": len(tasks_step1)})
+        self.logger.debug(
+            "步骤1明细",
+            {
+                "task_count": len(tasks_step1),
+                "task_sample": [task.to_api_payload() for task in tasks_step1[:10]],
+                "duration_seconds": round(time.monotonic() - step_started, 4),
+            },
+        )
         self._report_progress(15.0, phase="prepare")
 
         self.logger.info("步骤2开始：检查 60/30/15 每日条数并先删后补")
+        step_started = time.monotonic()
         tasks_step2, removed_corrupted_rows = self._build_historical_minute_count_tasks()
         steps_completed = 2
         self.logger.info(
@@ -1492,15 +1547,34 @@ class MarketDataMaintenanceService:
                 "removed_corrupted_rows": removed_corrupted_rows,
             },
         )
+        self.logger.debug(
+            "步骤2明细",
+            {
+                "task_count": len(tasks_step2),
+                "removed_corrupted_rows": removed_corrupted_rows,
+                "task_sample": [task.to_api_payload() for task in tasks_step2[:10]],
+                "duration_seconds": round(time.monotonic() - step_started, 4),
+            },
+        )
         self._report_progress(30.0, phase="prepare")
 
         self.logger.info("步骤3开始：扫描 w 周期缺口窗口")
+        step_started = time.monotonic()
         tasks_step3 = self._build_historical_weekly_gap_tasks()
         steps_completed = 3
         self.logger.info("步骤3完成", {"task_count": len(tasks_step3)})
+        self.logger.debug(
+            "步骤3明细",
+            {
+                "task_count": len(tasks_step3),
+                "task_sample": [task.to_api_payload() for task in tasks_step3[:10]],
+                "duration_seconds": round(time.monotonic() - step_started, 4),
+            },
+        )
         self._report_progress(45.0, phase="prepare")
 
         self.logger.info("步骤4开始：维护 retry 任务表与尝试次数")
+        step_started = time.monotonic()
         merged_tasks = self._dedupe_tasks([*tasks_step1, *tasks_step2, *tasks_step3])
         executable_tasks, task_key_by_signature, retry_skipped = self._prepare_historical_retry_tasks(merged_tasks)
         steps_completed = 4
@@ -1510,6 +1584,17 @@ class MarketDataMaintenanceService:
                 "merged_task_count": len(merged_tasks),
                 "executable_task_count": len(executable_tasks),
                 "retry_skipped_tasks": retry_skipped,
+            },
+        )
+        self.logger.debug(
+            "步骤4明细",
+            {
+                "merged_task_count": len(merged_tasks),
+                "executable_task_count": len(executable_tasks),
+                "retry_skipped_tasks": retry_skipped,
+                "merged_task_sample": [task.to_api_payload() for task in merged_tasks[:10]],
+                "executable_task_sample": [task.to_api_payload() for task in executable_tasks[:10]],
+                "duration_seconds": round(time.monotonic() - step_started, 4),
             },
         )
         self._report_progress(55.0, phase="prepare")
@@ -1532,15 +1617,35 @@ class MarketDataMaintenanceService:
             if success_task_keys:
                 self.state_db.delete_maintenance_retry_tasks(success_task_keys)
 
+            failed_task_keys = [
+                task_key_by_signature[sign]
+                for sign in fetch_stats.failed_signatures
+                if sign in task_key_by_signature
+            ]
+            failed_retry_map = self.state_db.get_maintenance_retry_tasks(failed_task_keys) if failed_task_keys else {}
+            failed_updates: list[dict[str, Any]] = []
             for sign in fetch_stats.failed_signatures:
                 task_key = task_key_by_signature.get(sign)
                 if not task_key:
                     continue
-                self.state_db.update_maintenance_retry_task(
-                    task_key=task_key,
-                    last_status="failed",
-                    last_error=fetch_stats.failed_errors.get(sign, "unknown_error"),
+                failed_updates.append(
+                    {
+                        "task_key": task_key,
+                        "attempt_count": int(failed_retry_map.get(task_key, {}).get("attempt_count") or 0),
+                        "last_status": "failed",
+                        "last_error": fetch_stats.failed_errors.get(sign, "unknown_error"),
+                    }
                 )
+            if failed_updates:
+                self.state_db.update_maintenance_retry_tasks(failed_updates)
+            self.logger.debug(
+                "步骤5-7 retry 回写明细",
+                {
+                    "success_retry_delete_count": len(success_task_keys),
+                    "failed_retry_update_count": len(failed_updates),
+                    "failed_retry_sample": failed_updates[:10],
+                },
+            )
 
         steps_completed = 7
         self.logger.info(

@@ -625,302 +625,301 @@ class TaskManager:
                 },
             )
 
-            stock_rows = market_db.get_all_stocks()
-            code_to_name = {code: name for code, name in stock_rows}
+            with market_db.open_read_session() as market_session:
+                stock_rows = market_session.get_all_stocks()
+                code_to_name = {code: name for code, name in stock_rows}
 
-            codes = summary.get("resolved_codes") or []
-            unresolved_inputs = summary.get("unresolved_inputs") or []
-            if not codes:
-                resolution = market_db.resolve_stock_inputs(stocks)
-                codes = list(resolution.codes)
-                unresolved_inputs = resolution.unresolved
-                code_to_name.update(resolution.code_to_name)
+                codes = summary.get("resolved_codes") or []
+                unresolved_inputs = summary.get("unresolved_inputs") or []
+                if not codes:
+                    resolution = market_session.resolve_stock_inputs(stocks, stock_rows=stock_rows)
+                    codes = list(resolution.codes)
+                    unresolved_inputs = resolution.unresolved
+                    code_to_name.update(resolution.code_to_name)
 
-                if start_ts is not None and end_ts is not None and codes:
-                    required_timeframes = self._required_timeframes_for_filtering(
-                        strategy_engine,
-                        configured=configured_timeframes,
-                    )
-                    coverage = market_db.filter_codes_with_complete_range(
-                        codes=codes,
-                        start_ts=start_ts,
-                        end_ts=end_ts,
-                        required_timeframes=required_timeframes,
-                    )
-                    raw_count = len(codes)
-                    codes = coverage.eligible_codes
-                    excluded_codes = coverage.excluded_codes
-                    summary["coverage_filter"] = {
-                        "required_timeframes": required_timeframes,
-                        "expected_bars": coverage.expected_bars_by_timeframe,
-                        "raw_code_count": raw_count,
-                        "eligible_code_count": len(codes),
-                        "excluded_code_count": len(excluded_codes),
-                    }
-
-                    if excluded_codes:
-                        task_logger.info(
-                            "已排除时间区间内数据不完整股票",
-                            {
-                                "raw_code_count": raw_count,
-                                "eligible_code_count": len(codes),
-                                "excluded_code_count": len(excluded_codes),
-                                "excluded_code_preview": excluded_codes[:30],
-                                "required_timeframes": required_timeframes,
-                                "expected_bars": coverage.expected_bars_by_timeframe,
-                            },
+                    if start_ts is not None and end_ts is not None and codes:
+                        required_timeframes = self._required_timeframes_for_filtering(
+                            strategy_engine,
+                            configured=configured_timeframes,
                         )
-
-                if run_mode == "sample20" and codes:
-                    selected = random.sample(codes, k=min(sample_size, len(codes)))
-                    codes = selected
-
-                concept_formula = parse_concept_formula(group_params)
-                summary["concept_formula"] = concept_formula.to_dict()
-                if concept_formula.is_active() and codes:
-                    raw_count = len(codes)
-                    codes, concept_filter_summary = market_db.filter_codes_by_concept_formula(
-                        codes=codes,
-                        formula=concept_formula,
-                    )
-                    summary["concept_filter"] = concept_filter_summary
-                    if raw_count != len(codes):
-                        task_logger.info(
-                            "已应用概念公式预筛选",
-                            {
-                                "raw_code_count": raw_count,
-                                "eligible_code_count": len(codes),
-                                "excluded_code_count": raw_count - len(codes),
-                                "concept_terms": list(concept_formula.concept_terms),
-                                "reason_terms": list(concept_formula.reason_terms),
-                                "excluded_code_preview": concept_filter_summary.get("excluded_code_preview") or [],
-                            },
+                        coverage = market_session.filter_codes_with_complete_range(
+                            codes=codes,
+                            start_ts=start_ts,
+                            end_ts=end_ts,
+                            required_timeframes=required_timeframes,
                         )
+                        raw_count = len(codes)
+                        codes = coverage.eligible_codes
+                        excluded_codes = coverage.excluded_codes
+                        summary["coverage_filter"] = {
+                            "required_timeframes": required_timeframes,
+                            "expected_bars": coverage.expected_bars_by_timeframe,
+                            "raw_code_count": raw_count,
+                            "eligible_code_count": len(codes),
+                            "excluded_code_count": len(excluded_codes),
+                        }
 
-                summary["unresolved_inputs"] = unresolved_inputs
-                summary["resolved_codes"] = codes
-                summary["run_mode"] = run_mode
-                summary["sample_size"] = sample_size
-                summary["total_codes"] = len(codes)
+                        if excluded_codes:
+                            task_logger.info(
+                                "已排除时间区间内数据不完整股票",
+                                {
+                                    "raw_code_count": raw_count,
+                                    "eligible_code_count": len(codes),
+                                    "excluded_code_count": len(excluded_codes),
+                                    "excluded_code_preview": excluded_codes[:30],
+                                    "required_timeframes": required_timeframes,
+                                    "expected_bars": coverage.expected_bars_by_timeframe,
+                                },
+                            )
+
+                    if run_mode == "sample20" and codes:
+                        selected = random.sample(codes, k=min(sample_size, len(codes)))
+                        codes = selected
+
+                    concept_formula = parse_concept_formula(group_params)
+                    summary["concept_formula"] = concept_formula.to_dict()
+                    if concept_formula.is_active() and codes:
+                        raw_count = len(codes)
+                        codes, concept_filter_summary = market_session.filter_codes_by_concept_formula(
+                            codes=codes,
+                            formula=concept_formula,
+                        )
+                        summary["concept_filter"] = concept_filter_summary
+                        if raw_count != len(codes):
+                            task_logger.info(
+                                "已应用概念公式预筛选",
+                                {
+                                    "raw_code_count": raw_count,
+                                    "eligible_code_count": len(codes),
+                                    "excluded_code_count": raw_count - len(codes),
+                                    "concept_terms": list(concept_formula.concept_terms),
+                                    "reason_terms": list(concept_formula.reason_terms),
+                                    "excluded_code_preview": concept_filter_summary.get("excluded_code_preview") or [],
+                                },
+                            )
+
+                    summary["unresolved_inputs"] = unresolved_inputs
+                    summary["resolved_codes"] = codes
+                    summary["run_mode"] = run_mode
+                    summary["sample_size"] = sample_size
+                    summary["total_codes"] = len(codes)
+                    self.state_db.update_task_fields(
+                        task_id,
+                        total_stocks=len(codes),
+                        summary_json=json.dumps(summary, ensure_ascii=False, default=str),
+                    )
+
+                    if unresolved_inputs:
+                        task_logger.error("部分输入股票未能解析", {"unresolved": unresolved_inputs})
+
+                if not codes:
+                    task_logger.info("输入列表未匹配到任何股票，任务结束")
+                    summary["finished_at"] = datetime.now().isoformat()
+                    self.state_db.update_task_fields(
+                        task_id,
+                        status="completed",
+                        finished_at=datetime.now(),
+                        progress=100.0,
+                        current_code=None,
+                        summary_json=json.dumps(summary, ensure_ascii=False, default=str),
+                    )
+                    return
+
+                processed_codes, signal_code_set = self.state_db.get_task_recovery_snapshot(task_id)
+                processed_count = len(processed_codes)
+                summary["processed_codes"] = processed_count
+                summary["signal_codes"] = len(signal_code_set)
+
                 self.state_db.update_task_fields(
                     task_id,
                     total_stocks=len(codes),
+                    processed_stocks=processed_count,
+                    progress=round(processed_count * 100.0 / len(codes), 4),
                     summary_json=json.dumps(summary, ensure_ascii=False, default=str),
                 )
 
-                if unresolved_inputs:
-                    task_logger.error("部分输入股票未能解析", {"unresolved": unresolved_inputs})
-
-            if not codes:
-                task_logger.info("输入列表未匹配到任何股票，任务结束")
-                summary["finished_at"] = datetime.now().isoformat()
-                self.state_db.update_task_fields(
-                    task_id,
-                    status="completed",
-                    finished_at=datetime.now(),
-                    progress=100.0,
-                    current_code=None,
-                    summary_json=json.dumps(summary, ensure_ascii=False, default=str),
-                )
-                return
-
-            processed_codes = self.state_db.get_processed_stock_codes(task_id)
-            signal_code_set = self.state_db.get_result_code_set(task_id)
-            processed_count = len(processed_codes)
-            summary["processed_codes"] = processed_count
-            summary["signal_codes"] = len(signal_code_set)
-
-            self.state_db.update_task_fields(
-                task_id,
-                total_stocks=len(codes),
-                processed_stocks=processed_count,
-                progress=round(processed_count * 100.0 / len(codes), 4),
-                summary_json=json.dumps(summary, ensure_ascii=False, default=str),
-            )
-
-            fallback_to_backtrader = self._specialized_fallback_enabled(group_params)
-            if strategy_engine == "specialized":
-                if specialized_runner is None:
-                    raise RuntimeError(f"策略组 {strategy_group_id} 未能加载 specialized 入口")
-                # 主路径：优先 specialized。
-                try:
-                    processed_count, signal_code_set = self._run_specialized_engine(
-                        task_id=task_id,
-                        task_logger=task_logger,
-                        source_db_path=Path(source_db),
-                        start_ts=start_ts,
-                        end_ts=end_ts,
-                        codes=codes,
-                        code_to_name=code_to_name,
-                        strategy_group_id=strategy_group_id,
-                        strategy_name=strategy_name,
-                        group_params=group_params,
-                        cache_scope=cache_scope,
-                        specialized_runner=specialized_runner,
-                        summary=summary,
-                        signal_code_set=signal_code_set,
-                        processed_codes=processed_codes,
-                        processed_count=processed_count,
-                    )
-                    processed_codes = self.state_db.get_processed_stock_codes(task_id)
-                except Exception as specialized_exc:
-                    # specialized 失败后可按开关降级到 backtrader，保证任务不中断。
-                    err_text = f"{type(specialized_exc).__name__}: {specialized_exc}"
-                    task_logger.error(
-                        "专用引擎执行失败",
-                        {
-                            "error": err_text,
-                            "fallback_to_backtrader": fallback_to_backtrader,
-                            "traceback": traceback.format_exc(limit=6),
-                        },
-                    )
-                    if not fallback_to_backtrader:
-                        raise
-                    task_logger.info("开始降级到 backtrader 执行")
-                    strategy_engine = "backtrader"
-                    processed_codes = self.state_db.get_processed_stock_codes(task_id)
-                    signal_code_set = self.state_db.get_result_code_set(task_id)
-                    processed_count = len(processed_codes)
-                    summary["processed_codes"] = processed_count
-                    summary["signal_codes"] = len(signal_code_set)
-                    self.state_db.update_task_fields(
-                        task_id,
-                        processed_stocks=processed_count,
-                        progress=round(processed_count * 100.0 / len(codes), 4),
-                        summary_json=json.dumps(summary, ensure_ascii=False, default=str),
-                    )
-
-            if strategy_engine == "backtrader":
-                strategy_runtime = self.strategy_registry.load_runtime(strategy_group_id)
-                fetch_timeframes = list(configured_timeframes) if configured_timeframes else ["w", "d", "60", "30", "15"]
-
-                for code in codes:
-                    if code in processed_codes:
-                        continue
-
-                    self._wait_if_paused_or_stopping(task_id, task_logger)
-
-                    stock_name = code_to_name.get(code, "")
-                    self.state_db.update_task_fields(task_id, current_code=code)
-                    task_logger.info(
-                        "开始处理股票",
-                        {
-                            "index": processed_count + 1,
-                            "total": len(codes),
-                            "code": code,
-                            "name": stock_name,
-                        },
-                    )
-
+                fallback_to_backtrader = self._specialized_fallback_enabled(group_params)
+                if strategy_engine == "specialized":
+                    if specialized_runner is None:
+                        raise RuntimeError(f"策略组 {strategy_group_id} 未能加载 specialized 入口")
+                    # 主路径：优先 specialized。
                     try:
-
-                        def on_signal(signal: dict[str, Any]) -> None:
-                            """
-                            输入：
-                            1. signal: 输入参数，具体约束以调用方和实现为准。
-                            输出：
-                            1. 返回值语义由函数实现定义；无返回时为 `None`。
-                            用途：
-                            1. 执行 `on_signal` 对应的业务或工具逻辑。
-                            边界条件：
-                            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-                            """
-                            self.state_db.add_result(
-                                task_id=task_id,
-                                code=signal["code"],
-                                name=signal["name"],
-                                signal_dt=signal["signal_dt"],
-                                clock_tf=signal["clock_tf"],
-                                strategy_group_id=signal["strategy_group_id"],
-                                strategy_name=signal["strategy_name"],
-                                signal_label=signal["signal_label"],
-                                payload=signal.get("payload"),
-                            )
-
-                        timeframe_dfs: dict[str, Any] = {}
-                        for tf in fetch_timeframes:
-                            timeframe_dfs[tf] = market_db.fetch_ohlcv(
-                                code=code,
-                                timeframe=tf,
-                                start_ts=start_ts,
-                                end_ts=end_ts,
-                            )
-
-                        run_summary, run_errors = run_single_stock_backtrader(
-                            code=code,
-                            name=stock_name,
-                            timeframe_dfs=timeframe_dfs,
+                        processed_count, signal_code_set = self._run_specialized_engine(
+                            task_id=task_id,
+                            task_logger=task_logger,
+                            source_db_path=Path(source_db),
+                            start_ts=start_ts,
+                            end_ts=end_ts,
+                            codes=codes,
+                            code_to_name=code_to_name,
                             strategy_group_id=strategy_group_id,
                             strategy_name=strategy_name,
-                            strategy_group_runtime=strategy_runtime,
                             group_params=group_params,
-                            on_signal=on_signal,
+                            cache_scope=cache_scope,
+                            specialized_runner=specialized_runner,
+                            summary=summary,
+                            signal_code_set=signal_code_set,
+                            processed_codes=processed_codes,
+                            processed_count=processed_count,
                         )
-
-                        if run_summary.signal_count > 0:
-                            signal_code_set.add(code)
-
-                        if run_errors:
-                            summary["stock_errors"] += 1
-                            for err in run_errors:
-                                task_logger.error("策略执行出现问题", {"code": code, "name": stock_name, "error": err})
-
-                        self.state_db.upsert_stock_state(
-                            task_id=task_id,
-                            code=code,
-                            name=stock_name,
-                            status="completed",
-                            processed_bars=run_summary.processed_bars,
-                            signal_count=run_summary.signal_count,
-                            last_dt=run_summary.last_dt,
-                            last_rules=run_summary.last_rules,
-                            error_message="; ".join(run_errors) if run_errors else None,
-                        )
-
-                        task_logger.info(
-                            "股票处理完成",
-                            {
-                                "code": code,
-                                "name": stock_name,
-                                "processed_bars": run_summary.processed_bars,
-                                "signal_count": run_summary.signal_count,
-                                "last_dt": run_summary.last_dt.isoformat() if run_summary.last_dt else None,
-                            },
-                        )
-                    except Exception as stock_exc:
-                        summary["stock_errors"] += 1
-                        err_text = f"{type(stock_exc).__name__}: {stock_exc}"
-                        self.state_db.upsert_stock_state(
-                            task_id=task_id,
-                            code=code,
-                            name=stock_name,
-                            status="failed",
-                            processed_bars=0,
-                            signal_count=0,
-                            last_dt=None,
-                            last_rules=None,
-                            error_message=err_text,
-                        )
+                        processed_codes, signal_code_set = self.state_db.get_task_recovery_snapshot(task_id)
+                    except Exception as specialized_exc:
+                        # specialized 失败后可按开关降级到 backtrader，保证任务不中断。
+                        err_text = f"{type(specialized_exc).__name__}: {specialized_exc}"
                         task_logger.error(
-                            "股票处理失败",
+                            "专用引擎执行失败",
                             {
+                                "error": err_text,
+                                "fallback_to_backtrader": fallback_to_backtrader,
+                                "traceback": traceback.format_exc(limit=6),
+                            },
+                        )
+                        if not fallback_to_backtrader:
+                            raise
+                        task_logger.info("开始降级到 backtrader 执行")
+                        strategy_engine = "backtrader"
+                        processed_codes, signal_code_set = self.state_db.get_task_recovery_snapshot(task_id)
+                        processed_count = len(processed_codes)
+                        summary["processed_codes"] = processed_count
+                        summary["signal_codes"] = len(signal_code_set)
+                        self.state_db.update_task_fields(
+                            task_id,
+                            processed_stocks=processed_count,
+                            progress=round(processed_count * 100.0 / len(codes), 4),
+                            summary_json=json.dumps(summary, ensure_ascii=False, default=str),
+                        )
+
+                if strategy_engine == "backtrader":
+                    strategy_runtime = self.strategy_registry.load_runtime(strategy_group_id)
+                    fetch_timeframes = list(configured_timeframes) if configured_timeframes else ["w", "d", "60", "30", "15"]
+
+                    for code in codes:
+                        if code in processed_codes:
+                            continue
+
+                        self._wait_if_paused_or_stopping(task_id, task_logger)
+
+                        stock_name = code_to_name.get(code, "")
+                        self.state_db.update_task_fields(task_id, current_code=code)
+                        task_logger.info(
+                            "开始处理股票",
+                            {
+                                "index": processed_count + 1,
+                                "total": len(codes),
                                 "code": code,
                                 "name": stock_name,
-                                "error": err_text,
-                                "traceback": traceback.format_exc(limit=4),
                             },
                         )
 
-                    processed_codes.add(code)
-                    processed_count += 1
-                    summary["processed_codes"] = processed_count
-                    summary["signal_codes"] = len(signal_code_set)
-                    self.state_db.update_task_fields(
-                        task_id,
-                        processed_stocks=processed_count,
-                        progress=round(processed_count * 100.0 / len(codes), 4),
-                        summary_json=json.dumps(summary, ensure_ascii=False, default=str),
-                    )
+                        try:
+
+                            def on_signal(signal: dict[str, Any]) -> None:
+                                """
+                                输入：
+                                1. signal: 输入参数，具体约束以调用方和实现为准。
+                                输出：
+                                1. 返回值语义由函数实现定义；无返回时为 `None`。
+                                用途：
+                                1. 执行 `on_signal` 对应的业务或工具逻辑。
+                                边界条件：
+                                1. 关键边界与异常分支按函数体内判断与调用约定处理。
+                                """
+                                self.state_db.add_result(
+                                    task_id=task_id,
+                                    code=signal["code"],
+                                    name=signal["name"],
+                                    signal_dt=signal["signal_dt"],
+                                    clock_tf=signal["clock_tf"],
+                                    strategy_group_id=signal["strategy_group_id"],
+                                    strategy_name=signal["strategy_name"],
+                                    signal_label=signal["signal_label"],
+                                    payload=signal.get("payload"),
+                                )
+
+                            timeframe_dfs: dict[str, Any] = {}
+                            for tf in fetch_timeframes:
+                                timeframe_dfs[tf] = market_session.fetch_ohlcv(
+                                    code=code,
+                                    timeframe=tf,
+                                    start_ts=start_ts,
+                                    end_ts=end_ts,
+                                )
+
+                            run_summary, run_errors = run_single_stock_backtrader(
+                                code=code,
+                                name=stock_name,
+                                timeframe_dfs=timeframe_dfs,
+                                strategy_group_id=strategy_group_id,
+                                strategy_name=strategy_name,
+                                strategy_group_runtime=strategy_runtime,
+                                group_params=group_params,
+                                on_signal=on_signal,
+                            )
+
+                            if run_summary.signal_count > 0:
+                                signal_code_set.add(code)
+
+                            if run_errors:
+                                summary["stock_errors"] += 1
+                                for err in run_errors:
+                                    task_logger.error("策略执行出现问题", {"code": code, "name": stock_name, "error": err})
+
+                            self.state_db.upsert_stock_state(
+                                task_id=task_id,
+                                code=code,
+                                name=stock_name,
+                                status="completed",
+                                processed_bars=run_summary.processed_bars,
+                                signal_count=run_summary.signal_count,
+                                last_dt=run_summary.last_dt,
+                                last_rules=run_summary.last_rules,
+                                error_message="; ".join(run_errors) if run_errors else None,
+                            )
+
+                            task_logger.info(
+                                "股票处理完成",
+                                {
+                                    "code": code,
+                                    "name": stock_name,
+                                    "processed_bars": run_summary.processed_bars,
+                                    "signal_count": run_summary.signal_count,
+                                    "last_dt": run_summary.last_dt.isoformat() if run_summary.last_dt else None,
+                                },
+                            )
+                        except Exception as stock_exc:
+                            summary["stock_errors"] += 1
+                            err_text = f"{type(stock_exc).__name__}: {stock_exc}"
+                            self.state_db.upsert_stock_state(
+                                task_id=task_id,
+                                code=code,
+                                name=stock_name,
+                                status="failed",
+                                processed_bars=0,
+                                signal_count=0,
+                                last_dt=None,
+                                last_rules=None,
+                                error_message=err_text,
+                            )
+                            task_logger.error(
+                                "股票处理失败",
+                                {
+                                    "code": code,
+                                    "name": stock_name,
+                                    "error": err_text,
+                                    "traceback": traceback.format_exc(limit=4),
+                                },
+                            )
+
+                        processed_codes.add(code)
+                        processed_count += 1
+                        summary["processed_codes"] = processed_count
+                        summary["signal_codes"] = len(signal_code_set)
+                        self.state_db.update_task_fields(
+                            task_id,
+                            processed_stocks=processed_count,
+                            progress=round(processed_count * 100.0 / len(codes), 4),
+                            summary_json=json.dumps(summary, ensure_ascii=False, default=str),
+                        )
 
             final_status = (self.state_db.get_task(task_id) or {}).get("status")
             if final_status in {"stopping", "stopped"}:

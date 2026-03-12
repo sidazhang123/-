@@ -213,6 +213,81 @@ class TestStateDBLogCursorAndRetention(unittest.TestCase):
         self.assertEqual(len(all_logs), 2)
         self.assertEqual([item["message"] for item in all_logs], ["info-log", "debug-log"])
 
+    def test_task_recovery_snapshot_returns_processed_and_signal_codes(self) -> None:
+        """
+        输入：
+        1. 无显式输入参数。
+        输出：
+        1. 无返回值。
+        用途：
+        1. 验证单次恢复快照查询同时返回已处理股票集合与已有信号股票集合。
+        边界条件：
+        1. 仅 completed/failed 状态应计入 processed 集合。
+        """
+
+        task_id = "task-recovery-snapshot-case"
+        self._create_task(task_id)
+        self.state_db.upsert_stock_state(
+            task_id=task_id,
+            code="000001",
+            name="平安银行",
+            status="completed",
+            processed_bars=100,
+            signal_count=1,
+            last_dt=datetime(2026, 2, 17, 15, 0, 0),
+            last_rules={"ok": True},
+            error_message=None,
+        )
+        self.state_db.upsert_stock_state(
+            task_id=task_id,
+            code="000002",
+            name="万科A",
+            status="failed",
+            processed_bars=0,
+            signal_count=0,
+            last_dt=None,
+            last_rules=None,
+            error_message="boom",
+        )
+        self.state_db.upsert_stock_state(
+            task_id=task_id,
+            code="000004",
+            name="国华网安",
+            status="running",
+            processed_bars=10,
+            signal_count=0,
+            last_dt=None,
+            last_rules=None,
+            error_message=None,
+        )
+        self.state_db.add_result(
+            task_id=task_id,
+            code="000001",
+            name="平安银行",
+            signal_dt=datetime(2026, 2, 17, 15, 0, 0),
+            clock_tf="d",
+            strategy_group_id="strategy_group_test",
+            strategy_name="cursor-test",
+            signal_label="hit",
+            payload={"idx": 1},
+        )
+        self.state_db.add_result(
+            task_id=task_id,
+            code="000003",
+            name="PT测试",
+            signal_dt=datetime(2026, 2, 17, 15, 0, 0),
+            clock_tf="d",
+            strategy_group_id="strategy_group_test",
+            strategy_name="cursor-test",
+            signal_label="hit",
+            payload={"idx": 2},
+        )
+
+        processed_codes, signal_code_set = self.state_db.get_task_recovery_snapshot(task_id)
+
+        self.assertEqual(processed_codes, {"000001", "000002"})
+        self.assertEqual(signal_code_set, {"000001", "000003"})
+
     def test_task_log_retention_respects_per_task_limit(self) -> None:
         """
         输入：
