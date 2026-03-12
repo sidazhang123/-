@@ -1,0 +1,59 @@
+﻿{
+  "id": "bigbro_buy",
+  "name": "大哥买点 v1",
+  "description": "仅日线：最近10日内存在连续4日以上窗口满足阳线占比与实体涨跌幅约束",
+  "module": "strategies.groups.bigbro_buy",
+  "engine": "specialized",
+  "execution": {
+    "requires_time_window": true,
+    "supports_intra_task_parallel": false,
+    "cache_scope": "none",
+    "required_timeframes": [
+      "d"
+    ],
+    "specialized_entry": "strategies.groups.bigbro_buy.engine:run_bigbro_buy_specialized"
+  },
+  "default_params": {
+    "d": {
+      "enabled": true,
+      "lookback_days": 10,
+      "min_streak_days": 4,
+      "bull_ratio": 0.8,
+      "max_body_drop_pct": 0.01,
+      "max_body_rise_pct": 0.025,
+      "last_bar_only": true
+    },
+    "combo": {
+      "emit_signal": true
+    },
+    "execution": {
+      "fallback_to_backtrader": false
+    }
+  },
+  "param_help": {
+    "_overview": [
+      "仅使用 d 周期数据，不依赖 w/60/30/15。",
+      "在最近 lookback_days 个交易日内，枚举连续 N(>=min_streak_days) 窗口。",
+      "窗口需满足：阳线数>=int(N*bull_ratio)，max((close-open)/open)<max_body_rise_pct，min((close-open)/open)>-max_body_drop_pct。",
+      "last_bar_only=true 时仅在任务区间最后一个交易日判定，每股最多输出1条信号。"
+    ],
+    "d": {
+      "_comment": "日线规则参数。",
+      "enabled": "是否启用日线规则。",
+      "lookback_days": "回看交易日数量。",
+      "min_streak_days": "连续窗口最小长度。",
+      "bull_ratio": "阳线占比阈值。",
+      "max_body_drop_pct": "窗口内允许的最大实体日跌幅（严格）。",
+      "max_body_rise_pct": "窗口内允许的最大实体日涨幅（严格）。",
+      "last_bar_only": "是否仅在最后一根日线判定。"
+    },
+    "combo": {
+      "_comment": "组合层参数。",
+      "emit_signal": "是否允许组合层输出信号。"
+    },
+    "execution": {
+      "_comment": "执行层参数。",
+      "fallback_to_backtrader": "specialized 执行失败时是否降级到 backtrader。"
+    }
+  }
+}

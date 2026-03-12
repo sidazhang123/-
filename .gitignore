@@ -1,0 +1,10 @@
+﻿__pycache__/
+*.pyc
+logs/*.log
+logs/*.log.*
+sample_quant.duckdb
+screening_state.duckdb
+screening_state.duckdb.wal
+screening_state.duckdb.tmp/
+*.duckdb.tmp/
+cache/strategy_features/

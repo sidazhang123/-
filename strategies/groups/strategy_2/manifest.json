@@ -1,0 +1,56 @@
+{
+  "id": "strategy_2",
+  "name": "策略2（specialized 模板）",
+  "description": "specialized engine 策略模板，复制此目录后按 TODO 注释填入逻辑即可接入",
+  "module": "strategies.groups.strategy_2",
+  "engine": "specialized",
+  "execution": {
+    "requires_time_window": true,
+    "supports_intra_task_parallel": false,
+    "cache_scope": "none",
+    "required_timeframes": ["d"],
+    "specialized_entry": "strategies.groups.strategy_2.engine:run_strategy_2_specialized"
+  },
+  "default_params": {
+    "daily": {
+      "example_param": 10
+    },
+    "universe_filters": {
+      "concepts": {
+        "enabled": false,
+        "concept_terms": [],
+        "reason_terms": []
+      }
+    },
+    "execution": {
+      "fallback_to_backtrader": false
+    }
+  },
+  "param_help": {
+    "_overview": [
+      "这是本仓库创建新策略时唯一推荐复制的 specialized 模板。后续 AI 新建策略时应优先复制本目录，而不是从其他业务策略目录起步。",
+      "复制后必须先修改 manifest.json 的 id、name、description、module、execution.required_timeframes、execution.specialized_entry，再去 engine.py 填写实际扫描逻辑。",
+      "engine.py 是主逻辑文件；strategy.py 在 specialized 策略里通常只保留 backtrader 协议占位和降级兜底，不应被当成主执行入口。",
+      "信号 payload 中的 chart_interval_start_ts / chart_interval_end_ts 必须表示单次信号的实际展示窗口，建议同步填写 window_start_ts / window_end_ts，禁止写成全任务跨度或多段历史拼接后的总跨度。",
+      "如需概念预筛选，统一写在 default_params.universe_filters.concepts 下，并固定使用 concept_terms / reason_terms；实际过滤由 TaskManager 在进入 engine 前执行，engine 不要重复做同一轮裁剪。"
+    ],
+    "daily": {
+      "_comment": "示例日线参数组。复制模板后应把这里替换成与你策略真正相关的参数，并保持 default_params 与 param_help 一一对应。",
+      "example_param": "示例参数。后续 AI 应将其替换为真实策略参数，并在 engine.py 的参数规范化函数里同步读取与校验。"
+    },
+    "universe_filters": {
+      "_comment": "框架保留命名空间：股票池预筛选。新策略如需概念裁剪，只能在这个命名空间下声明，不要自造顶层 concepts 字段。",
+      "concepts": {
+        "_comment": "概念预筛选由 TaskManager 在进入 engine 前先执行。engine 只接收过滤后的 codes，不要重复实现同一套裁剪。",
+        "enabled": "是否启用概念预筛选。false 时忽略 concept_terms / reason_terms。",
+        "concept_terms": "概念名称关键字列表，语义为 AND，匹配 stock_concepts.board_name。新策略统一使用这个字段，不要再写 names / concept_names 等历史别名。",
+        "reason_terms": "选股理由关键字列表，语义为 OR，匹配 stock_concepts.selected_reason。新策略统一使用这个字段，不要再写 keywords / reason_keywords 等历史别名。"
+      }
+    },
+    "execution": {
+      "_comment": "执行层参数，不直接定义买卖规则，但会影响运行路径和结果稳定性。",
+      "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader 执行。新策略默认建议保持 false，仅在明确维护回退逻辑时再开启。"
+    }
+  }
+}
+

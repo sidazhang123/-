@@ -1,0 +1,44 @@
+{
+  "id": "xianren_zhilu_v1",
+  "name": "仙人指路 v1",
+  "description": "K线形态：上影线 + 放量 + 前n天股价下降",
+  "module": "strategies.groups.xianren_zhilu_v1",
+  "engine": "specialized",
+  "execution": {
+    "requires_time_window": true,
+    "supports_intra_task_parallel": false,
+    "cache_scope": "none",
+    "required_timeframes": ["d"],
+    "specialized_entry": "strategies.groups.xianren_zhilu_v1.engine:run_xianren_zhilu_v1_specialized"
+  },
+  "default_params": {
+    "daily": {
+      "shadow_ratio": 0.6,
+      "volume_multiplier": 1.3,
+      "lookback_days": 5,
+      "price_decline_ratio": 1.2
+    },
+    "execution": {
+      "fallback_to_backtrader": false
+    }
+  },
+  "param_help": {
+    "_overview": [
+      "仙人指路形态策略：",
+      "1. 最新日线收上影线：close > open 且 (high - close) / (high - open) > 3/5",
+      "2. 指路当日放量：该日成交量 > 之前3天平均成交量 * 1.3",
+      "3. 前三天股价下降：5天前的MA3 > 当日MA3 * 1.2"
+    ],
+    "daily": {
+      "_comment": "日线形态参数",
+      "shadow_ratio": "上影线占比阈值，默认 0.6 (即3/5)",
+      "volume_multiplier": "放量倍数，默认 1.3",
+      "lookback_days": "前N天对比MA3，默认 5",
+      "price_decline_ratio": "MA3下降比例阈值，默认 1.2"
+    },
+    "execution": {
+      "_comment": "执行层参数",
+      "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader 执行"
+    }
+  }
+}

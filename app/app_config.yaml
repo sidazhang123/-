@@ -1,0 +1,267 @@
+# ---------------------------------------------------------------------------
+# 全局配置文件（app/app_config.yaml）
+# ---------------------------------------------------------------------------
+# 基本写法说明：
+# 1) 使用空格缩进（建议 2 空格），不要使用 Tab。
+# 2) 布尔值写法：true / false（小写）。
+# 3) 路径写法：
+#    - 绝对路径：按系统路径写法填写（例如 D:\quant.duckdb）。
+#    - 相对路径：相对于项目根目录（不是 app 目录）解析。
+# 4) 列表写法：
+#    key:
+#      - "item1"
+#      - "item2"
+# 5) 映射写法：
+#    key:
+#      sub_key: "value"
+
+paths:
+  # 源行情 DuckDB 路径。
+  # 写法：绝对路径或相对项目根目录路径。
+  source_db: 'D:\quant.duckdb'
+
+  # 状态库路径（任务、日志、结果持久化）。
+  # 写法：绝对路径或相对项目根目录路径。
+  state_db: "screening_state.duckdb"
+
+  # 应用日志目录。
+  # LOG_FILE 固定派生为 {log_dir}/app.log。
+  log_dir: "logs"
+
+  # 前端静态资源目录。
+  static_dir: "app/static"
+
+  # 策略目录根路径。
+  # STRATEGY_GROUPS_DIR 固定派生为 {strategies_dir}/groups。
+  strategies_dir: "strategies"
+
+cache:
+  # 策略缓存目录根路径。
+  root_dir: "cache/strategy_features"
+
+  # 缓存容量上限（字节）。
+  # 20 * 1024 * 1024 * 1024 = 20GB
+  max_bytes: 21474836480
+
+specialized_engine:
+  # 专用引擎并发槽位（任务级互斥量）。
+  # 建议 >= 1。
+  mutex: 1
+
+  # 专用引擎并行抓取进程数上限（用于 zsdtdx 并行抓取器 worker 数）。
+  # 建议 >= 1。
+  max_workers: 8
+
+  # 专用引擎版本标识（用于日志与追踪）。
+  version: "burst_v1.0"
+
+  # specialized 执行失败时是否允许降级到 backtrader。
+  fallback_to_backtrader: true
+
+timeframes:
+  # 筛选执行顺序：从大周期到小周期。
+  # 要求：元素必须出现在 to_table 映射中，且不能重复。
+  order:
+    - "w"
+    - "d"
+    - "60"
+    - "30"
+    - "15"
+
+  # 周期 -> 源库表名映射。
+  # 要求：至少包含 15/30/60/d/w 五个键。
+  to_table:
+    "15": "klines_15"
+    "30": "klines_30"
+    "60": "klines_60"
+    "d": "klines_d"
+    "w": "klines_w"
+
+maintenance:
+  # 源库缺历史时的默认起始日期（YYYY-MM-DD）。
+  source_default_start_date: "2018-12-01"
+
+  # 队列消费轮询超时（秒）。
+  # 约束：>= 0.2
+  queue_poll_timeout_seconds: 1.0
+
+  # 单次批量落库触发阈值（按行）。
+  # 约束：>= 200
+  write_flush_rows: 5000
+
+  # 失败重试总轮次（含首轮）。
+  # 当前需求固定 2，可按配置调整。
+  # 约束：>= 1
+  retry_rounds: 2
+
+  # 停止请求的协作取消等待秒数；超时后触发并行进程强制重建。
+  # 约束：>= 0
+  stop_soft_timeout_seconds: 10
+
+  # 强制重建并行进程后，等待预热完成的超时秒数。
+  # 约束：>= 1
+  stop_force_rewarm_timeout_seconds: 60
+
+  # 合法股票前缀列表。
+  # 说明：仅用于迁移脚本/兼容工具，不影响维护流程的代码归一规则。
+  allowed_stock_prefixes:
+    - "sh."
+    - "sz."
+    - "bj."
+    - "hk."
+
+  debug:
+    # 最新数据更新模式 debug 开关。
+    latest_update: true
+    # 历史数据维护模式 debug 开关。
+    historical_data: true
+
+parallel_log:
+  # 是否启用并行日志精简模式。
+  # true: 只保留任务计数与任务样本；false: 输出全量任务明细。
+  compact_enabled: true
+
+  # 并行日志任务样本条数。
+  # 约束：>= 1
+  sample_size: 8
+
+  # 是否在日志中附带全量 tasks（仅用于 debug，生产建议关闭）。
+  include_full_tasks_debug: false
+
+maintenance_log:
+  # 是否对 app.log 启用维护日志精简策略。
+  # true: 按策略过滤/裁剪；false: 保持原样输出。
+  app_compact_enabled: true
+
+  # 是否在 app.log 展示“步骤心跳”。
+  # false 时仅落 maintenance_logs(debug)。
+  app_show_step_heartbeat: false
+
+  # 是否把完整 detail 额外写入 maintenance_logs(debug)。
+  db_debug_detail_enabled: true
+
+  # app.log 输出策略。
+  # progress_stage_warning: 保留阶段摘要、进度与告警；抑制高频并行明细。
+  app_policy: "progress_stage_warning"
+
+concept:
+  # 东财概念请求超时（秒）。
+  # 约束：>= 0.1
+  request_timeout_seconds: 10.0
+
+  # 并发抓取股票概念的线程数。
+  # 约束：>= 1
+  max_workers: 5
+
+  # 单只股票概念请求失败后的额外重试次数。
+  # 0 表示只请求一次。
+  # 约束：>= 0
+  retry_count: 1
+
+  # 需要忽略的板块名称。
+  exclude_board_names:
+    - "融资融券"
+    - "深股通"
+    - "央国企改革"
+    - "沪股通"
+    - "预盈预增"
+    - "创业板综"
+    - "富时罗素"
+    - "预亏预减"
+    - "专精特新"
+    - "标准普尔"
+    - "机构重仓"
+    - "MSCI中国"
+    - "深成500"
+    - "中证500"
+    - "转债标的"
+    - "微盘股"
+    - "上证380"
+    - "HS300_"
+    - "QFII重仓"
+    - "证金持股"
+    - "参股银行"
+    - "股权激励"
+    - "养老金"
+    - "上证180_"
+    - "贬值受益"
+    - "ST股"
+    - "AH股"
+    - "PPP模式"
+    - "参股券商"
+    - "参股新三板"
+    - "深证100R"
+    - "创业成份"
+    - "百元股"
+    - "参股保险"
+    - "稀缺资源"
+    - "昨日涨停_含一字"
+    - "昨日涨停"
+    - "基金重仓"
+    - "AB股"
+    - "IPO受益"
+    - "央视50_"
+    - "上证50_"
+    - "参股期货"
+    - "科创板做市股"
+    - "银行"
+    - "茅指数"
+    - "股权转让"
+    - "昨日触板"
+    - "广电"
+    - "宁组合"
+    - "综合行业"
+    - "彩票概念"
+    - "社保重仓"
+    - "昨日连板_含一字"
+    - "租售同权"
+    - "举牌"
+    - "科创板做市商"
+    - "退税商店"
+    - "昨日连板"
+    - "赛马概念"
+
+log_keep:
+  # 单个筛选任务保留的 task_logs 最大条数。
+  # 超过上限后自动清理最旧日志。
+  # 约束：>= 1
+  task_per_task: 2000
+
+  # task_logs 超限检查节流批次。
+  # 说明：未超限阶段优先使用内存计数减少重复检查；超限后仍立即裁剪。
+  # 约束：>= 1
+  task_trim_check_interval: 64
+
+  # 维护日志保留最近 N 个任务的全量日志（不按单任务条数截断）。
+  # 约束：>= 1
+  maintenance_jobs: 2
+
+  # maintenance_logs 整任务裁剪检查批次。
+  # 约束：>= 1
+  maintenance_trim_check_interval: 16
+
+  # 概念更新日志保留最近 N 个任务的全量日志。
+  # 约束：>= 1
+  concept_jobs: 4
+
+  # concept_logs 整任务裁剪检查批次。
+  # 约束：>= 1
+  concept_trim_check_interval: 16
+
+screening:
+  # processed_stocks、progress 与 summary_json 的节流写入股票步长。
+  # 约束：>= 1
+  progress_flush_stocks: 10
+
+  # 任务进度节流写入的最大等待时间（秒）。
+  # 约束：>= 0.1
+  progress_flush_seconds: 1.0
+
+app:
+  # 服务启动时是否预热 zsdtdx 并行抓取器进程池。
+  # true: 启动阶段执行预热；false: 跳过预热，首次真实抓取时再按需拉起。
+  startup_prewarm_parallel_fetcher_enabled: false
+
+  # 应用优雅停机等待时间（秒）。
+  # 约束：>= 1
+  shutdown_grace_seconds: 15

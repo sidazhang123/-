@@ -1,0 +1,223 @@
+# ---------------------------------------------------------------------------
+# zsdtdx 封装配置（YAML 支持注释，注释使用 "#"）
+# ---------------------------------------------------------------------------
+# 基本书写格式
+# 1) 缩进必须用空格（建议 2 空格），不要用 Tab。
+# 2) 布尔值用小写 true/false。
+# 3) 列表写法：
+#    key:
+#      - "v1"
+#      - "v2"
+# 4) 字符串中包含 ":" 等特殊字符时建议加双引号。
+
+client:
+  # with get_client(...) 进入时是否预连接标准/扩展连接池。
+  # 取值: true/false
+  # 影响: true 启动更快暴露连接问题；false 首次调用接口时再连接。
+  preconnect_on_enter: true
+
+hosts:
+  # 标准行情 IP 池（A股主站）。
+  # 格式: "ip:port" 字符串列表
+  standard:
+    - "120.76.1.198:7709"
+    - "123.125.108.101:7709"
+    - "114.141.177.118:7709"
+    - "114.141.177.40:7709"
+    - "27.151.2.113:7709"
+    - "27.151.2.38:7709"
+    - "202.100.166.12:7709"
+    - "182.118.8.9:7709"
+    - "203.231.201.85:7709"
+    - "183.201.231.85:7709"
+    - "120.76.4.28:7719"
+    - "1.202.143.37:7709"
+    - "111.203.134.118:7709"
+    - "117.133.128.226:7709"
+  # 扩展行情 IP 池（港股/期货/北京部分路由）。
+  # 格式: "ip:port" 字符串列表
+  extended:
+    - "47.112.95.207:7720"
+    - "118.31.28.30:7730"
+
+pool:
+  # 连接超时（秒）。
+  # 取值: 正浮点数
+  # 影响: 值越小故障切换越快，但弱网下误判会增加。
+  connect_timeout: 1.5
+  # 封装层单次调用总重试预算（含同连接重试/同host重连/轮换IP）。
+  # 取值: 正整数，建议 >= 1
+  max_retry: 3
+  # 同一连接上的快速重试次数（不重连）。
+  # 取值: 非负整数
+  same_connection_retry_times: 2
+  # 同一连接快速重试间隔（毫秒）。
+  # 取值: 非负整数
+  same_connection_retry_interval_ms: 800
+  # 同一 host 重连尝试次数（disconnect -> connect 同 host）。
+  # 取值: 非负整数
+  same_host_reconnect_times: 3
+  # 同一 host 重连间隔（毫秒）。
+  # 取值: 非负整数
+  same_host_reconnect_interval_ms: 50
+  # 是否开启底层心跳线程。
+  # 取值: true/false
+  # 影响: true 可降低长时间空闲断连概率。
+  heartbeat: true
+
+parallel:
+  # 并行进程数倍率：推荐进程数 = max(2, int(物理核心数 * 该倍率))。
+  # 取值: 正浮点数（建议 0.5~3.0）
+  # 影响: 倍率越大并发越高，吞吐可能提升，但 CPU/内存占用也会上升。
+  process_count_core_multiplier: 1.5
+  # 单次并行抓取的总超时（秒）。
+  # 取值: 正浮点数
+  # 影响: 超时后会回收未完成 future，并按策略触发强制回收与串行补拉。
+  parallel_total_timeout_seconds: 300
+  # 单个 future.result 的超时（秒）。
+  # 取值: 正浮点数
+  # 影响: 防止 worker 返回阶段异常阻塞。
+  parallel_result_timeout_seconds: 600
+  # 总超时后是否触发并行进程强制回收。
+  # 取值: true/false
+  force_recycle_on_timeout: true
+  # 总超时后是否对未完成任务回退串行补拉。
+  # 取值: true/false
+  timeout_fallback_to_serial: true
+  # chunk 级缓存启用阈值（以 get_stock_kline(task) 任务链路计）。
+  # 取值: 正整数
+  # 影响: 当 code+freq 的 chunk 任务数达到阈值时启用轻量缓存。
+  task_chunk_cache_min_tasks: 2
+  # worker 进程内 chunk 级 future 并发数。
+  # 取值: 正整数
+  # 影响: 每个进程一次最多并发执行的 chunk 数。
+  task_chunk_inproc_future_workers: 3
+  # 父进程提交 chunk 批次的在飞窗口倍率。
+  # 取值: 正整数
+  # 影响: 在飞 future 上限 = 进程数 × 该倍率。
+  task_chunk_max_inflight_multiplier: 2
+  # chunk 命中“连接不可用”错误时，是否在 worker 当前线程重建标准连接后重试。
+  # 取值: true/false
+  # 影响: true 时可降低长任务尾部因连接失效导致的批量失败。
+  chunk_reconnect_on_unavailable: true
+  # chunk 命中“连接不可用”后，线程级重建连接的最大重试次数。
+  # 取值: 非负整数
+  # 影响: 每个 chunk 最多额外重试 N 次，避免无限重试拖慢整体吞吐。
+  chunk_reconnect_max_attempts: 1
+  # async 调用时是否自动预热进程池与 worker 常驻连接。
+  # 取值: true/false
+  # 影响: true 时 async 首次调用会自动触发 prewarm，降低冷启动抖动。
+  auto_prewarm_on_async: true
+  # 自动预热时是否要求所有 worker 都完成预热。
+  # 取值: true/false
+  # 影响: true 时只要有 worker 预热不足会直接失败并抛错。
+  auto_prewarm_require_all_workers: true
+  # 自动预热总超时（秒）。
+  # 取值: 正浮点数
+  # 影响: 控制 async 自动预热最多等待时长。
+  auto_prewarm_timeout_seconds: 60
+  # 自动预热最大轮次。
+  # 取值: 正整数
+  # 影响: 每轮会向进程池提交探针任务以拉齐 worker 预热状态。
+  auto_prewarm_max_rounds: 3
+  # async 自动预热时是否让各 worker 尽量分散连接到不同标准行情有效 IP。
+  # 取值: true/false
+  # 影响: true 时会先探测标准行情有效 IP，再按 worker 轮询分配，降低单 IP 集中压力。
+  auto_prewarm_spread_standard_hosts: false
+
+pagination:
+  # 标准行情 get_security_list 单页数量。
+  # 取值: 正整数
+  standard_security_list_page_size: 800
+  # 扩展行情 get_instrument_info 单页数量。
+  # 取值: 正整数
+  extended_instrument_info_page_size: 800
+  # 标准行情 K线单页数量（get_security_bars）。
+  # 取值: 正整数，常用 800
+  standard_kline_page_size: 800
+  # 扩展行情 K线单页数量（get_instrument_bars）。
+  # 取值: 正整数，常用 700
+  extended_kline_page_size: 700
+  # 公司信息正文分块读取长度。
+  # 取值: 正整数
+  company_info_chunk_size: 30000
+  # K线最大分页次数上限，防止异常场景下无限循环。
+  # 取值: 正整数
+  max_kline_pages: 400
+
+market_rules:
+  # 北京股票代码前缀集合（扩展市场 market=44 下匹配）。
+  include_beijing_prefixes:
+    - "92"
+  # 识别港股市场使用的扩展市场名称集合。
+  include_hk_market_names:
+    - "港股通"
+  # 深圳 A 股前缀集合（标准市场）。
+  stock_prefix_sz:
+    - "000"
+    - "001"
+    - "002"
+    - "003"
+    - "300"
+    - "301"
+    - "302"
+  # 上海 A 股前缀集合（标准市场）。
+  stock_prefix_sh:
+    - "600"
+    - "601"
+    - "603"
+    - "605"
+    - "688"
+    - "689"
+  # 纳入“商品期货”集合的扩展市场名称。
+  future_market_names:
+    - "郑州商品"
+    - "大连商品"
+    - "上海期货"
+    - "广州期货"
+
+stock_scope:
+  # 当股票接口不传 codes（即 codes=None）时，默认抓取范围。
+  # 作用对象: get_stock_code_name / get_stock_latest_price / get_stock_kline
+  defaults_when_codes_none:
+    # 取值支持:
+    # - szsh: 标准市场（深圳+上海）
+    # - bj:   北京股票（扩展 market=44 且命中北京前缀）
+    # - hk:   港股（扩展市场名命中 include_hk_market_names）
+    #
+    # 推荐写法（列表）:
+    # get_stock_kline:
+    #   - "szsh"
+    #   - "hk"
+    #
+    # 等价写法（字符串）:
+    # get_stock_kline: "szsh+hk"
+    # get_stock_kline: "szsh, hk"
+    #
+    # 注意:
+    # 1) 大小写不敏感。
+    # 2) 非法值会被忽略；若全非法会回退为 szsh。
+    # 3) 显式传入 codes 时，不受这里配置影响。
+    get_stock_code_name:
+      - "szsh"
+    get_stock_latest_price:
+      - "szsh"
+    get_stock_kline:
+      - "szsh"
+
+output:
+  # 默认返回 DataFrame 还是 list[dict]。
+  # 取值: true/false
+  return_df_default: true
+  # 批量接口默认 batch_size（按“代码数”分批，不是按K线行数）。
+  # 取值: 正整数
+  default_batch_size: 100
+  # 股票实时行情批量查询每次请求代码数。
+  # 取值: 正整数
+  latest_quote_batch_size: 80
+  # 是否过滤停牌/占位K线。
+  # 取值: true/false
+  filter_suspended_placeholder_bar: true
+  # 占位K线成交量/成交额“极小值”阈值。
+  # 取值: 非负浮点数（科学计数法可用）
+  suspended_placeholder_eps: 1.0e-20

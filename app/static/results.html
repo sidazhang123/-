@@ -1,0 +1,124 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>筛选结果 - 量价筛选系统</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260311-compact-button-groups" />
+  <script src="/static/vendor/echarts/echarts.min.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- ── Top Navigation ── -->
+    <nav class="topnav">
+      <div class="topnav-inner">
+        <a href="/" class="topnav-brand">
+          <div class="brand-icon">量</div>
+          <span>量价筛选</span>
+        </a>
+        <ul class="topnav-links">
+          <li><a href="/"><i data-lucide="activity" class="nav-icon"></i><span>任务监控</span></a></li>
+          <li><a href="/maintenance"><i data-lucide="database" class="nav-icon"></i><span>数据维护</span></a></li>
+          <li><a href="/results" class="active"><i data-lucide="bar-chart-3" class="nav-icon"></i><span>筛选结果</span></a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <!-- ── Mobile bottom nav ── -->
+    <nav class="mobile-nav">
+      <a href="/"><i data-lucide="activity" class="nav-icon"></i>监控</a>
+      <a href="/maintenance"><i data-lucide="database" class="nav-icon"></i>维护</a>
+      <a href="/results" class="active"><i data-lucide="bar-chart-3" class="nav-icon"></i>结果</a>
+    </nav>
+
+    <!-- ── Main ── -->
+    <div class="main-content">
+      <div class="page-header">
+        <h1>筛选结果</h1>
+        <p>查看命中股票与 K 线图表。</p>
+      </div>
+    <section class="panel">
+      <h2>任务选择</h2>
+      <div class="result-toolbar">
+        <label class="field-grow">
+          历史任务
+          <select id="taskSelect"></select>
+        </label>
+        <span id="resultsStreamState" class="stream-state is-idle">SSE: 未连接</span>
+        <div class="button-cluster">
+          <button id="refreshTasksBtn">刷新任务列表</button>
+        </div>
+      </div>
+      <div id="resultMeta" class="hint">-</div>
+      <div id="resultStrategyDesc" class="hint">-</div>
+    </section>
+
+    <section class="panel result-layout">
+      <div class="result-list-wrap">
+        <h2>命中股票列表（去重）</h2>
+        <div class="table-wrap large">
+          <table id="resultStocksTable" class="sticky-header">
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>命中次数</th>
+                <th>首次触发</th>
+                <th>最近触发</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="result-chart-wrap">
+        <h2 id="chartTitle">K线图</h2>
+        <div id="chartStage" class="chart-stage">
+          <div class="chart-toolbar">
+            <div class="tf-block">
+              <div class="tf-label">展示周期</div>
+              <div id="chartTfButtons" class="tf-button-row">
+                <button type="button" class="tf-btn" data-chart-tf="15">15分钟</button>
+                <button type="button" class="tf-btn" data-chart-tf="30">30分钟</button>
+                <button type="button" class="tf-btn" data-chart-tf="60">60分钟</button>
+                <button type="button" class="tf-btn active" data-chart-tf="d">日线</button>
+                <button type="button" class="tf-btn" data-chart-tf="w">周线</button>
+              </div>
+            </div>
+            <div class="chart-tools button-cluster">
+              <button id="toggleZoomLockBtn" class="chart-tool-btn chart-lock-btn" type="button" title="锁定当前周期显示根数">
+                <span class="chart-tool-icon" aria-hidden="true">
+                  <svg class="lock-icon lock-icon-locked" viewBox="0 0 24 24" focusable="false">
+                    <path d="M8 10V7a4 4 0 1 1 8 0v3" />
+                    <rect x="5" y="10" width="14" height="10" rx="2" ry="2" />
+                  </svg>
+                  <svg class="lock-icon lock-icon-unlocked" viewBox="0 0 24 24" focusable="false">
+                    <path d="M16 10V7a4 4 0 0 0-7.2-2.4" />
+                    <rect x="5" y="10" width="14" height="10" rx="2" ry="2" />
+                  </svg>
+                </span>
+                <span id="toggleZoomLockLabel">锁定视图</span>
+              </button>
+              <button id="toggleFullscreenBtn" class="chart-tool-btn" type="button" title="全屏查看 K 线图">全屏查看</button>
+              <button id="reloadChartBtn" class="chart-tool-btn" type="button" title="重新加载图表">重新加载图表</button>
+            </div>
+          </div>
+          <div id="chartFullscreenOverlay" class="chart-fullscreen-overlay" aria-hidden="true">
+            <div id="chartFullscreenTitle" class="chart-fullscreen-title">K线图</div>
+            <div class="chart-fullscreen-hint">↑/↓ 切换股票 · 切换周期可用 · Esc 退出全屏</div>
+          </div>
+          <div id="chart" class="chart"></div>
+        </div>
+        <div id="intervalSummary" class="hint"></div>
+      </div>
+    </section>
+    </div><!-- /.main-content -->
+  </div><!-- /.app-shell -->
+
+  <div id="conceptTooltip" class="concept-tooltip" hidden></div>
+
+  <script src="/static/vendor/lucide/lucide.min.js"></script>
+  <script src="/static/results.js?v=20260311-results-tooltip-scroll-2"></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+{
+  "id": "burst_pullback_box_v1",
+  "name": "放量冲高回落箱体 v1",
+  "description": "d/15m 组合：放量长阳后 2-6 日内缩量横盘或略涨",
+  "module": "strategies.groups.burst_pullback_box_v1",
+  "engine": "specialized",
+  "execution": {
+    "requires_time_window": true,
+    "supports_intra_task_parallel": true,
+    "cache_scope": "full_pipeline",
+    "required_timeframes": [
+      "d",
+      "15"
+    ],
+    "specialized_entry": "strategies.groups.burst_pullback_box_v1.engine:run_burst_pullback_box_specialized"
+  },
+  "default_params": {
+    "daily": {
+      "anchor_min_pct": 0.03,
+      "anchor_amplitude_min": 0.04,
+      "lookback_days": 10,
+      "pre_max_volume_ratio": 0.5,
+      "pre_mean_volume_ratio": 0.3,
+      "pre_max_amplitude_ratio": 0.6,
+      "post_days": 5,
+      "post_max_gain_ratio": 2.0,
+      "post_max_volume_ratio": 1.3
+    },
+    "intraday": {
+      "start_offset_days_min": 2,
+      "start_offset_days_max": 6,
+      "bars_min": 5,
+      "bars_max": 10,
+      "volume_span_ratio_max": 0.2,
+      "window_volume_mean_ratio_max": 1.0,
+      "price_span_ratio_max": 0.1,
+      "require_slight_up": true
+    },
+    "execution": {
+      "worker_count": 0,
+      "max_anchor_days_per_code": 0,
+      "fallback_to_backtrader": true
+    }
+  },
+  "param_help": {
+    "_overview": [
+      "示意流程：先在日线找“放量长阳且振幅明显放大”的锚点日，再检查锚点日前10日和后5日的约束，最后只对通过日线约束的股票进入15分钟窗口扫描。",
+      "15分钟部分只使用锚点后第2到第6个交易日作为窗口起点范围，窗口长度在 bars_min~bars_max。窗口同时要满足缩量稳定、价格波动受限、且（可选）低点缓慢抬升。",
+      "所有数值参数都可改；周期固定为 d + 15m。若你做全市场 full，建议先缩小时间窗并设置 max_anchor_days_per_code 做研究态提速。"
+    ],
+    "daily": {
+      "_comment": "日线阶段参数：用于锁定锚点日并过滤其前后结构。",
+      "anchor_min_pct": "锚点日最小涨幅（相对前一日收盘），默认 0.03 表示涨幅必须大于 3%。",
+      "anchor_amplitude_min": "锚点日最小振幅（(high-low)/前收），默认 0.04 表示振幅大于 4%。",
+      "lookback_days": "锚点日前回看天数，默认 10。用于计算前置成交量和振幅约束。",
+      "pre_max_volume_ratio": "前 lookback_days 内单日最大成交量 < 锚点日成交量 * 此系数，默认 0.5。",
+      "pre_mean_volume_ratio": "前 lookback_days 内平均成交量 < 锚点日成交量 * 此系数，默认 0.3。",
+      "pre_max_amplitude_ratio": "前 lookback_days 内最大振幅 < 锚点日振幅 * 此系数，默认 0.6。",
+      "post_days": "锚点日后观察天数，默认 5。用于后置上涨/放量约束。",
+      "post_max_gain_ratio": "锚点后 post_days 内最高涨幅（相对 d+1 开盘） < 锚点日涨幅 * 此系数，默认 2.0。",
+      "post_max_volume_ratio": "锚点后 post_days 内最大日成交量 < 锚点日成交量 * 此系数，默认 1.3。"
+    },
+    "intraday": {
+      "_comment": "15分钟阶段参数：仅对通过日线筛选的锚点继续扫描。",
+      "start_offset_days_min": "窗口起点最早偏移交易日，默认 2，表示从锚点后第2个交易日起可作为窗口起点。",
+      "start_offset_days_max": "窗口起点最晚偏移交易日，默认 6，表示到锚点后第6个交易日仍可作为窗口起点。",
+      "bars_min": "窗口最短K线数，默认 5。",
+      "bars_max": "窗口最长K线数，默认 10。",
+      "volume_span_ratio_max": "窗口内量稳定阈值，公式为 (max_vol-min_vol)/min_vol，默认 < 0.2。",
+      "window_volume_mean_ratio_max": "窗口均量上限系数：窗口均量 < (d+2开盘至窗口结束均量 * 此系数)，默认 1.0。",
+      "price_span_ratio_max": "窗口价格波动上限系数：窗口(high-low)必须小于“锚点开盘到后5日最高涨幅”的此比例，默认 0.1。",
+      "require_slight_up": "是否要求“略涨”形态。true 时强制窗口最后一根 low > 第一根 low。"
+    },
+    "execution": {
+      "_comment": "执行与算力参数：不改变策略逻辑，仅影响速度/资源。",
+      "worker_count": "15分钟并行进程数。0=自动（min(8, cpu-1)），建议先用0。",
+      "max_anchor_days_per_code": "每只股票最多保留多少个日线锚点（按日线强度截断）。0=不截断（无损）。",
+      "fallback_to_backtrader": "专用引擎异常时是否自动降级到 backtrader 路径，true=不中断任务。"
+    }
+  }
+}

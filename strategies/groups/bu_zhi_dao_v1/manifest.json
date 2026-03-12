@@ -1,0 +1,61 @@
+{
+  "id": "bu_zhi_dao_v1",
+  "name": "不知道",
+  "description": "测试",
+  "module": "strategies.groups.bu_zhi_dao_v1",
+  "engine": "specialized",
+  "execution": {
+    "requires_time_window": true,
+    "supports_intra_task_parallel": false,
+    "cache_scope": "none",
+    "required_timeframes": [
+      "d",
+      "15"
+    ],
+    "specialized_entry": "strategies.groups.bu_zhi_dao_v1.engine:run_bu_zhi_dao_v1_specialized"
+  },
+  "default_params": {
+    "daily": {
+      "window_days": 15,
+      "anchor_gain_min_pct": 0.08,
+      "anchor_pre_volume_lookback_days": 10,
+      "anchor_pre_volume_mean_ratio_min": 3.0,
+      "post_check_start_day": 2,
+      "post_check_end_day": 3,
+      "post_price_cap_gain_factor": 0.5,
+      "post_volume_ratio_max": 0.6,
+      "last_day_amplitude_max": 0.02,
+      "last_day_mean_price_ratio_max": 1.2,
+      "last_day_volume_ratio_max": 0.35
+    },
+    "execution": {
+      "fallback_to_backtrader": false
+    }
+  },
+  "param_help": {
+    "_overview": [
+      "策略思路：在15个交易日滑动窗口中，先定位“涨幅明显且放量”的锚点日，再检查锚点后第2-3日是否满足量价回落约束，最后要求窗口最后一天满足低振幅、低量能与15分钟均价约束。",
+      "口径约定：所有百分比参数均使用小数输入，例如2%=0.02，8%=0.08；振幅统一为(当日最高-当日最低)/昨日收盘。",
+      "结果去重：同一股票若多个触发窗口在日期上重叠，只保留最早窗口。"
+    ],
+    "daily": {
+      "_comment": "日线规则参数：用于滑窗、锚点识别、锚点后约束与窗口最后一天约束。",
+      "window_days": "滑动窗口长度（交易日数），默认15。",
+      "anchor_gain_min_pct": "锚点日最低涨幅，公式为(收盘-昨收)/昨收，默认0.08。",
+      "anchor_pre_volume_lookback_days": "计算锚点日前均量的回看天数，默认10。",
+      "anchor_pre_volume_mean_ratio_min": "锚点日成交量相对前N日均量的最小倍数，默认3.0（即300%）。",
+      "post_check_start_day": "锚点后约束起始偏移日，默认2（即锚点后第2日）。",
+      "post_check_end_day": "锚点后约束结束偏移日，默认3（即锚点后第3日）。",
+      "post_price_cap_gain_factor": "锚点后价格上限系数，阈值=锚点前一日收盘*(1+锚点涨幅*该系数)，默认0.5。",
+      "post_volume_ratio_max": "锚点后第2-3日每日成交量上限系数，阈值=锚点日成交量*该系数，默认0.6。",
+      "last_day_amplitude_max": "窗口最后一天振幅上限，振幅公式=(高-低)/昨收，默认0.02。",
+      "last_day_mean_price_ratio_max": "窗口最后一天15分钟OHLC全样本均值相对锚点开盘价的上限系数，默认1.2。",
+      "last_day_volume_ratio_max": "窗口最后一天日线成交量相对锚点成交量的上限系数，默认0.35。"
+    },
+    "execution": {
+      "_comment": "执行参数：仅影响运行流程，不改变策略判定逻辑。",
+      "fallback_to_backtrader": "专用引擎异常时是否自动降级到backtrader，默认false（建议保持false以避免误导结果）。"
+    }
+  }
+}
+

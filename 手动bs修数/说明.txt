@@ -1,0 +1,22 @@
+手动运行run.py用于将可能有问题的历史数据从baostock补全（但大概率是源端就没有数据）
+偶尔手动跑两次就行，直修duckdb，就不整合进应用端了
+
+功能：
+本工程用于检查本地 DuckDB 行情库的数据缺口，并按任务方式调用 BaoStock 补齐缺失数据。
+支持两类任务来源：
+1. make_inconsistent_tasks：生成“缺口/不一致”补数任务。
+2. make_full_tasks：生成“全股票、全周期”的全量补数任务。
+最终由 get_bs_data 读取同目录的 bs_pending_tasks.json 执行抓取，并把结果写回主库。
+
+行为边界：
+1. get_bs_data 不自动生成任务，只消费同目录已有的 bs_pending_tasks.json。
+2. 任务文件中的每条任务必须是 code、freq、start_date、end_date 四元组。
+3. 抓取结果先写入 bs_stage_dbs，再合并回主库，任务只有在 durable 落盘后才会从 JSON 中移除。
+4. JSON、日志、阶段库都固定在模块同级目录，不走其他外部路径约定。
+5. 运行中如果任务文件缺失、为空、格式非法，get_bs_data 会直接报错，不做静默兜底。
+
+什么时候怎么用：
+1. 想修复已有库中的缺口：在 run.py 设置 MAIN_DB_PATH 和 EARLIEST_DATE，使用 make_inconsistent_tasks，再执行 get_bs_data。
+2. 想从最早日期开始全量重建：在 run.py 切换为 make_full_tasks，再执行 get_bs_data。
+3. 如果当前目录已经有 bs_pending_tasks.json，run.py 会直接继续执行剩余任务，不会重复生成任务。
+4. 如果想重新生成任务，需要先手动删除旧的 bs_pending_tasks.json，再运行 run.py。

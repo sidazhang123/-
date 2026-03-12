@@ -1,0 +1,5 @@
+{
+    "chatgpt.openOnStartup": true,
+    "python.defaultInterpreterPath": "C:\\Users\\sida\\AppData\\Local\\Programs\\Python\\Python310\\python.exe",
+    "python.analysis.extraPaths": []
+}
