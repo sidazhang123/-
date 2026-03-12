@@ -105,15 +105,8 @@ _DEFAULT_CONFIG: dict[str, Any] = {
     },
     "log_keep": {
         "task_per_task": 2000,
-        "task_trim_check_interval": 64,
         "maintenance_jobs": 2,
-        "maintenance_trim_check_interval": 16,
         "concept_jobs": 4,
-        "concept_trim_check_interval": 16,
-    },
-    "screening": {
-        "progress_flush_stocks": 10,
-        "progress_flush_seconds": 1.0,
     },
     "app": {
         "startup_prewarm_parallel_fetcher_enabled": True,
@@ -556,41 +549,15 @@ def _build_runtime_settings(raw_config: dict[str, Any]) -> dict[str, Any]:
         "log_keep.task_per_task",
         minimum=1,
     )
-    log_keep_task_trim_check_interval = _expect_int(
-        log_keep_cfg.get("task_trim_check_interval"),
-        "log_keep.task_trim_check_interval",
-        minimum=1,
-    )
     log_keep_maintenance_jobs = _expect_int(
         log_keep_cfg.get("maintenance_jobs"),
         "log_keep.maintenance_jobs",
-        minimum=1,
-    )
-    log_keep_maintenance_trim_check_interval = _expect_int(
-        log_keep_cfg.get("maintenance_trim_check_interval"),
-        "log_keep.maintenance_trim_check_interval",
         minimum=1,
     )
     log_keep_concept_jobs = _expect_int(
         log_keep_cfg.get("concept_jobs"),
         "log_keep.concept_jobs",
         minimum=1,
-    )
-    log_keep_concept_trim_check_interval = _expect_int(
-        log_keep_cfg.get("concept_trim_check_interval"),
-        "log_keep.concept_trim_check_interval",
-        minimum=1,
-    )
-    screening_cfg = _expect_mapping(merged.get("screening"), "screening")
-    screening_progress_flush_stocks = _expect_int(
-        screening_cfg.get("progress_flush_stocks"),
-        "screening.progress_flush_stocks",
-        minimum=1,
-    )
-    screening_progress_flush_seconds = _expect_float(
-        screening_cfg.get("progress_flush_seconds"),
-        "screening.progress_flush_seconds",
-        minimum=0.1,
     )
     app_cfg = _expect_mapping(merged.get("app"), "app")
     app_startup_prewarm_parallel_fetcher_enabled = _expect_bool(
@@ -659,15 +626,9 @@ def _build_runtime_settings(raw_config: dict[str, Any]) -> dict[str, Any]:
         "CONCEPT_RETRY_COUNT": concept_retry_count,
         "CONCEPT_EXCLUDE_BOARD_NAMES": concept_exclude_board_names,
         "LOG_KEEP_TASK_PER_TASK": log_keep_task_per_task,
-        "LOG_KEEP_TASK_TRIM_CHECK_INTERVAL": log_keep_task_trim_check_interval,
         "LOG_KEEP_MAINTENANCE_JOBS": log_keep_maintenance_jobs,
-        "LOG_KEEP_MAINTENANCE_TRIM_CHECK_INTERVAL": log_keep_maintenance_trim_check_interval,
         "LOG_KEEP_CONCEPT_JOBS": log_keep_concept_jobs,
-        "LOG_KEEP_CONCEPT_TRIM_CHECK_INTERVAL": log_keep_concept_trim_check_interval,
-        "SCREENING_PROGRESS_FLUSH_STOCKS": screening_progress_flush_stocks,
-        "SCREENING_PROGRESS_FLUSH_SECONDS": screening_progress_flush_seconds,
         "APP_STARTUP_PREWARM_PARALLEL_FETCHER_ENABLED": app_startup_prewarm_parallel_fetcher_enabled,
-        "APP_SHUTDOWN_GRACE_SECONDS": app_shutdown_grace_seconds,
     }
 
 
@@ -733,10 +694,5 @@ CONCEPT_MAX_WORKERS = _RUNTIME_SETTINGS["CONCEPT_MAX_WORKERS"]
 CONCEPT_RETRY_COUNT = _RUNTIME_SETTINGS["CONCEPT_RETRY_COUNT"]
 CONCEPT_EXCLUDE_BOARD_NAMES = _RUNTIME_SETTINGS["CONCEPT_EXCLUDE_BOARD_NAMES"]
 LOG_KEEP_TASK_PER_TASK = _RUNTIME_SETTINGS["LOG_KEEP_TASK_PER_TASK"]
-LOG_KEEP_TASK_TRIM_CHECK_INTERVAL = _RUNTIME_SETTINGS["LOG_KEEP_TASK_TRIM_CHECK_INTERVAL"]
 LOG_KEEP_MAINTENANCE_JOBS = _RUNTIME_SETTINGS["LOG_KEEP_MAINTENANCE_JOBS"]
-LOG_KEEP_MAINTENANCE_TRIM_CHECK_INTERVAL = _RUNTIME_SETTINGS["LOG_KEEP_MAINTENANCE_TRIM_CHECK_INTERVAL"]
 LOG_KEEP_CONCEPT_JOBS = _RUNTIME_SETTINGS["LOG_KEEP_CONCEPT_JOBS"]
-LOG_KEEP_CONCEPT_TRIM_CHECK_INTERVAL = _RUNTIME_SETTINGS["LOG_KEEP_CONCEPT_TRIM_CHECK_INTERVAL"]
-SCREENING_PROGRESS_FLUSH_STOCKS = _RUNTIME_SETTINGS["SCREENING_PROGRESS_FLUSH_STOCKS"]
-SCREENING_PROGRESS_FLUSH_SECONDS = _RUNTIME_SETTINGS["SCREENING_PROGRESS_FLUSH_SECONDS"]

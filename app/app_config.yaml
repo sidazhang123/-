@@ -227,35 +227,13 @@ log_keep:
   # 约束：>= 1
   task_per_task: 2000
 
-  # task_logs 超限检查节流批次。
-  # 说明：未超限阶段优先使用内存计数减少重复检查；超限后仍立即裁剪。
-  # 约束：>= 1
-  task_trim_check_interval: 64
-
   # 维护日志保留最近 N 个任务的全量日志（不按单任务条数截断）。
   # 约束：>= 1
   maintenance_jobs: 2
 
-  # maintenance_logs 整任务裁剪检查批次。
-  # 约束：>= 1
-  maintenance_trim_check_interval: 16
-
   # 概念更新日志保留最近 N 个任务的全量日志。
   # 约束：>= 1
   concept_jobs: 4
-
-  # concept_logs 整任务裁剪检查批次。
-  # 约束：>= 1
-  concept_trim_check_interval: 16
-
-screening:
-  # processed_stocks、progress 与 summary_json 的节流写入股票步长。
-  # 约束：>= 1
-  progress_flush_stocks: 10
-
-  # 任务进度节流写入的最大等待时间（秒）。
-  # 约束：>= 0.1
-  progress_flush_seconds: 1.0
 
 app:
   # 服务启动时是否预热 zsdtdx 并行抓取器进程池。
