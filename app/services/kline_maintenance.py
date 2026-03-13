@@ -124,10 +124,12 @@ class FetchWriteStats:
 
     total_tasks: int
     success_tasks: int
+    no_data_tasks: int
     failed_tasks: int
     retry_rounds_used: int
     rows_written_by_freq: dict[str, int]
     success_signatures: set[str]
+    no_data_signatures: set[str]
     failed_signatures: set[str]
     failed_errors: dict[str, str]
 
@@ -143,6 +145,7 @@ class MaintenanceRunSummary:
     steps_completed: int
     total_tasks: int
     success_tasks: int
+    no_data_tasks: int
     failed_tasks: int
     retry_rounds_used: int
     rows_written: dict[str, int]
@@ -180,11 +183,17 @@ def _coerce_datetime(value: Any) -> datetime | None:
     return None
 
 
-def _format_datetime_token(value: date | datetime | str, *, date_only: bool = False) -> str:
+def _format_datetime_token(
+    value: date | datetime | str,
+    *,
+    date_only: bool = False,
+    boundary_clock: dt_time | None = None,
+) -> str:
     """
     输入：
     1. value: 原始时间值。
     2. date_only: 是否仅输出日期。
+    3. boundary_clock: 非 date_only 场景下，仅日期输入时补齐的默认时分秒。
     输出：
     1. 规范时间字符串。
     用途：
@@ -204,7 +213,10 @@ def _format_datetime_token(value: date | datetime | str, *, date_only: bool = Fa
             return date.fromisoformat(raw).isoformat()
         dt = _coerce_datetime(raw)
         if dt is None:
-            dt = datetime.combine(date.fromisoformat(raw), dt_time(0, 0, 0))
+            fill_clock = boundary_clock or dt_time(0, 0, 0)
+            dt = datetime.combine(date.fromisoformat(raw), fill_clock)
+        elif boundary_clock is not None and ":" not in raw:
+            dt = datetime.combine(dt.date(), boundary_clock)
         return dt.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
     if isinstance(value, datetime):
@@ -215,7 +227,8 @@ def _format_datetime_token(value: date | datetime | str, *, date_only: bool = Fa
     if isinstance(value, date):
         if date_only:
             return value.isoformat()
-        return datetime.combine(value, dt_time(0, 0, 0)).strftime("%Y-%m-%d %H:%M:%S")
+        fill_clock = boundary_clock or dt_time(0, 0, 0)
+        return datetime.combine(value, fill_clock).strftime("%Y-%m-%d %H:%M:%S")
 
     raise ValueError(f"不支持的任务时间类型: {type(value).__name__}")
 
@@ -463,8 +476,12 @@ class MarketDataMaintenanceService:
         if not normalized_code or freq_token not in KLINE_FREQ_ORDER:
             return None
         try:
-            start_token = _format_datetime_token(start_time, date_only=date_only)
-            end_token = _format_datetime_token(end_time, date_only=date_only)
+            if date_only:
+                start_token = _format_datetime_token(start_time, date_only=True)
+                end_token = _format_datetime_token(end_time, date_only=True)
+            else:
+                start_token = _format_datetime_token(start_time, date_only=False, boundary_clock=dt_time(9, 30, 0))
+                end_token = _format_datetime_token(end_time, date_only=False, boundary_clock=dt_time(16, 0, 0))
         except ValueError:
             return None
         return MaintenanceTask(
@@ -670,7 +687,7 @@ class MarketDataMaintenanceService:
                         freq=freq,
                         start_time=missing_day,
                         end_time=missing_day,
-                        date_only=True,
+                        date_only=False,
                     )
                     if task is not None:
                         tasks.append(task)
@@ -740,7 +757,7 @@ class MarketDataMaintenanceService:
                         freq=freq,
                         start_time=trade_day,
                         end_time=trade_day,
-                        date_only=True,
+                        date_only=False,
                     )
                     if task is not None:
                         tasks.append(task)
@@ -792,7 +809,7 @@ class MarketDataMaintenanceService:
                     freq="w",
                     start_time=start_day,
                     end_time=end_day,
-                    date_only=True,
+                    date_only=False,
                 )
                 if task is not None:
                     tasks.append(task)
@@ -1247,9 +1264,13 @@ class MarketDataMaintenanceService:
         task_map = {task.signature(): task for task in tasks}
         pending_signatures: list[str] = [task.signature() for task in tasks]
         success_signatures: set[str] = set()
+        no_data_signatures: set[str] = set()
         failed_errors: dict[str, str] = {}
         rows_written_by_freq: dict[str, int] = {freq: 0 for freq in KLINE_FREQ_ORDER}
         retry_rounds_used = 0
+        cumulative_no_data_count = 0
+        cumulative_processed = 0
+        original_total = len(tasks)
         preprocessor = self._build_preprocessor_operator()
 
         for round_index in range(_TASK_RETRY_ROUNDS):
@@ -1283,7 +1304,10 @@ class MarketDataMaintenanceService:
 
             buffers: dict[str, list[dict[str, Any]]] = {freq: [] for freq in KLINE_FREQ_ORDER}
             round_failures: set[str] = set()
+            round_error_samples: dict[str, int] = {}
             processed_count = 0
+            no_data_count = 0
+            success_count = 0
             total_count = len(current_tasks)
             pool_broken = False
 
@@ -1320,11 +1344,28 @@ class MarketDataMaintenanceService:
                                 if sign not in task_map:
                                     continue
                                 processed_count += 1
+                                cumulative_processed += 1
 
                                 error_text = str(event.get("error") or "").strip()
                                 if error_text:
-                                    round_failures.add(sign)
-                                    failed_errors[sign] = error_text
+                                    if error_text == "no_data":
+                                        no_data_count += 1
+                                        success_signatures.add(sign)
+                                        no_data_signatures.add(sign)
+                                        round_failures.discard(sign)
+                                    else:
+                                        round_failures.add(sign)
+                                        failed_errors[sign] = error_text
+                                        round_error_samples[error_text] = round_error_samples.get(error_text, 0) + 1
+                                        self.logger.error_file_lazy(
+                                            "拉取任务失败",
+                                            {
+                                                "mode": mode,
+                                                "round": retry_rounds_used,
+                                                "task": sign,
+                                                "error": error_text,
+                                            },
+                                        )
                                 else:
                                     rows = event.get("rows") if isinstance(event.get("rows"), list) else []
                                     round_rows_appended += self._append_event_rows_to_buffers(
@@ -1333,13 +1374,14 @@ class MarketDataMaintenanceService:
                                         buffers=buffers,
                                     )
                                     success_signatures.add(sign)
+                                    success_count += 1
                                     round_failures.discard(sign)
 
                                 need_flush = any(len(buffers[freq]) >= _WRITE_FLUSH_ROWS for freq in KLINE_FREQ_ORDER)
                                 if need_flush:
                                     self._flush_all_buffers(con, buffers, rows_written_by_freq)
 
-                                ratio = float(processed_count) / float(max(1, total_count))
+                                ratio = float(cumulative_processed) / float(max(1, original_total))
                                 progress = progress_start + (progress_end - progress_start) * ratio
                                 self._report_progress(
                                     progress,
@@ -1347,9 +1389,14 @@ class MarketDataMaintenanceService:
                                     detail={
                                         "mode": mode,
                                         "round": retry_rounds_used,
+                                        "max_rounds": _TASK_RETRY_ROUNDS,
                                         "processed": processed_count,
                                         "total": total_count,
+                                        "success": success_count,
+                                        "no_data": no_data_count,
                                         "failed": len(round_failures),
+                                        "rows_appended": round_rows_appended,
+                                        "rows_written": dict(rows_written_by_freq),
                                     },
                                 )
 
@@ -1376,7 +1423,16 @@ class MarketDataMaintenanceService:
                 for sign in current_signatures:
                     if sign not in success_signatures:
                         round_failures.add(sign)
-                        failed_errors.setdefault(sign, "BrokenProcessPool: 子进程异常中断")
+                        error_text = failed_errors.setdefault(sign, "BrokenProcessPool: 子进程异常中断")
+                        self.logger.error_file_lazy(
+                            "拉取任务失败",
+                            {
+                                "mode": mode,
+                                "round": retry_rounds_used,
+                                "task": sign,
+                                "error": error_text,
+                            },
+                        )
                 try:
                     from zsdtdx.parallel_fetcher import force_restart_parallel_fetcher
                     summary = force_restart_parallel_fetcher(
@@ -1403,9 +1459,14 @@ class MarketDataMaintenanceService:
                     "round": retry_rounds_used,
                     "processed": processed_count,
                     "total": total_count,
+                    "success": success_count,
+                    "no_data": no_data_count,
                     "failed": len(pending_signatures),
+                    "rows_appended": round_rows_appended,
+                    "error_samples": dict(list(round_error_samples.items())[:10]) if round_error_samples else None,
                 },
             )
+            cumulative_no_data_count += no_data_count
             self.logger.debug_lazy(
                 "拉取与写入轮次明细",
                 lambda: {
@@ -1437,10 +1498,12 @@ class MarketDataMaintenanceService:
         return FetchWriteStats(
             total_tasks=len(all_signatures),
             success_tasks=success_tasks,
+            no_data_tasks=cumulative_no_data_count,
             failed_tasks=len(final_failed),
             retry_rounds_used=retry_rounds_used,
             rows_written_by_freq=rows_written_by_freq,
             success_signatures=success_signatures,
+            no_data_signatures=no_data_signatures,
             failed_signatures=final_failed,
             failed_errors=failed_errors,
         )
@@ -1523,6 +1586,7 @@ class MarketDataMaintenanceService:
             {
                 "total_tasks": fetch_stats.total_tasks,
                 "success_tasks": fetch_stats.success_tasks,
+                "no_data_tasks": fetch_stats.no_data_tasks,
                 "failed_tasks": fetch_stats.failed_tasks,
                 "retry_rounds_used": fetch_stats.retry_rounds_used,
                 "rows_written": rows_written,
@@ -1548,6 +1612,7 @@ class MarketDataMaintenanceService:
             steps_completed=steps_completed,
             total_tasks=fetch_stats.total_tasks,
             success_tasks=fetch_stats.success_tasks,
+            no_data_tasks=fetch_stats.no_data_tasks,
             failed_tasks=fetch_stats.failed_tasks,
             retry_rounds_used=fetch_stats.retry_rounds_used,
             rows_written=rows_written,
@@ -1666,20 +1731,37 @@ class MarketDataMaintenanceService:
         rows_written = dict(fetch_stats.rows_written_by_freq)
 
         if self.state_db is not None and task_key_by_signature:
+            cleanup_started = time.monotonic()
+            # 1. success（非 no_data）：从 retry 表 DELETE
+            real_success_signs = fetch_stats.success_signatures - fetch_stats.no_data_signatures
             success_task_keys = [
                 task_key_by_signature[sign]
-                for sign in fetch_stats.success_signatures
+                for sign in real_success_signs
                 if sign in task_key_by_signature
             ]
             if success_task_keys:
                 self.state_db.delete_maintenance_retry_tasks(success_task_keys)
+            self._report_progress(96.0, phase="cleanup")
 
-            failed_task_keys = [
+            # 2. no_data：批量设 last_status/last_error，不改 attempt_count（pre-execution 已 +1）
+            no_data_task_keys = [
                 task_key_by_signature[sign]
-                for sign in fetch_stats.failed_signatures
+                for sign in fetch_stats.no_data_signatures
                 if sign in task_key_by_signature
             ]
-            failed_retry_map = self.state_db.get_maintenance_retry_tasks(failed_task_keys) if failed_task_keys else {}
+            if no_data_task_keys:
+                self.state_db.bulk_update_retry_task_status(
+                    no_data_task_keys,
+                    last_status="no_data",
+                    last_error="no_data",
+                    batch_size=50_000,
+                    on_batch=lambda done, total: self._report_progress(
+                        96.0 + 3.0 * float(done) / float(max(1, total)),
+                        phase="cleanup",
+                    ),
+                )
+
+            # 3. failed：per-row 更新（体量极小，不改 attempt_count）
             failed_updates: list[dict[str, Any]] = []
             for sign in fetch_stats.failed_signatures:
                 task_key = task_key_by_signature.get(sign)
@@ -1688,19 +1770,21 @@ class MarketDataMaintenanceService:
                 failed_updates.append(
                     {
                         "task_key": task_key,
-                        "attempt_count": int(failed_retry_map.get(task_key, {}).get("attempt_count") or 0),
                         "last_status": "failed",
                         "last_error": fetch_stats.failed_errors.get(sign, "unknown_error"),
                     }
                 )
             if failed_updates:
                 self.state_db.update_maintenance_retry_tasks(failed_updates)
-            self.logger.debug_lazy(
-                "步骤5-7 retry 回写明细",
-                lambda: {
-                    "success_retry_delete_count": len(success_task_keys),
-                    "failed_retry_update_count": len(failed_updates),
-                    "failed_retry_sample": failed_updates[:10],
+            self._report_progress(99.0, phase="cleanup")
+
+            self.logger.info(
+                "retry 回写完成",
+                {
+                    "success_delete_count": len(success_task_keys),
+                    "no_data_update_count": len(no_data_task_keys),
+                    "failed_update_count": len(failed_updates),
+                    "duration_seconds": round(time.monotonic() - cleanup_started, 3),
                 },
             )
 
@@ -1710,6 +1794,7 @@ class MarketDataMaintenanceService:
             {
                 "total_tasks": fetch_stats.total_tasks,
                 "success_tasks": fetch_stats.success_tasks,
+                "no_data_tasks": fetch_stats.no_data_tasks,
                 "failed_tasks": fetch_stats.failed_tasks,
                 "retry_rounds_used": fetch_stats.retry_rounds_used,
                 "rows_written": rows_written,
@@ -1733,6 +1818,7 @@ class MarketDataMaintenanceService:
             steps_completed=steps_completed,
             total_tasks=fetch_stats.total_tasks,
             success_tasks=fetch_stats.success_tasks,
+            no_data_tasks=fetch_stats.no_data_tasks,
             failed_tasks=fetch_stats.failed_tasks,
             retry_rounds_used=fetch_stats.retry_rounds_used,
             rows_written=rows_written,

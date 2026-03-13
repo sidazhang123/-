@@ -746,6 +746,7 @@ class StateDB:
         1. 减少 historical_backfill 步骤4的逐条 update 开销。
         边界条件：
         1. 非法行会被跳过。
+        2. 未提供 attempt_count 时保留现有值不变。
         """
 
         now = datetime.now()
@@ -756,9 +757,11 @@ class StateDB:
             task_key = str(item.get("task_key") or "").strip()
             if not task_key:
                 continue
+            raw_attempt = item.get("attempt_count")
+            attempt_count = int(raw_attempt) if raw_attempt is not None else None
             deduped_by_task_key[task_key] = (
                 (
-                    int(item.get("attempt_count") or 0),
+                    attempt_count,
                     str(item.get("last_status") or "pending"),
                     item.get("last_error"),
                     now,
@@ -772,16 +775,6 @@ class StateDB:
             return 0
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 状态库写连接。
-            输出：
-            1. 无返回值。
-            用途：
-            1. 通过 unnest 向量化一次性合并批量更新 retry 状态。
-            边界条件：
-            1. 只更新命中的 task_key；不存在记录保持无影响。
-            """
             cols_attempt_count = [r[0] for r in payload]
             cols_last_status = [r[1] for r in payload]
             cols_last_error = [r[2] for r in payload]
@@ -791,7 +784,7 @@ class StateDB:
                 """
                 update maintenance_retry_tasks as target
                 set
-                    attempt_count = src.attempt_count,
+                    attempt_count = coalesce(src.attempt_count, target.attempt_count),
                     last_status = src.last_status,
                     last_error = src.last_error,
                     updated_at = src.updated_at
@@ -817,46 +810,119 @@ class StateDB:
         self._with_write_connection(_op)
         return len(payload)
 
-    def delete_maintenance_retry_tasks(self, task_keys: Iterable[str]) -> int:
+    def delete_maintenance_retry_tasks(
+        self,
+        task_keys: Iterable[str],
+        *,
+        batch_size: int = 50_000,
+    ) -> int:
         """
         输入：
         1. task_keys: 任务键列表。
+        2. batch_size: 每批删除的键数量上限。
         输出：
         1. 删除条数。
         用途：
         1. 历史维护任务成功后清理 retry 记录。
         边界条件：
         1. 空输入返回 0。
+        2. 按批次执行避免单条超大 unnest SQL。
         """
 
         keys = [str(item or "").strip() for item in task_keys if str(item or "").strip()]
         if not keys:
             return 0
 
-        def _op(con: duckdb.DuckDBPyConnection) -> int:
-            count = int(
+        deleted = 0
+        for offset in range(0, len(keys), batch_size):
+            batch = keys[offset : offset + batch_size]
+
+            def _op(con: duckdb.DuckDBPyConnection, _batch: list[str] = batch) -> int:
+                count = int(
+                    con.execute(
+                        """
+                        select count(*)
+                        from maintenance_retry_tasks
+                        where task_key in (select unnest($keys::varchar[]))
+                        """,
+                        {"keys": _batch},
+                    ).fetchone()[0]
+                    or 0
+                )
+                if count <= 0:
+                    return 0
                 con.execute(
                     """
-                    select count(*)
-                    from maintenance_retry_tasks
+                    delete from maintenance_retry_tasks
                     where task_key in (select unnest($keys::varchar[]))
                     """,
-                    {"keys": keys},
-                ).fetchone()[0]
-                or 0
-            )
-            if count <= 0:
-                return 0
-            con.execute(
-                """
-                delete from maintenance_retry_tasks
-                where task_key in (select unnest($keys::varchar[]))
-                """,
-                {"keys": keys},
-            )
-            return count
+                    {"keys": _batch},
+                )
+                return count
 
-        return int(self._with_write_connection(_op) or 0)
+            deleted += int(self._with_write_connection(_op) or 0)
+
+        return deleted
+
+    def bulk_update_retry_task_status(
+        self,
+        task_keys: Iterable[str],
+        *,
+        last_status: str,
+        last_error: str | None,
+        batch_size: int = 50_000,
+        on_batch: Callable[[int, int], None] | None = None,
+    ) -> int:
+        """
+        输入：
+        1. task_keys: 任务键可迭代对象。
+        2. last_status: 统一写入的状态值。
+        3. last_error: 统一写入的错误描述。
+        4. batch_size: 每批处理的键数量上限。
+        5. on_batch: 每批完成后的回调，参数为 (已处理数, 总数)。
+        输出：
+        1. 实际更新条数。
+        用途：
+        1. 高效批量更新 retry 任务的 last_status/last_error，适用于百万级 no_data 等均一结果场景。
+        边界条件：
+        1. 不修改 attempt_count（由 pre-execution 阶段负责）。
+        2. 每批独立事务，避免单条巨型 SQL 导致内存溢出。
+        """
+
+        keys = [str(item or "").strip() for item in task_keys if str(item or "").strip()]
+        if not keys:
+            return 0
+
+        total = len(keys)
+        updated = 0
+        now = datetime.now()
+
+        for offset in range(0, total, batch_size):
+            batch = keys[offset : offset + batch_size]
+
+            def _op(con: duckdb.DuckDBPyConnection, _batch: list[str] = batch) -> None:
+                con.execute(
+                    """
+                    update maintenance_retry_tasks
+                    set last_status = $status,
+                        last_error = $error,
+                        updated_at = $now
+                    where task_key in (select unnest($keys::varchar[]))
+                    """,
+                    {
+                        "status": last_status,
+                        "error": last_error,
+                        "now": now,
+                        "keys": _batch,
+                    },
+                )
+
+            self._with_write_connection(_op)
+            updated += len(batch)
+            if on_batch is not None:
+                on_batch(updated, total)
+
+        return updated
 
     def get_maintenance_meta(self, key: str) -> str | None:
         """
