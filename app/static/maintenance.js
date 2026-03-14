@@ -63,6 +63,7 @@ const JOB_KIND_UI = {
       $("maintenanceRetryText").textContent = `轮次 ${Number(summary.retry_rounds_used || 0)} | 超限剔除 ${Number(summary.retry_skipped_tasks || 0)}`;
       $("maintenanceRowsText").textContent = formatRowsWritten(summary.rows_written);
       $("maintenanceRemovedRowsText").textContent = String(Number(summary.removed_corrupted_rows || 0));
+      renderFetchProgress(summary.fetch_progress, job.status);
     },
   },
   concept: {
@@ -272,6 +273,30 @@ async function loadJobLogs(jobType, jobId, reset = false) {
 function formatRowsWritten(rows) {
   if (!rows || typeof rows !== "object") return "-";
   return `15:${rows["15"] || 0} | 30:${rows["30"] || 0} | 60:${rows["60"] || 0} | d:${rows.d || 0} | w:${rows.w || 0}`;
+}
+
+function renderFetchProgress(fp, jobStatus) {
+  const section = $("fetchProgressSection");
+  if (!section) return;
+  const isRunning = jobStatus === "running" || jobStatus === "stopping";
+  if (!fp || typeof fp !== "object" || !isRunning) {
+    section.style.display = "none";
+    return;
+  }
+  section.style.display = "";
+  const processed = Number(fp.processed || 0);
+  const total = Number(fp.total || 0);
+  const pct = total > 0 ? ((processed / total) * 100).toFixed(2) : "0.00";
+  $("fetchRoundText").textContent = `${Number(fp.round || 0)} / ${Number(fp.max_rounds || 0)}`;
+  $("fetchProcessedText").textContent = `${processed.toLocaleString()} / ${total.toLocaleString()} (${pct}%)`;
+  $("fetchSuccessText").textContent = Number(fp.success || 0).toLocaleString();
+  $("fetchNoDataText").textContent = Number(fp.no_data || 0).toLocaleString();
+  $("fetchFailedText").textContent = Number(fp.failed || 0).toLocaleString();
+  $("fetchRowsAppendedText").textContent = Number(fp.rows_appended || 0).toLocaleString();
+  const rw = fp.rows_written;
+  $("fetchRowsWrittenText").textContent = rw ? formatRowsWritten(rw) : "-";
+  const bar = $("fetchProgressBar");
+  if (bar) bar.style.width = `${Math.min(100, parseFloat(pct))}%`;
 }
 
 function applyJobTypeUi(jobType) {

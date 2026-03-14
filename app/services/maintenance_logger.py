@@ -20,6 +20,8 @@ from app.db.state_db import StateDB
 
 _DEBUG_LOG_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent.parent / "logs" / "debug"
 _DEBUG_BATCH_SIZE = 32
+_ERROR_LOG_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent.parent / "logs" / "error"
+_ERROR_BATCH_SIZE = 128
 
 
 def compact_maintenance_detail_for_app_log(message: str, detail: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -76,6 +78,7 @@ class MaintenanceLogger:
         self.logger = logger
         self.debug_enabled = bool(debug_enabled)
         self._debug_buffer: list[str] = []
+        self._error_buffer: list[str] = []
 
     def _format_text(self, message: str, detail: dict[str, Any] | None) -> str:
         """
@@ -212,8 +215,39 @@ class MaintenanceLogger:
         self._buffer_debug_record(message=message, detail=detail)
 
     def flush_debug(self) -> None:
-        """将缓冲区中的 debug 记录批量写入文件。任务结束时必须调用。"""
+        """将 debug/error 缓冲区批量写入文件。任务结束时必须调用。"""
         self._flush_debug_buffer()
+        self._flush_error_buffer()
+
+    def error_file_lazy(self, message: str, detail: dict[str, Any] | None = None) -> None:
+        """
+        输入：
+        1. message: 错误消息。
+        2. detail: 可选结构化明细。
+        输出：
+        1. 无返回值。
+        用途：
+        1. 将高频错误按批写入 logs/error/ 文件，避免逐条刷盘。
+        边界条件：
+        1. 本方法仅写文件，不写数据库。
+        """
+
+        if not isinstance(detail, dict):
+            detail = None
+        record: dict[str, Any] = {
+            "ts": datetime.now().isoformat(),
+            "job_id": self.job_id,
+            "level": "error",
+            "message": str(message),
+        }
+        if detail is not None:
+            record["detail"] = detail
+        try:
+            self._error_buffer.append(json.dumps(record, ensure_ascii=False, default=str))
+        except Exception:
+            return
+        if len(self._error_buffer) >= _ERROR_BATCH_SIZE:
+            self._flush_error_buffer()
 
     def _buffer_debug_record(self, *, message: str, detail: dict[str, Any] | None) -> None:
         """将 debug 记录序列化后放入缓冲区，达到阈值时自动刷盘。"""
@@ -241,6 +275,21 @@ class MaintenanceLogger:
         try:
             _DEBUG_LOG_DIR.mkdir(parents=True, exist_ok=True)
             path = _DEBUG_LOG_DIR / f"maintenance_{self.job_id}.jsonl"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+                f.write("\n")
+        except Exception:
+            pass
+
+    def _flush_error_buffer(self) -> None:
+        """将错误缓冲区一次性写入 JSONL 文件并清空。"""
+        if not self._error_buffer:
+            return
+        lines = self._error_buffer
+        self._error_buffer = []
+        try:
+            _ERROR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            path = _ERROR_LOG_DIR / f"maintenance_{self.job_id}.jsonl"
             with open(path, "a", encoding="utf-8") as f:
                 f.write("\n".join(lines))
                 f.write("\n")

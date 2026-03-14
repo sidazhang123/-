@@ -1375,6 +1375,9 @@ def get_maintenance_job(job_id: str, request: Request) -> MaintenanceStatusRespo
         "removed_corrupted_rows": int(summary_raw.get("removed_corrupted_rows") or 0),
         "duration_seconds": float(summary_raw.get("duration_seconds") or 0.0),
     }
+    fetch_progress_raw = summary_raw.get("fetch_progress")
+    if isinstance(fetch_progress_raw, dict):
+        summary["fetch_progress"] = fetch_progress_raw
     return MaintenanceStatusResponse(
         job_id=job["job_id"],
         status=job["status"],
@@ -1518,6 +1521,9 @@ def _maintenance_status_dict(job: dict[str, Any]) -> dict[str, Any]:
         "removed_corrupted_rows": int(summary_raw.get("removed_corrupted_rows") or 0),
         "duration_seconds": float(summary_raw.get("duration_seconds") or 0.0),
     }
+    fetch_progress = summary_raw.get("fetch_progress")
+    if isinstance(fetch_progress, dict):
+        summary["fetch_progress"] = fetch_progress
     return {
         "job_id": job["job_id"],
         "status": job["status"],

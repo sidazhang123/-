@@ -86,6 +86,19 @@
         <div><span id="maintenanceRetryLabel">重试轮次</span>: <strong id="maintenanceRetryText">-</strong></div>
         <div><span id="maintenanceRowsLabel">写入统计</span>: <strong id="maintenanceRowsText">-</strong></div>
         <div><span id="maintenanceRemovedRowsLabel">异常删除</span>: <strong id="maintenanceRemovedRowsText">0</strong></div>
+        <div id="fetchProgressSection" class="fetch-progress-section" style="display:none;">
+          <div class="fetch-progress-header">拉取写入实时进度</div>
+          <div class="fetch-progress-grid">
+            <div>轮次: <strong id="fetchRoundText">-</strong></div>
+            <div>已处理: <strong id="fetchProcessedText">-</strong></div>
+            <div>成功: <strong id="fetchSuccessText">-</strong></div>
+            <div>无数据(非交易日): <strong id="fetchNoDataText">-</strong></div>
+            <div>失败: <strong id="fetchFailedText">-</strong></div>
+            <div>已写入行数: <strong id="fetchRowsAppendedText">-</strong></div>
+            <div>累计写入: <strong id="fetchRowsWrittenText">-</strong></div>
+          </div>
+          <div class="progress-bar"><div id="fetchProgressBar"></div></div>
+        </div>
         <div><span id="maintenanceErrorLabel">错误信息</span>: <strong id="maintenanceErrorText">-</strong></div>
         <div class="progress-bar"><div id="maintenanceProgressBar"></div></div>
       </div>

@@ -8,6 +8,8 @@
 
 - `prepare_maintenance_refactor.py`
 - `migrate_db_debug_logs_to_files.py`：一次性脚本，将状态库中历史 debug 日志迁移到 `logs/debug/` JSONL 文件并清理 DB 中的 debug 行。
+- `reset_maintenance_retry_attempts.py`：一次性脚本，将状态库 `maintenance_retry_tasks` 的 `attempt_count` 全部重置为 0。
+- `truncate_maintenance_retry_tasks.py`：一次性脚本，清空状态库 `maintenance_retry_tasks` 表的所有记录。
 
 ## 使用方式
 

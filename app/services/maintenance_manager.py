@@ -462,6 +462,12 @@ class MaintenanceManager:
             fields: dict[str, object] = {"progress": round(safe_progress, 3)}
             if phase:
                 fields["phase"] = str(phase)
+            if isinstance(detail, dict) and "round" in detail and "processed" in detail:
+                fields["summary_json"] = json.dumps(
+                    {"fetch_progress": {k: v for k, v in detail.items() if k != "rows"}},
+                    ensure_ascii=False,
+                    default=str,
+                )
             self.state_db.update_maintenance_job_fields(job_id, **fields)
             progress_state["value"] = safe_progress
             progress_state["ts"] = now_ts

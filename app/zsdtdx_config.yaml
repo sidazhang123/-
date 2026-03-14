@@ -69,15 +69,15 @@ parallel:
   # 并行进程数倍率：推荐进程数 = max(2, int(物理核心数 * 该倍率))。
   # 取值: 正浮点数（建议 0.5~3.0）
   # 影响: 倍率越大并发越高，吞吐可能提升，但 CPU/内存占用也会上升。
-  process_count_core_multiplier: 1.5
+  process_count_core_multiplier: 2.0
   # 单次并行抓取的总超时（秒）。
   # 取值: 正浮点数
   # 影响: 超时后会回收未完成 future，并按策略触发强制回收与串行补拉。
-  parallel_total_timeout_seconds: 300
+  parallel_total_timeout_seconds: 30000
   # 单个 future.result 的超时（秒）。
   # 取值: 正浮点数
   # 影响: 防止 worker 返回阶段异常阻塞。
-  parallel_result_timeout_seconds: 600
+  parallel_result_timeout_seconds: 60
   # 总超时后是否触发并行进程强制回收。
   # 取值: true/false
   force_recycle_on_timeout: true
