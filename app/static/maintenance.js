@@ -54,7 +54,7 @@ const JOB_KIND_UI = {
     tasksLabel: "抓取进度",
     retryLabel: "重试轮次",
     rowsLabel: "写入统计",
-    removedLabel: "异常删除",
+    removedLabel: "分钟线数量异常",
     render(job) {
       const summary = job.summary || {};
       $("maintenanceModeText").textContent = formatMode(job.mode);

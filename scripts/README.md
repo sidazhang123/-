@@ -10,6 +10,7 @@
 - `migrate_db_debug_logs_to_files.py`：一次性脚本，将状态库中历史 debug 日志迁移到 `logs/debug/` JSONL 文件并清理 DB 中的 debug 行。
 - `reset_maintenance_retry_attempts.py`：一次性脚本，将状态库 `maintenance_retry_tasks` 的 `attempt_count` 全部重置为 0。
 - `truncate_maintenance_retry_tasks.py`：一次性脚本，清空状态库 `maintenance_retry_tasks` 表的所有记录。
+- `compact_state_db.py`：压缩状态库占用。先执行 CHECKPOINT+VACUUM；若未明显缩小，自动走 EXPORT/IMPORT 重写并在收益更优时替换原库（会先自动备份）。脚本在替换前会严格校验“表结构、索引、逐表数据集合”一致；阶段1校验失败会自动回滚到备份。校验过程采用 DuckDB 引擎内 SQL 集合比较（双向 EXCEPT ALL + LIMIT 1）与单连接 attach 双库，避免 Python 逐条读写。
 
 ## 使用方式
 
@@ -17,6 +18,8 @@
    - `python scripts/prepare_maintenance_refactor.py`
 2. 执行真实改动：
    - `python scripts/prepare_maintenance_refactor.py --apply`
+3. 压缩状态库：
+   - `py scripts/compact_state_db.py`
 
 ## 职责边界
 

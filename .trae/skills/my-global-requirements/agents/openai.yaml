@@ -1,4 +1,0 @@
-interface:
-  display_name: "我的全局要求"
-  short_description: "默认执行需求澄清、中文注释与前端/配置依赖规范"
-  default_prompt: "Use $my-global-requirements to enforce my global execution requirements for this task."
