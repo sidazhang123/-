@@ -89,6 +89,8 @@ _STAGE_BUFFER_ROWS_BY_FREQ = {
     "30": 120000,
     "15": 160000,
 }
+_STAGE_BUFFER_MAX_PENDING_TASKS = 200
+_STAGE_BUFFER_MAX_INTERVAL_SECONDS = 10.0
 _CHECKPOINT_MIN_TASKS = 200
 _CHECKPOINT_MIN_INTERVAL_SECONDS = 15.0
 
@@ -587,6 +589,53 @@ def _emit_durable_task_done(
         progress_queue.put(("done", code, freq, start_date, end_date, row_count))
 
 
+def _flush_all_stage_buffers(
+    stage_conn: duckdb.DuckDBPyConnection | None,
+    stage_buffers: dict[str, list[tuple]],
+    pending_done_by_freq: dict[str, list[tuple[str, str, str, str, int]]],
+    progress_queue,
+    *,
+    reason: str,
+) -> None:
+    """
+    中文说明：尝试把当前 worker 内存缓冲的所有数据落盘到 stage。
+
+    输入：stage 连接、按频率分组的行缓冲、待确认 durable 的任务列表和进度队列。
+    输出：无返回值。
+    用途：在异常退出前尽量保留已拉取数据，减少重跑损耗。
+    边界条件：任一频率 flush 失败时仅记录日志并继续处理其余频率。
+    """
+    if stage_conn is None:
+        return
+    for buffered_freq, buffered_rows in stage_buffers.items():
+        if not buffered_rows:
+            continue
+        flush_started_at = time.perf_counter()
+        try:
+            flushed_rows = _flush_stage_rows(stage_conn, buffered_freq, buffered_rows)
+            pending_done_tasks = pending_done_by_freq.get(buffered_freq, [])
+            _emit_durable_task_done(progress_queue, pending_done_tasks)
+            logger.info(
+                "worker flush-all pid=%s reason=%s freq=%s rows=%s durable_done=%s elapsed=%.3fs",
+                os.getpid(),
+                reason,
+                buffered_freq,
+                flushed_rows,
+                len(pending_done_tasks),
+                time.perf_counter() - flush_started_at,
+            )
+            buffered_rows.clear()
+            pending_done_tasks.clear()
+        except Exception:
+            logger.exception(
+                "worker flush-all failed pid=%s reason=%s freq=%s buffered_rows=%s",
+                os.getpid(),
+                reason,
+                buffered_freq,
+                len(buffered_rows),
+            )
+
+
 def _merge_stage_dir_if_needed(db_path: Path, stage_dir: Path, freqs: Iterable[str]) -> dict[str, int]:
     """
     合并 staging 目录中已落盘的数据。
@@ -957,6 +1006,7 @@ def _worker_process_tasks(
     stage_db_file = _stage_db_path(stage_root, worker_index)
     stage_buffers: dict[str, list[tuple]] = {}
     pending_done_by_freq: dict[str, list[tuple[str, str, str, str, int]]] = {}
+    last_flush_at_by_freq: dict[str, float] = {}
     stage_conn: duckdb.DuckDBPyConnection | None = None
 
     try:
@@ -1027,23 +1077,32 @@ def _worker_process_tasks(
 
                     stage_started_at = time.perf_counter()
                     freq_buffer = stage_buffers.setdefault(freq, [])
+                    pending_done_tasks = pending_done_by_freq.setdefault(freq, [])
                     flushed_rows = 0
                     durable_done_count = 0
                     if rows:
                         freq_buffer.extend(rows)
-                        pending_done_tasks = pending_done_by_freq.setdefault(freq, [])
                         pending_done_tasks.append((code, freq, start_date, end_date, len(rows)))
-                        progress_queue.put(("done", code, freq, start_date, end_date, len(rows)))
-                        durable_done_count = 1
                     else:
                         progress_queue.put(("done", code, freq, start_date, end_date, 0))
                         durable_done_count = 1
 
-                    if len(freq_buffer) >= _stage_buffer_threshold(freq):
+                    flush_interval = max(1.0, _STAGE_BUFFER_MAX_INTERVAL_SECONDS)
+                    max_pending_tasks = max(1, _STAGE_BUFFER_MAX_PENDING_TASKS)
+                    now = time.perf_counter()
+                    last_flush_at = last_flush_at_by_freq.get(freq, now)
+                    should_flush = (
+                        len(freq_buffer) >= _stage_buffer_threshold(freq)
+                        or len(pending_done_tasks) >= max_pending_tasks
+                        or (pending_done_tasks and now - last_flush_at >= flush_interval)
+                    )
+                    if should_flush and freq_buffer:
                         flushed_rows = _flush_stage_rows(stage_conn, freq, freq_buffer)
+                        _emit_durable_task_done(progress_queue, pending_done_tasks)
+                        durable_done_count = len(pending_done_tasks)
                         freq_buffer.clear()
-                        pending_done_tasks = pending_done_by_freq.get(freq, [])
                         pending_done_tasks.clear()
+                        last_flush_at_by_freq[freq] = time.perf_counter()
                     stage_elapsed = time.perf_counter() - stage_started_at
 
                     if flushed_rows > 0 or durable_done_count > 0:
@@ -1067,6 +1126,13 @@ def _worker_process_tasks(
                 except KeyboardInterrupt:
                     return
                 except Exception as e:
+                    _flush_all_stage_buffers(
+                        stage_conn,
+                        stage_buffers,
+                        pending_done_by_freq,
+                        progress_queue,
+                        reason="task_error",
+                    )
                     error_flag.set()
                     logger.exception(
                         "worker task failed pid=%s code=%s freq=%s error=%s",
@@ -1078,24 +1144,13 @@ def _worker_process_tasks(
                     progress_queue.put(("error", str(e)))
                     return
         finally:
-            if stage_conn is not None:
-                for buffered_freq, buffered_rows in stage_buffers.items():
-                    if not buffered_rows:
-                        continue
-                    flush_started_at = time.perf_counter()
-                    flushed_rows = _flush_stage_rows(stage_conn, buffered_freq, buffered_rows)
-                    pending_done_tasks = pending_done_by_freq.get(buffered_freq, [])
-                    _emit_durable_task_done(progress_queue, pending_done_tasks)
-                    logger.info(
-                        "worker final flush pid=%s freq=%s rows=%s durable_done=%s elapsed=%.3fs",
-                        os.getpid(),
-                        buffered_freq,
-                        flushed_rows,
-                        len(pending_done_tasks),
-                        time.perf_counter() - flush_started_at,
-                    )
-                    buffered_rows.clear()
-                    pending_done_tasks.clear()
+            _flush_all_stage_buffers(
+                stage_conn,
+                stage_buffers,
+                pending_done_by_freq,
+                progress_queue,
+                reason="worker_exit",
+            )
             if bs:
                 bs.logout()
             if stage_conn is not None:
@@ -1103,6 +1158,13 @@ def _worker_process_tasks(
     except KeyboardInterrupt:
         return
     except Exception as e:
+        _flush_all_stage_buffers(
+            stage_conn,
+            stage_buffers,
+            pending_done_by_freq,
+            progress_queue,
+            reason="worker_outer_error",
+        )
         error_flag.set()
         progress_queue.put(("error", str(e)))
 
