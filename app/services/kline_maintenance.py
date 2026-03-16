@@ -1732,15 +1732,26 @@ class MarketDataMaintenanceService:
 
         if self.state_db is not None and task_key_by_signature:
             cleanup_started = time.monotonic()
-            # 1. success（非 no_data）：从 retry 表 DELETE
+            # 1. success（非 no_data）：标记 success 并将 attempt_count 封顶，避免后续重复执行。
             real_success_signs = fetch_stats.success_signatures - fetch_stats.no_data_signatures
             success_task_keys = [
                 task_key_by_signature[sign]
                 for sign in real_success_signs
                 if sign in task_key_by_signature
             ]
+            success_seal_attempt = _TASK_RETRY_ROUNDS
             if success_task_keys:
-                self.state_db.delete_maintenance_retry_tasks(success_task_keys)
+                self.state_db.update_maintenance_retry_tasks(
+                    [
+                        {
+                            "task_key": task_key,
+                            "attempt_count": success_seal_attempt,
+                            "last_status": "success",
+                            "last_error": None,
+                        }
+                        for task_key in success_task_keys
+                    ]
+                )
             self._report_progress(96.0, phase="cleanup")
 
             # 2. no_data：批量设 last_status/last_error，不改 attempt_count（pre-execution 已 +1）
@@ -1781,7 +1792,8 @@ class MarketDataMaintenanceService:
             self.logger.info(
                 "retry 回写完成",
                 {
-                    "success_delete_count": len(success_task_keys),
+                    "success_update_count": len(success_task_keys),
+                    "success_seal_attempt": success_seal_attempt,
                     "no_data_update_count": len(no_data_task_keys),
                     "failed_update_count": len(failed_updates),
                     "duration_seconds": round(time.monotonic() - cleanup_started, 3),
