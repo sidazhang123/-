@@ -838,19 +838,6 @@ class StateDB:
             batch = keys[offset : offset + batch_size]
 
             def _op(con: duckdb.DuckDBPyConnection, _batch: list[str] = batch) -> int:
-                count = int(
-                    con.execute(
-                        """
-                        select count(*)
-                        from maintenance_retry_tasks
-                        where task_key in (select unnest($keys::varchar[]))
-                        """,
-                        {"keys": _batch},
-                    ).fetchone()[0]
-                    or 0
-                )
-                if count <= 0:
-                    return 0
                 con.execute(
                     """
                     delete from maintenance_retry_tasks
@@ -858,7 +845,7 @@ class StateDB:
                     """,
                     {"keys": _batch},
                 )
-                return count
+                return len(_batch)
 
             deleted += int(self._with_write_connection(_op) or 0)
 
@@ -1049,7 +1036,6 @@ class StateDB:
                 expires_at,
                 1,
                 bool(safe_max_retries <= 1),
-                safe_max_retries,
             )
             for (code, freq, trade_day), expires_at in dedup.items()
         ]
@@ -1065,25 +1051,66 @@ class StateDB:
             边界条件：
             1. 关键边界与异常分支按函数体内判断与调用约定处理。
             """
-            con.executemany(
+            cols_source_db_key = [r[0] for r in payload]
+            cols_code = [r[1] for r in payload]
+            cols_freq = [r[2] for r in payload]
+            cols_trade_day = [r[3] for r in payload]
+            cols_first_confirmed_at = [r[4] for r in payload]
+            cols_last_confirmed_at = [r[5] for r in payload]
+            cols_expires_at = [r[6] for r in payload]
+            cols_confirm_count = [r[7] for r in payload]
+            cols_permanent_skip = [r[8] for r in payload]
+            con.execute(
                 """
                 insert into maintenance_no_source_days(
                     source_db_key, code, freq, trade_day,
                     first_confirmed_at, last_confirmed_at, expires_at,
                     confirm_count, permanent_skip
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                select
+                    src.source_db_key,
+                    src.code,
+                    src.freq,
+                    src.trade_day,
+                    src.first_confirmed_at,
+                    src.last_confirmed_at,
+                    src.expires_at,
+                    src.confirm_count,
+                    src.permanent_skip
+                from (
+                    select
+                        unnest($source_db_key::varchar[]) as source_db_key,
+                        unnest($code::varchar[]) as code,
+                        unnest($freq::varchar[]) as freq,
+                        unnest($trade_day::date[]) as trade_day,
+                        unnest($first_confirmed_at::timestamp[]) as first_confirmed_at,
+                        unnest($last_confirmed_at::timestamp[]) as last_confirmed_at,
+                        unnest($expires_at::timestamp[]) as expires_at,
+                        unnest($confirm_count::integer[]) as confirm_count,
+                        unnest($permanent_skip::boolean[]) as permanent_skip
+                ) src
                 on conflict(source_db_key, code, freq, trade_day) do update set
                     last_confirmed_at = excluded.last_confirmed_at,
                     expires_at = excluded.expires_at,
                     confirm_count = coalesce(maintenance_no_source_days.confirm_count, 1) + 1,
                     permanent_skip = case
                         when maintenance_no_source_days.permanent_skip then true
-                        when coalesce(maintenance_no_source_days.confirm_count, 1) + 1 >= ? then true
+                        when coalesce(maintenance_no_source_days.confirm_count, 1) + 1 >= $max_retries then true
                         else false
                     end
                 """,
-                payload,
+                {
+                    "source_db_key": cols_source_db_key,
+                    "code": cols_code,
+                    "freq": cols_freq,
+                    "trade_day": cols_trade_day,
+                    "first_confirmed_at": cols_first_confirmed_at,
+                    "last_confirmed_at": cols_last_confirmed_at,
+                    "expires_at": cols_expires_at,
+                    "confirm_count": cols_confirm_count,
+                    "permanent_skip": cols_permanent_skip,
+                    "max_retries": safe_max_retries,
+                },
             )
 
         self._with_write_connection(_op)
@@ -1709,10 +1736,11 @@ class StateDB:
 
         placeholders = ", ".join(["?"] * len(keep_job_ids))
         con.execute(
-            f"""
-            delete from maintenance_logs
-            where job_id not in ({placeholders})
-            """,
+            f"delete from maintenance_logs where job_id not in ({placeholders})",
+            keep_job_ids,
+        )
+        con.execute(
+            f"delete from maintenance_jobs where job_id not in ({placeholders})",
             keep_job_ids,
         )
 

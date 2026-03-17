@@ -92,10 +92,7 @@ def _load_daily_bars(
 
     with connect_source_readonly(source_db_path) as con:
         con.execute("create temp table _tmp_codes (code varchar)")
-        con.executemany(
-            "insert into _tmp_codes(code) values (?)",
-            [(c,) for c in codes],
-        )
+        con.execute("insert into _tmp_codes(code) select unnest($1)", [codes])
         frame = con.execute(
             """
             select

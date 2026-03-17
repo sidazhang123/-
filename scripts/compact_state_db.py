@@ -16,8 +16,13 @@ from __future__ import annotations
 import shutil
 from datetime import datetime
 from pathlib import Path
+import time
+from typing import Callable, TypeVar
 import duckdb
 import yaml
+
+
+_T = TypeVar("_T")
 
 
 def _project_root() -> Path:
@@ -147,6 +152,69 @@ def _sql_quote(value: str) -> str:
     """
 
     return value.replace("'", "''")
+
+
+def _is_file_lock_error(exc: duckdb.IOException) -> bool:
+    """
+    输入：
+    1. exc: DuckDB IO 异常。
+    输出：
+    1. 若属于文件占用类错误返回 True。
+    用途：
+    1. 统一识别 Windows 下“文件被占用/进程无法访问”场景。
+    边界条件：
+    1. 仅做文本特征匹配，不保证覆盖所有平台错误文案。
+    """
+
+    message = str(exc).lower()
+    return (
+        "cannot open file" in message
+        and (
+            "being used by another process" in message
+            or "process cannot access" in message
+            or "进程无法访问" in message
+            or "另一个程序正在使用" in message
+        )
+    )
+
+
+def _run_with_connection_retry(
+    db_path: Path,
+    *,
+    read_only: bool,
+    action_label: str,
+    action: Callable[[duckdb.DuckDBPyConnection], _T],
+) -> _T:
+    """
+    输入：
+    1. db_path: 目标 DuckDB 文件路径。
+    2. read_only: 是否只读连接。
+    3. action_label: 动作标签，用于报错提示。
+    4. action: 在连接内执行的回调。
+    输出：
+    1. 回调返回值。
+    用途：
+    1. 对瞬时文件锁冲突进行短时重试，降低 Windows 下误失败概率。
+    边界条件：
+    1. 非文件锁类型异常不重试，直接抛出。
+    """
+
+    retries = [0.2, 0.5, 1.0, 1.5, 2.0]
+    last_error: Exception | None = None
+    for idx, delay_sec in enumerate(retries):
+        try:
+            with duckdb.connect(str(db_path), read_only=read_only) as con:
+                return action(con)
+        except duckdb.IOException as exc:
+            if not _is_file_lock_error(exc) or idx == len(retries) - 1:
+                last_error = exc
+                break
+            time.sleep(delay_sec)
+
+    raise RuntimeError(
+        f"{action_label}失败：数据库文件仍被其他进程占用（常见为 git.exe/编辑器预览/服务进程）。"
+        "请释放占用后重试。"
+    ) from last_error
 
 
 def _quote_ident(identifier: str) -> str:
@@ -435,10 +503,17 @@ def _run_checkpoint_vacuum(db_path: Path) -> None:
     1. DuckDB 语句报错时直接上抛，由上层决定是否中止。
     """
 
-    with duckdb.connect(str(db_path), read_only=False) as con:
+    def _work(con: duckdb.DuckDBPyConnection) -> None:
         con.execute("PRAGMA force_checkpoint")
         con.execute("CHECKPOINT")
         con.execute("VACUUM")
+
+    _run_with_connection_retry(
+        db_path,
+        read_only=False,
+        action_label="阶段1(CHECKPOINT+VACUUM)",
+        action=_work,
+    )
 
 
 def _rewrite_compact(db_path: Path, export_dir: Path, compact_db_path: Path) -> None:
@@ -466,8 +541,16 @@ def _rewrite_compact(db_path: Path, export_dir: Path, compact_db_path: Path) -> 
         compact_wal_path.unlink()
 
     export_sql_path = _sql_quote(export_dir.as_posix())
-    with duckdb.connect(str(db_path), read_only=False) as con:
+    # EXPORT 仅需读取源库，使用只读连接可降低 Windows 下文件占用冲突概率。
+    def _export_work(con: duckdb.DuckDBPyConnection) -> None:
         con.execute(f"EXPORT DATABASE '{export_sql_path}'")
+
+    _run_with_connection_retry(
+        db_path,
+        read_only=True,
+        action_label="阶段2导出(EXPORT)",
+        action=_export_work,
+    )
 
     import_sql_path = _sql_quote(export_dir.as_posix())
     with duckdb.connect(str(compact_db_path), read_only=False) as con:
@@ -488,16 +571,28 @@ def _replace_original_db(compact_db_path: Path, db_path: Path) -> None:
     1. 若原库不存在则直接重命名；若存在则先删除再替换。
     """
 
-    if db_path.exists():
-        db_path.unlink()
-    compact_db_path.replace(db_path)
+    retries = [0.2, 0.5, 1.0, 1.5, 2.0]
+    last_error: Exception | None = None
+    for idx, delay_sec in enumerate(retries):
+        try:
+            if db_path.exists():
+                db_path.unlink()
+            compact_db_path.replace(db_path)
 
-    compact_wal = Path(f"{compact_db_path}.wal")
-    target_wal = Path(f"{db_path}.wal")
-    if compact_wal.exists():
-        if target_wal.exists():
-            target_wal.unlink()
-        compact_wal.replace(target_wal)
+            compact_wal = Path(f"{compact_db_path}.wal")
+            target_wal = Path(f"{db_path}.wal")
+            if compact_wal.exists():
+                if target_wal.exists():
+                    target_wal.unlink()
+                compact_wal.replace(target_wal)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if idx == len(retries) - 1:
+                break
+            time.sleep(delay_sec)
+
+    raise RuntimeError("替换原库失败：数据库文件仍被其他进程占用。") from last_error
 
 
 def _print_reduction(before: dict[str, int], after: dict[str, int], label: str) -> None:
@@ -548,21 +643,29 @@ def main() -> int:
     print(f"备份完成: {backup_path}")
 
     print("阶段1: 执行 CHECKPOINT + VACUUM")
-    _run_checkpoint_vacuum(db_path)
-    after_vacuum_size = _collect_db_size(db_path)
-    _print_size("阶段1后", after_vacuum_size)
-    _print_reduction(before_size, after_vacuum_size, "阶段1压缩效果")
+    after_vacuum_size = before_size
+    try:
+        _run_checkpoint_vacuum(db_path)
+        after_vacuum_size = _collect_db_size(db_path)
+        _print_size("阶段1后", after_vacuum_size)
+        _print_reduction(before_size, after_vacuum_size, "阶段1压缩效果")
 
-    print("阶段1校验: 对比备份库与当前库（结构/索引/数据）")
-    vacuum_failures = _validate_db_equivalence(backup_path, db_path)
-    if vacuum_failures:
-        _restore_from_backup(backup_path, db_path)
-        raise RuntimeError("阶段1校验失败，已自动回滚: " + "；".join(vacuum_failures[:8]))
-    print("阶段1校验通过")
+        print("阶段1校验: 对比备份库与当前库（结构/索引/数据）")
+        vacuum_failures = _validate_db_equivalence(backup_path, db_path)
+        if vacuum_failures:
+            _restore_from_backup(backup_path, db_path)
+            raise RuntimeError("阶段1校验失败，已自动回滚: " + "；".join(vacuum_failures[:8]))
+        print("阶段1校验通过")
 
-    if after_vacuum_size["total_bytes"] < before_size["total_bytes"]:
-        print("结论: 已通过 VACUUM 缩小占用，无需重写压缩。")
-        return 0
+        if after_vacuum_size["total_bytes"] < before_size["total_bytes"]:
+            print("结论: 已通过 VACUUM 缩小占用，无需重写压缩。")
+            return 0
+    except RuntimeError as exc:
+        # 当原库被其他进程短时占用时，允许跳过阶段1并继续阶段2导出重写。
+        if "被其他进程占用" not in str(exc):
+            raise
+        print(f"阶段1跳过: {exc}")
+        print("将继续尝试阶段2(EXPORT/IMPORT)生成压缩产物。")
 
     print("阶段2: 触发 EXPORT/IMPORT 重写压缩")
     export_dir = root / "_tmp_state_export_compact"
@@ -580,7 +683,15 @@ def main() -> int:
     _print_reduction(before_size, compact_size, "阶段2压缩效果")
 
     if compact_size["total_bytes"] <= after_vacuum_size["total_bytes"]:
-        _replace_original_db(compact_db_path, db_path)
+        try:
+            _replace_original_db(compact_db_path, db_path)
+        except RuntimeError as exc:
+            print(f"替换阶段跳过: {exc}")
+            print(f"已保留压缩产物，可稍后手工替换: {compact_db_path}")
+            if export_dir.exists():
+                shutil.rmtree(export_dir)
+            return 0
+
         final_size = _collect_db_size(db_path)
         _print_size("替换后", final_size)
         _print_reduction(before_size, final_size, "最终压缩效果")

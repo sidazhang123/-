@@ -107,7 +107,7 @@ parallel:
   # 单个 chunk 执行超时（秒）。
   # 取值: 正浮点数
   # 影响: 超时后触发 chunk 级重试，重试耗尽后标记该 chunk 所有任务为失败。
-  chunk_timeout_seconds: 30
+  chunk_timeout_seconds: 60
   # chunk 超时或报错后的最大重试次数。
   # 取值: 非负整数
   # 影响: 每个 chunk 最多重试 N 次（超时、连接不可用、其他异常均触发），避免无限重试拖慢整体吞吐。

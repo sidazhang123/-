@@ -603,9 +603,10 @@ class SourceSchemaMigrationService:
                 name = str(raw_name or "").strip() or code
                 dedup.setdefault(code, name)
             if dedup:
-                con.executemany(
-                    "insert into stocks_new(code, name) values (?, ?)",
-                    [(k, dedup[k]) for k in sorted(dedup.keys())],
+                sorted_keys = sorted(dedup.keys())
+                con.execute(
+                    "insert into stocks_new(code, name) select unnest($1), unnest($2)",
+                    [sorted_keys, [dedup[k] for k in sorted_keys]],
                 )
         con.execute("drop table stocks")
         con.execute("alter table stocks_new rename to stocks")

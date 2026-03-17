@@ -43,7 +43,10 @@ class _DummyLogger:
 
     def debug_lazy(self, message: str, detail_fn: object = None) -> None:
         _ = message
-        _ = detail_fn
+
+    def error_file_lazy(self, message: str, detail: object = None) -> None:
+        _ = message
+        _ = detail
 
     def flush_debug(self) -> None:
         pass
@@ -148,11 +151,11 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
         step3 = self.service._build_historical_weekly_gap_tasks()
 
         step1_signs = {task.signature() for task in step1}
-        self.assertIn("sh.600000|d|2026-02-11|2026-02-11", step1_signs)
-        self.assertIn("sh.600000|60|2026-02-12|2026-02-12", step1_signs)
+        self.assertIn("sh.600000|d|2026-02-11 09:30:00|2026-02-11 16:00:00", step1_signs)
+        self.assertIn("sh.600000|60|2026-02-12 09:30:00|2026-02-12 16:00:00", step1_signs)
 
         step2_signs = {task.signature() for task in step2}
-        self.assertIn("sh.600000|60|2026-02-10|2026-02-10", step2_signs)
+        self.assertIn("sh.600000|60|2026-02-10 09:30:00|2026-02-10 16:00:00", step2_signs)
         self.assertGreaterEqual(removed_rows, 3)
         with duckdb.connect(str(self.db_path), read_only=True) as con:
             remaining_rows = int(
@@ -170,7 +173,7 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
         self.assertEqual(remaining_rows, 3)
 
         step3_signs = {task.signature() for task in step3}
-        self.assertIn("sh.600000|w|2026-01-03|2026-01-20", step3_signs)
+        self.assertIn("sh.600000|w|2026-01-03 09:30:00|2026-01-20 16:00:00", step3_signs)
 
     def test_preprocessor_rules(self) -> None:
         """
@@ -241,17 +244,17 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
         events_round_1 = [
             {
                 "event": "data",
-                "task": task_a.to_api_payload(),
+                "task": task_a.to_zsdtdx_payload(),
                 "rows": [{"code": "sh.600000", "datetime": "2026-02-10 15:00:00", "open": 10, "high": 11, "low": 9, "close": 10, "volume": 1, "amount": 2}],
                 "error": None,
             },
-            {"event": "data", "task": task_b.to_api_payload(), "rows": [], "error": "timeout"},
+            {"event": "data", "task": task_b.to_zsdtdx_payload(), "rows": [], "error": "timeout"},
             {"event": "done", "total_tasks": 2, "success_tasks": 1, "failed_tasks": 1},
         ]
         events_round_2 = [
             {
                 "event": "data",
-                "task": task_b.to_api_payload(),
+                "task": task_b.to_zsdtdx_payload(),
                 "rows": [{"code": "sz.000001", "datetime": "2026-02-10 15:00:00", "open": 20, "high": 21, "low": 19, "close": 20, "volume": 3, "amount": 4}],
                 "error": None,
             },
@@ -280,6 +283,31 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
         with duckdb.connect(str(self.db_path), read_only=True) as con:
             count = int(con.execute("select count(*) from klines_d").fetchone()[0] or 0)
         self.assertGreaterEqual(count, 2)
+
+    def test_fetch_and_write_empty_tasks_returns_zero_stats(self) -> None:
+        """
+        输入：
+        1. 空任务列表。
+        输出：
+        1. 返回全 0 统计，且不触发 simple_api 调用。
+        用途：
+        1. 覆盖 _execute_fetch_and_write 的空输入快速返回路径。
+        边界条件：
+        1. no_data 相关统计应为 0/空集合。
+        """
+
+        stats = self.service._execute_fetch_and_write(
+            mode="latest_update",
+            tasks=[],
+            progress_start=60.0,
+            progress_end=95.0,
+        )
+        self.assertEqual(stats.total_tasks, 0)
+        self.assertEqual(stats.success_tasks, 0)
+        self.assertEqual(stats.no_data_tasks, 0)
+        self.assertEqual(stats.failed_tasks, 0)
+        self.assertEqual(stats.retry_rounds_used, 0)
+        self.assertEqual(stats.no_data_signatures, set())
 
 
 if __name__ == "__main__":

@@ -451,26 +451,52 @@ class MarketDataDB:
                 "reason_terms": list(formula.reason_terms),
             }
 
-        concept_map = self._get_stock_concepts_by_codes(unique_codes, con=con)
-        matched_codes: list[str] = []
-        excluded_codes: list[str] = []
-        for code in unique_codes:
-            entries = concept_map.get(code) or []
-            board_names = [str(item.get("board_name") or "") for item in entries]
-            reasons = [str(item.get("selected_reason") or "") for item in entries]
-            has_concepts = all(
-                any(term in board_name for board_name in board_names)
-                for term in formula.concept_terms
-            ) if formula.concept_terms else True
-            has_reason = any(
-                term in reason
-                for term in formula.reason_terms
-                for reason in reasons
-            ) if formula.reason_terms else True
-            if has_concepts and has_reason:
-                matched_codes.append(code)
-            else:
-                excluded_codes.append(code)
+        # concept_terms: AND 逻辑 — 所有 term 都必须出现在某个 board_name 中
+        concept_clause = ""
+        if formula.concept_terms:
+            concept_clause = """
+                and not exists (
+                    select 1 from (select unnest($concept_terms::varchar[]) as term) ct
+                    where not exists (
+                        select 1 from stock_concepts sc
+                        where sc.code = ic.code and sc.board_name like '%' || ct.term || '%'
+                    )
+                )
+            """
+
+        # reason_terms: OR 逻辑 — 至少一个 term 出现在某个 selected_reason 中
+        reason_clause = ""
+        if formula.reason_terms:
+            reason_clause = """
+                and exists (
+                    select 1
+                    from stock_concepts sc, (select unnest($reason_terms::varchar[]) as term) rt
+                    where sc.code = ic.code and sc.selected_reason like '%' || rt.term || '%'
+                )
+            """
+
+        matched_sql = f"""
+            select ic.code
+            from (select unnest($codes::varchar[]) as code) ic
+            where 1=1
+            {concept_clause}
+            {reason_clause}
+        """
+        params: dict[str, Any] = {"codes": unique_codes}
+        if formula.concept_terms:
+            params["concept_terms"] = list(formula.concept_terms)
+        if formula.reason_terms:
+            params["reason_terms"] = list(formula.reason_terms)
+
+        if con is not None:
+            matched_rows = con.execute(matched_sql, params).fetchall()
+        else:
+            with self._connect() as own_con:
+                matched_rows = own_con.execute(matched_sql, params).fetchall()
+
+        matched_set = {row[0] for row in matched_rows}
+        matched_codes = [c for c in unique_codes if c in matched_set]
+        excluded_codes = [c for c in unique_codes if c not in matched_set]
 
         return matched_codes, {
             "active": True,

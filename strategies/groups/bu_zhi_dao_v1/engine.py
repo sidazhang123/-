@@ -161,7 +161,7 @@ def _load_daily_bars(
     with connect_source_readonly(source_db_path) as con:
         con.execute("drop table if exists _tmp_candidate_codes")
         con.execute("create temp table _tmp_candidate_codes (code varchar)")
-        con.executemany("insert into _tmp_candidate_codes(code) values (?)", [(code,) for code in codes])
+        con.execute("insert into _tmp_candidate_codes(code) select unnest($1)", [codes])
         frame = con.execute(
             """
             select
@@ -206,7 +206,7 @@ def _load_intraday_day_ohlc_mean(
     with connect_source_readonly(source_db_path) as con:
         con.execute("drop table if exists _tmp_candidate_codes")
         con.execute("create temp table _tmp_candidate_codes (code varchar)")
-        con.executemany("insert into _tmp_candidate_codes(code) values (?)", [(code,) for code in codes])
+        con.execute("insert into _tmp_candidate_codes(code) select unnest($1)", [codes])
         frame = con.execute(
             """
             select

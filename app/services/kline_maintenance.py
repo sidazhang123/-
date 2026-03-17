@@ -18,12 +18,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import duckdb
-import pandas as pd
 
 from app.db.duckdb_utils import connect_duckdb_compatible
 from app.db.state_db import StateDB
 from app.services.maintenance_calendar import weekdays_between_exclusive, week_monday_and_friday
-from app.services.maintenance_codecs import normalize_code_for_storage, normalize_code_set
+from app.services.maintenance_codecs import normalize_code_for_storage, normalize_code_set, parse_normalized_code
 from app.services.simple_api_bridge import (
     get_runtime_failures,
     get_runtime_metadata,
@@ -63,6 +62,8 @@ _HIST_MINUTE_EXPECTED: dict[str, int] = {"60": 4, "30": 8, "15": 16}
 _TASK_RETRY_ROUNDS: int = max(1, int(MAINTENANCE_RETRY_ROUNDS))
 _QUEUE_POLL_TIMEOUT_SECONDS: float = max(0.2, float(MAINTENANCE_QUEUE_POLL_TIMEOUT_SECONDS))
 _WRITE_FLUSH_ROWS: int = max(200, int(MAINTENANCE_WRITE_FLUSH_ROWS))
+_PROGRESS_REPORT_MIN_EVENTS: int = 32
+_PROGRESS_REPORT_MIN_SECONDS: float = 0.5
 
 
 class MaintenanceStopRequested(Exception):
@@ -114,6 +115,43 @@ class MaintenanceTask:
             "start_time": self.start_time,
             "end_time": self.end_time,
         }
+
+    def to_zsdtdx_payload(self) -> dict[str, str]:
+        """
+        输入：
+        1. 无。
+        输出：
+        1. zsdtdx 原生格式 task 字典（纯数字代码，带时分秒时间）。
+        用途：
+        1. 发送给 zsdtdx 时避免其内部再做格式转换。
+        边界条件：
+        1. code 提取纯数字部分；时间始终带 HH:MM:SS。
+        """
+
+        parsed = parse_normalized_code(self.code)
+        digits = parsed.digits if parsed else self.code
+        return {
+            "code": digits,
+            "freq": self.freq,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+        }
+
+    def zsdtdx_key(self) -> str:
+        """
+        输入：
+        1. 无。
+        输出：
+        1. 与 zsdtdx 事件返回的 task 字典匹配的键。
+        用途：
+        1. 在事件消费时直接用 payload 字段拼接查找，无需重建 MaintenanceTask。
+        边界条件：
+        1. 与 to_zsdtdx_payload 的字段对齐。
+        """
+
+        parsed = parse_normalized_code(self.code)
+        digits = parsed.digits if parsed else self.code
+        return f"{digits}|{self.freq}|{self.start_time}|{self.end_time}"
 
 
 @dataclass(slots=True)
@@ -446,6 +484,7 @@ class MarketDataMaintenanceService:
                     )
                     """
                 )
+            con.execute("create index if not exists idx_stock_concepts_code on stock_concepts(code)")
 
     def _make_task(
         self,
@@ -655,31 +694,30 @@ class MarketDataMaintenanceService:
 
         tasks: list[MaintenanceTask] = []
         with self._connect_source_db(read_only=True) as con:
-            rows = con.execute(
+            gap_rows = con.execute(
                 """
-                select code, cast(datetime as date) as trade_day
-                from klines_d
-                group by code, cast(datetime as date)
+                select code, prev_day, trade_day
+                from (
+                    select
+                        code,
+                        lag(cast(datetime as date)) over (partition by code order by cast(datetime as date)) as prev_day,
+                        cast(datetime as date) as trade_day
+                    from klines_d
+                    group by code, cast(datetime as date)
+                )
+                where prev_day is not null
+                  and trade_day - prev_day > 1
                 order by code asc, trade_day asc
                 """
             ).fetchall()
 
-        current_code = ""
-        previous_day: date | None = None
-        for row_idx, (raw_code, trade_day) in enumerate(rows, start=1):
+        for row_idx, (raw_code, prev_day, trade_day) in enumerate(gap_rows, start=1):
             if row_idx % 4096 == 0:
                 self._check_stop()
             code = normalize_code_for_storage(raw_code)
-            if not code or not isinstance(trade_day, date):
+            if not code or not isinstance(prev_day, date) or not isinstance(trade_day, date):
                 continue
-            if code != current_code:
-                current_code = code
-                previous_day = trade_day
-                continue
-            if previous_day is None:
-                previous_day = trade_day
-                continue
-            missing_days = weekdays_between_exclusive(previous_day, trade_day)
+            missing_days = weekdays_between_exclusive(prev_day, trade_day)
             for missing_day in missing_days:
                 for freq in ("d", "60", "30", "15"):
                     task = self._make_task(
@@ -691,7 +729,6 @@ class MarketDataMaintenanceService:
                     )
                     if task is not None:
                         tasks.append(task)
-            previous_day = trade_day
         return tasks
 
     def _build_historical_minute_count_tasks(self) -> tuple[list[MaintenanceTask], int]:
@@ -714,7 +751,7 @@ class MarketDataMaintenanceService:
                 table = KLINE_TABLE_BY_FREQ[freq]
                 bad_rows = con.execute(
                     f"""
-                    select code, cast(datetime as date) as trade_day
+                    select code, cast(datetime as date) as trade_day, count(*) as actual_count
                     from {table}
                     group by code, cast(datetime as date)
                     having count(*) <> ?
@@ -725,33 +762,13 @@ class MarketDataMaintenanceService:
                 if not bad_rows:
                     continue
 
-                bad_pairs: list[tuple[str, date]] = []
-                for bad_idx, (raw_code, trade_day) in enumerate(bad_rows, start=1):
+                for bad_idx, (raw_code, trade_day, actual_count) in enumerate(bad_rows, start=1):
                     if bad_idx % 4096 == 0:
                         self._check_stop()
-                    normalized = normalize_code_for_storage(raw_code)
-                    if not normalized or not isinstance(trade_day, date):
+                    code = normalize_code_for_storage(raw_code)
+                    if not code or not isinstance(trade_day, date):
                         continue
-                    bad_pairs.append((normalized, trade_day))
-                if not bad_pairs:
-                    continue
-
-                for pair_idx, (code, trade_day) in enumerate(bad_pairs, start=1):
-                    if pair_idx % 256 == 0:
-                        self._check_stop()
-                    affected_count = int(
-                        con.execute(
-                            f"""
-                            select count(*)
-                            from {table}
-                            where code = ?
-                              and cast(datetime as date) = ?
-                            """,
-                            [code, trade_day],
-                        ).fetchone()[0]
-                        or 0
-                    )
-                    removed_rows += affected_count
+                    removed_rows += int(actual_count or 0)
                     task = self._make_task(
                         code=code,
                         freq=freq,
@@ -777,43 +794,40 @@ class MarketDataMaintenanceService:
 
         tasks: list[MaintenanceTask] = []
         with self._connect_source_db(read_only=True) as con:
-            rows = con.execute(
+            gap_rows = con.execute(
                 """
-                select code, cast(datetime as date) as trade_day
-                from klines_w
-                group by code, cast(datetime as date)
+                select code, prev_day, trade_day
+                from (
+                    select
+                        code,
+                        lag(cast(datetime as date)) over (partition by code order by cast(datetime as date)) as prev_day,
+                        cast(datetime as date) as trade_day
+                    from klines_w
+                    group by code, cast(datetime as date)
+                )
+                where prev_day is not null
+                  and trade_day - prev_day > 7
                 order by code asc, trade_day asc
                 """
             ).fetchall()
 
-        current_code = ""
-        previous_day: date | None = None
-        for row_idx, (raw_code, trade_day) in enumerate(rows, start=1):
+        for row_idx, (raw_code, prev_day, trade_day) in enumerate(gap_rows, start=1):
             if row_idx % 4096 == 0:
                 self._check_stop()
             code = normalize_code_for_storage(raw_code)
-            if not code or not isinstance(trade_day, date):
+            if not code or not isinstance(prev_day, date) or not isinstance(trade_day, date):
                 continue
-            if code != current_code:
-                current_code = code
-                previous_day = trade_day
-                continue
-            if previous_day is None:
-                previous_day = trade_day
-                continue
-            if (trade_day - previous_day).days > 7:
-                start_day = previous_day + timedelta(days=1)
-                end_day = trade_day
-                task = self._make_task(
-                    code=code,
-                    freq="w",
-                    start_time=start_day,
-                    end_time=end_day,
-                    date_only=False,
-                )
-                if task is not None:
-                    tasks.append(task)
-            previous_day = trade_day
+            start_day = prev_day + timedelta(days=1)
+            end_day = trade_day
+            task = self._make_task(
+                code=code,
+                freq="w",
+                start_time=start_day,
+                end_time=end_day,
+                date_only=False,
+            )
+            if task is not None:
+                tasks.append(task)
         return tasks
 
     def _retry_task_key(self, task: MaintenanceTask, *, mode: str) -> str:
@@ -834,20 +848,20 @@ class MarketDataMaintenanceService:
     def _prepare_historical_retry_tasks(
         self,
         tasks: list[MaintenanceTask],
-    ) -> tuple[list[MaintenanceTask], dict[str, str], int]:
+    ) -> tuple[list[MaintenanceTask], dict[str, str], set[str], dict[str, int], int]:
         """
         输入：
         1. tasks: 原始历史任务列表。
         输出：
-        1. (可执行任务, 任务签名->task_key 映射, 被剔除数量)。
+        1. (可执行任务, 签名->task_key, 新任务task_key集合, 已有任务attempt_count, 被剔除数量)。
         用途：
-        1. 执行 historical_backfill 步骤4去重与尝试次数策略。
+        1. 执行 historical_backfill 步骤4去重与尝试次数策略（仅分类，不写库）。
         边界条件：
         1. state_db 不可用时直接返回原任务。
         """
 
         if self.state_db is None or not tasks:
-            return tasks, {}, 0
+            return tasks, {}, set(), {}, 0
 
         t0 = time.monotonic()
         entries: list[tuple[MaintenanceTask, str, str]] = []
@@ -873,26 +887,14 @@ class MarketDataMaintenanceService:
 
         executable: list[MaintenanceTask] = []
         skipped = 0
-        new_rows: list[dict[str, Any]] = []
-        retry_updates: list[dict[str, Any]] = []
+        new_task_keys: set[str] = set()
+        existing_attempt_by_key: dict[str, int] = {}
         executable_signatures: set[str] = set()
 
         for task, signature, task_key in entries:
             existing = existing_map.get(task_key)
             if existing is None:
-                new_rows.append(
-                    {
-                        "task_key": task_key,
-                        "mode": "historical_backfill",
-                        "code": task.code,
-                        "freq": task.freq,
-                        "start_date": task.start_time[:10],
-                        "end_date": task.end_time[:10],
-                        "attempt_count": 0,
-                        "last_status": "pending",
-                        "last_error": None,
-                    }
-                )
+                new_task_keys.add(task_key)
                 executable.append(task)
                 executable_signatures.add(signature)
                 continue
@@ -902,14 +904,7 @@ class MarketDataMaintenanceService:
                 skipped += 1
                 continue
 
-            retry_updates.append(
-                {
-                    "task_key": task_key,
-                    "attempt_count": attempt_count + 1,
-                    "last_status": "pending",
-                    "last_error": None,
-                }
-            )
+            existing_attempt_by_key[task_key] = attempt_count
             executable.append(task)
             executable_signatures.add(signature)
 
@@ -917,27 +912,11 @@ class MarketDataMaintenanceService:
         self.logger.info(
             "retry 准备：分类处理完成",
             {
-                "new_count": len(new_rows),
-                "retry_count": len(retry_updates),
+                "new_count": len(new_task_keys),
+                "retry_count": len(existing_attempt_by_key),
                 "skipped": skipped,
                 "duration_seconds": round(t3 - t2, 4),
-            },
-        )
-
-        if retry_updates:
-            self.state_db.update_maintenance_retry_tasks(retry_updates)
-        t4 = time.monotonic()
-
-        if new_rows:
-            self.state_db.insert_maintenance_retry_tasks(new_rows)
-        t5 = time.monotonic()
-
-        self.logger.info(
-            "retry 准备：写入完成",
-            {
-                "update_duration_seconds": round(t4 - t3, 4),
-                "insert_duration_seconds": round(t5 - t4, 4),
-                "total_duration_seconds": round(t5 - t0, 4),
+                "total_duration_seconds": round(t3 - t0, 4),
             },
         )
 
@@ -947,8 +926,8 @@ class MarketDataMaintenanceService:
                 "raw_task_count": len(tasks),
                 "executable_task_count": len(executable),
                 "retry_skipped_tasks": skipped,
-                "new_retry_rows": len(new_rows),
-                "retry_update_rows": len(retry_updates),
+                "new_task_count": len(new_task_keys),
+                "retry_task_count": len(existing_attempt_by_key),
                 "task_sample": [task.to_api_payload() for task in executable[:10]],
             },
         )
@@ -958,7 +937,7 @@ class MarketDataMaintenanceService:
             for signature, task_key in task_key_by_signature.items()
             if signature in executable_signatures
         }
-        return executable, filtered_key_map, skipped
+        return executable, filtered_key_map, new_task_keys, existing_attempt_by_key, skipped
 
     def _build_preprocessor_operator(self) -> Callable[[dict[str, Any]], dict[str, Any] | None]:
         """
@@ -1013,6 +992,27 @@ class MarketDataMaintenanceService:
 
         return _operator
 
+    @staticmethod
+    def _extract_zsdtdx_key(raw_task: dict[str, Any]) -> str | None:
+        """
+        输入：
+        1. raw_task: zsdtdx 事件中的 task 字典。
+        输出：
+        1. 与 MaintenanceTask.zsdtdx_key() 格式一致的键字符串，或 None。
+        用途：
+        1. 事件消费阶段直接从 payload 字段构造查找键，无需重建 MaintenanceTask。
+        边界条件：
+        1. 任意字段为空或缺失时返回 None。
+        """
+
+        code = str(raw_task.get("code") or "").strip()
+        freq = str(raw_task.get("freq") or "").strip()
+        start_time = str(raw_task.get("start_time") or "").strip()
+        end_time = str(raw_task.get("end_time") or "").strip()
+        if not code or not freq or not start_time or not end_time:
+            return None
+        return f"{code}|{freq}|{start_time}|{end_time}"
+
     def _normalize_event_task(self, payload_task: dict[str, Any]) -> MaintenanceTask | None:
         """
         输入：
@@ -1059,87 +1059,82 @@ class MarketDataMaintenanceService:
             return 0
 
         table = KLINE_TABLE_BY_FREQ[freq]
-        frame = pd.DataFrame.from_records(rows)
-        if frame.empty:
-            return 0
+        codes = [r["code"] for r in rows]
+        datetimes = [r["datetime"] for r in rows]
+        opens = [float(r.get("open") or 0) for r in rows]
+        highs = [float(r.get("high") or 0) for r in rows]
+        lows = [float(r.get("low") or 0) for r in rows]
+        closes = [float(r.get("close") or 0) for r in rows]
+        volumes = [int(r.get("volume") or 0) for r in rows]
+        amounts = [int(r.get("amount") or 0) for r in rows]
 
-        required_cols = ["code", "datetime", "open", "high", "low", "close", "volume", "amount"]
-        for col in required_cols:
-            if col not in frame.columns:
-                frame[col] = 0 if col in {"open", "high", "low", "close", "volume", "amount"} else ""
-        frame = frame[required_cols]
-        frame["code"] = frame["code"].map(normalize_code_for_storage)
-        frame = frame[frame["code"] != ""]
-        if frame.empty:
-            return 0
-
-        frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
-        frame = frame.dropna(subset=["datetime"])
-        if frame.empty:
-            return 0
-        if freq in {"d", "w"}:
-            frame["datetime"] = frame["datetime"].dt.floor("D") + pd.Timedelta(hours=15)
-
-        frame["open"] = frame["open"].astype(float)
-        frame["high"] = frame["high"].astype(float)
-        frame["low"] = frame["low"].astype(float)
-        frame["close"] = frame["close"].astype(float)
-        frame["volume"] = frame["volume"].astype("int64")
-        frame["amount"] = frame["amount"].astype("int64")
-        frame = frame.drop_duplicates(subset=["code", "datetime"], keep="last")
-        if frame.empty:
-            return 0
-
+        # 先将数据写入临时表，DELETE 和 INSERT 都引用它，避免双次 unnest 解析开销
         self._temp_index += 1
-        temp_name = f"_tmp_maintenance_rows_{freq}_{self._temp_index}"
-        con.register(temp_name, frame)
+        tmp = f"_tmp_flush_{freq}_{self._temp_index}"
+        con.execute(
+            f"""
+            CREATE TEMPORARY TABLE {tmp} AS
+            SELECT
+                unnest($1::varchar[]) AS code,
+                unnest($2::timestamp[]) AS datetime,
+                unnest($3::double[]) AS open,
+                unnest($4::double[]) AS high,
+                unnest($5::double[]) AS low,
+                unnest($6::double[]) AS close,
+                unnest($7::bigint[]) AS volume,
+                unnest($8::bigint[]) AS amount
+            """,
+            [codes, datetimes, opens, highs, lows, closes, volumes, amounts],
+        )
+
         try:
             if freq in {"15", "30", "60"}:
-                # 分钟级：按 (code, 日期) 删除当日全部旧行后插入
+                # 分钟级：按 (code, 日期范围) 删除当日全部旧行（利用 PK 索引）
                 con.execute(
                     f"""
-                    delete from {table} as t
-                    using (
-                        select distinct code, cast(datetime as date) as dt
-                        from {temp_name}
-                    ) as s
-                    where t.code = s.code
-                      and cast(t.datetime as date) = s.dt
+                    DELETE FROM {table} AS t
+                    USING (
+                        SELECT DISTINCT code, cast(datetime AS date) AS dt
+                        FROM {tmp}
+                    ) AS s
+                    WHERE t.code = s.code
+                      AND t.datetime >= cast(s.dt AS timestamp)
+                      AND t.datetime < cast(s.dt + INTERVAL '1 day' AS timestamp)
                     """
                 )
             elif freq == "w":
-                # 周线：按 (code, 自然周) 删除整周旧行后插入
+                # 周线：按 (code, 自然周范围) 删除整周旧行（利用 PK 索引）
                 con.execute(
                     f"""
-                    delete from {table} as t
-                    using (
-                        select distinct code, date_trunc('week', datetime) as wk
-                        from {temp_name}
-                    ) as s
-                    where t.code = s.code
-                      and date_trunc('week', t.datetime) = s.wk
+                    DELETE FROM {table} AS t
+                    USING (
+                        SELECT DISTINCT code, date_trunc('week', datetime) AS wk
+                        FROM {tmp}
+                    ) AS s
+                    WHERE t.code = s.code
+                      AND t.datetime >= s.wk
+                      AND t.datetime < cast(s.wk + INTERVAL '7 days' AS timestamp)
                     """
                 )
-            else:
-                # 日线：精确匹配 (code, datetime) 删除
-                con.execute(
-                    f"""
-                    delete from {table} as t
-                    using {temp_name} as s
-                    where t.code = s.code
-                      and t.datetime = s.datetime
-                    """
-                )
+
+            # 统一 INSERT ON CONFLICT: 日线直接覆盖；分钟/周线先删后插，ON CONFLICT 处理批内去重
             con.execute(
                 f"""
-                insert into {table} (code, datetime, open, high, low, close, volume, amount)
-                select code, datetime, open, high, low, close, volume, amount
-                from {temp_name}
+                INSERT INTO {table} (code, datetime, open, high, low, close, volume, amount)
+                SELECT code, datetime, open, high, low, close, volume, amount
+                FROM {tmp}
+                ON CONFLICT (code, datetime) DO UPDATE SET
+                    open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume,
+                    amount = EXCLUDED.amount
                 """
             )
         finally:
-            con.unregister(temp_name)
-        return int(len(frame))
+            con.execute(f"DROP TABLE IF EXISTS {tmp}")
+        return len(rows)
 
     def _flush_all_buffers(
         self,
@@ -1180,6 +1175,56 @@ class MarketDataMaintenanceService:
             )
             buffers[freq] = []
 
+    def _flush_ready_buffers(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        buffers: dict[str, list[dict[str, Any]]],
+        rows_written_by_freq: dict[str, int],
+        *,
+        min_rows: int,
+    ) -> int:
+        """
+        输入：
+        1. con: 写连接。
+        2. buffers: 周期缓存行。
+        3. rows_written_by_freq: 写入计数字典。
+        4. min_rows: 触发刷盘的最小行数阈值。
+        输出：
+        1. 本次刷盘写入的总行数。
+        用途：
+        1. 仅对达到阈值的周期执行刷盘，避免高频小批次全量刷盘。
+        边界条件：
+        1. 阈值小于等于 0 时退化为全量刷盘。
+        """
+
+        if min_rows <= 0:
+            before_total = sum(rows_written_by_freq.values())
+            self._flush_all_buffers(con, buffers, rows_written_by_freq)
+            return int(sum(rows_written_by_freq.values()) - before_total)
+
+        written_total = 0
+        for freq in KLINE_FREQ_ORDER:
+            rows = buffers.get(freq) or []
+            if len(rows) < min_rows:
+                continue
+            flush_started = time.monotonic()
+            buffered_count = len(rows)
+            written = self._flush_freq_rows(con, freq=freq, rows=rows)
+            rows_written_by_freq[freq] += written
+            written_total += written
+            self.logger.debug_lazy(
+                "批量刷盘明细",
+                lambda _f=freq, _bc=buffered_count, _w=written, _cw=rows_written_by_freq[freq], _fs=flush_started: {
+                    "freq": _f,
+                    "buffered_rows": _bc,
+                    "written_rows": _w,
+                    "cumulative_written_rows": _cw,
+                    "duration_seconds": round(time.monotonic() - _fs, 4),
+                },
+            )
+            buffers[freq] = []
+        return written_total
+
     def _append_event_rows_to_buffers(
         self,
         *,
@@ -1215,12 +1260,12 @@ class MarketDataMaintenanceService:
                 {
                     "code": code,
                     "datetime": row.get("datetime"),
-                    "open": _price_2(row.get("open")),
-                    "high": _price_2(row.get("high")),
-                    "low": _price_2(row.get("low")),
-                    "close": _price_2(row.get("close")),
-                    "volume": _trunc_int(row.get("volume")),
-                    "amount": _trunc_int(row.get("amount")),
+                    "open": row.get("open"),
+                    "high": row.get("high"),
+                    "low": row.get("low"),
+                    "close": row.get("close"),
+                    "volume": row.get("volume"),
+                    "amount": row.get("amount"),
                 }
             )
             append_count += 1
@@ -1252,16 +1297,20 @@ class MarketDataMaintenanceService:
             return FetchWriteStats(
                 total_tasks=0,
                 success_tasks=0,
+                no_data_tasks=0,
                 failed_tasks=0,
                 retry_rounds_used=0,
                 rows_written_by_freq={freq: 0 for freq in KLINE_FREQ_ORDER},
                 success_signatures=set(),
+                no_data_signatures=set(),
                 failed_signatures=set(),
                 failed_errors={},
             )
 
         self._require_simple_api()
         task_map = {task.signature(): task for task in tasks}
+        # 构建 zsdtdx 事件键 → 内部签名的映射，用于事件消费时直接查找，无需重建 MaintenanceTask
+        zsdtdx_key_to_sign: dict[str, str] = {task.zsdtdx_key(): task.signature() for task in tasks}
         pending_signatures: list[str] = [task.signature() for task in tasks]
         success_signatures: set[str] = set()
         no_data_signatures: set[str] = set()
@@ -1310,12 +1359,14 @@ class MarketDataMaintenanceService:
             success_count = 0
             total_count = len(current_tasks)
             pool_broken = False
+            last_progress_report_ts = time.monotonic()
+            last_progress_report_processed = 0
 
             with self._connect_source_db(read_only=False) as con:
                 try:
                     with get_tdx_client() as _client:
                         with managed_stock_kline_job(
-                            task=[task.to_api_payload() for task in current_tasks],
+                            task=[task.to_zsdtdx_payload() for task in current_tasks],
                             mode="async",
                             queue=None,
                             preprocessor_operator=preprocessor,
@@ -1337,11 +1388,10 @@ class MarketDataMaintenanceService:
                                 if event_type != "data":
                                     continue
 
-                                event_task = self._normalize_event_task(event.get("task") if isinstance(event.get("task"), dict) else {})
-                                if event_task is None:
-                                    continue
-                                sign = event_task.signature()
-                                if sign not in task_map:
+                                raw_task = event.get("task") if isinstance(event.get("task"), dict) else {}
+                                evt_key = self._extract_zsdtdx_key(raw_task)
+                                sign = zsdtdx_key_to_sign.get(evt_key) if evt_key else None
+                                if not sign or sign not in task_map:
                                     continue
                                 processed_count += 1
                                 cumulative_processed += 1
@@ -1369,7 +1419,7 @@ class MarketDataMaintenanceService:
                                 else:
                                     rows = event.get("rows") if isinstance(event.get("rows"), list) else []
                                     round_rows_appended += self._append_event_rows_to_buffers(
-                                        task=event_task,
+                                        task=task_map[sign],
                                         rows=rows,
                                         buffers=buffers,
                                     )
@@ -1377,28 +1427,40 @@ class MarketDataMaintenanceService:
                                     success_count += 1
                                     round_failures.discard(sign)
 
-                                need_flush = any(len(buffers[freq]) >= _WRITE_FLUSH_ROWS for freq in KLINE_FREQ_ORDER)
-                                if need_flush:
-                                    self._flush_all_buffers(con, buffers, rows_written_by_freq)
-
-                                ratio = float(cumulative_processed) / float(max(1, original_total))
-                                progress = progress_start + (progress_end - progress_start) * ratio
-                                self._report_progress(
-                                    progress,
-                                    phase="running",
-                                    detail={
-                                        "mode": mode,
-                                        "round": retry_rounds_used,
-                                        "max_rounds": _TASK_RETRY_ROUNDS,
-                                        "processed": processed_count,
-                                        "total": total_count,
-                                        "success": success_count,
-                                        "no_data": no_data_count,
-                                        "failed": len(round_failures),
-                                        "rows_appended": round_rows_appended,
-                                        "rows_written": dict(rows_written_by_freq),
-                                    },
+                                self._flush_ready_buffers(
+                                    con,
+                                    buffers,
+                                    rows_written_by_freq,
+                                    min_rows=_WRITE_FLUSH_ROWS,
                                 )
+
+                                now = time.monotonic()
+                                should_report_progress = (
+                                    (processed_count - last_progress_report_processed) >= _PROGRESS_REPORT_MIN_EVENTS
+                                    or (now - last_progress_report_ts) >= _PROGRESS_REPORT_MIN_SECONDS
+                                    or processed_count >= total_count
+                                )
+                                if should_report_progress:
+                                    ratio = float(cumulative_processed) / float(max(1, original_total))
+                                    progress = progress_start + (progress_end - progress_start) * ratio
+                                    self._report_progress(
+                                        progress,
+                                        phase="running",
+                                        detail={
+                                            "mode": mode,
+                                            "round": retry_rounds_used,
+                                            "max_rounds": _TASK_RETRY_ROUNDS,
+                                            "processed": processed_count,
+                                            "total": total_count,
+                                            "success": success_count,
+                                            "no_data": no_data_count,
+                                            "failed": len(round_failures),
+                                            "rows_appended": round_rows_appended,
+                                            "rows_written": dict(rows_written_by_freq),
+                                        },
+                                    )
+                                    last_progress_report_ts = now
+                                    last_progress_report_processed = processed_count
 
                             self._flush_all_buffers(con, buffers, rows_written_by_freq)
                             con.commit()
@@ -1698,7 +1760,7 @@ class MarketDataMaintenanceService:
         self.logger.info("步骤4开始：维护 retry 任务表与尝试次数")
         step_started = time.monotonic()
         merged_tasks = self._dedupe_tasks([*tasks_step1, *tasks_step2, *tasks_step3])
-        executable_tasks, task_key_by_signature, retry_skipped = self._prepare_historical_retry_tasks(merged_tasks)
+        executable_tasks, task_key_by_signature, new_task_keys, existing_attempt_by_key, retry_skipped = self._prepare_historical_retry_tasks(merged_tasks)
         steps_completed = 4
         self.logger.info(
             "步骤4完成",
@@ -1732,70 +1794,81 @@ class MarketDataMaintenanceService:
 
         if self.state_db is not None and task_key_by_signature:
             cleanup_started = time.monotonic()
-            # 1. success（非 no_data）：标记 success 并将 attempt_count 封顶，避免后续重复执行。
+            task_by_task_key = {
+                self._retry_task_key(task, mode="historical_backfill"): task
+                for task in executable_tasks
+            }
+            all_inserts: list[dict[str, Any]] = []
+            all_updates: list[dict[str, Any]] = []
+            # 1. success（非 no_data）：从 retry 表 DELETE
             real_success_signs = fetch_stats.success_signatures - fetch_stats.no_data_signatures
             success_task_keys = [
                 task_key_by_signature[sign]
                 for sign in real_success_signs
                 if sign in task_key_by_signature
             ]
-            success_seal_attempt = _TASK_RETRY_ROUNDS
             if success_task_keys:
-                self.state_db.update_maintenance_retry_tasks(
-                    [
-                        {
-                            "task_key": task_key,
-                            "attempt_count": success_seal_attempt,
-                            "last_status": "success",
-                            "last_error": None,
-                        }
-                        for task_key in success_task_keys
-                    ]
-                )
+                self.state_db.delete_maintenance_retry_tasks(success_task_keys)
             self._report_progress(96.0, phase="cleanup")
 
-            # 2. no_data：批量设 last_status/last_error，不改 attempt_count（pre-execution 已 +1）
-            no_data_task_keys = [
-                task_key_by_signature[sign]
-                for sign in fetch_stats.no_data_signatures
-                if sign in task_key_by_signature
-            ]
-            if no_data_task_keys:
-                self.state_db.bulk_update_retry_task_status(
-                    no_data_task_keys,
-                    last_status="no_data",
-                    last_error="no_data",
-                    batch_size=50_000,
-                    on_batch=lambda done, total: self._report_progress(
-                        96.0 + 3.0 * float(done) / float(max(1, total)),
-                        phase="cleanup",
-                    ),
-                )
-
-            # 3. failed：per-row 更新（体量极小，不改 attempt_count）
-            failed_updates: list[dict[str, Any]] = []
-            for sign in fetch_stats.failed_signatures:
-                task_key = task_key_by_signature.get(sign)
-                if not task_key:
+            # 2. no_data：新任务 attempt_count=1，已有任务 attempt_count+1
+            for sign in fetch_stats.no_data_signatures:
+                tk = task_key_by_signature.get(sign)
+                if not tk:
                     continue
-                failed_updates.append(
-                    {
-                        "task_key": task_key,
-                        "last_status": "failed",
-                        "last_error": fetch_stats.failed_errors.get(sign, "unknown_error"),
-                    }
-                )
-            if failed_updates:
-                self.state_db.update_maintenance_retry_tasks(failed_updates)
+                if tk in new_task_keys:
+                    t = task_by_task_key[tk]
+                    all_inserts.append({
+                        "task_key": tk, "mode": "historical_backfill",
+                        "code": t.code, "freq": t.freq,
+                        "start_date": t.start_time[:10], "end_date": t.end_time[:10],
+                        "attempt_count": 1, "last_status": "no_data", "last_error": "no_data",
+                    })
+                else:
+                    old_attempt = existing_attempt_by_key.get(tk, 0)
+                    all_updates.append({
+                        "task_key": tk, "attempt_count": old_attempt + 1,
+                        "last_status": "no_data", "last_error": "no_data",
+                    })
+
+            # 3. failed：新任务 attempt_count=0，已有任务不改 attempt_count
+            for sign in fetch_stats.failed_signatures:
+                tk = task_key_by_signature.get(sign)
+                if not tk:
+                    continue
+                err = fetch_stats.failed_errors.get(sign, "unknown_error")
+                if tk in new_task_keys:
+                    t = task_by_task_key[tk]
+                    all_inserts.append({
+                        "task_key": tk, "mode": "historical_backfill",
+                        "code": t.code, "freq": t.freq,
+                        "start_date": t.start_time[:10], "end_date": t.end_time[:10],
+                        "attempt_count": 0, "last_status": "failed", "last_error": err,
+                    })
+                else:
+                    all_updates.append({
+                        "task_key": tk, "last_status": "failed", "last_error": err,
+                    })
+
+            # 批量写入 — 分 50k 批次避免单次 unnest 过大
+            _RETRY_WRITE_BATCH = 50_000
+            if all_inserts:
+                for offset in range(0, len(all_inserts), _RETRY_WRITE_BATCH):
+                    self.state_db.insert_maintenance_retry_tasks(all_inserts[offset:offset + _RETRY_WRITE_BATCH])
+            if all_updates:
+                for offset in range(0, len(all_updates), _RETRY_WRITE_BATCH):
+                    self.state_db.update_maintenance_retry_tasks(all_updates[offset:offset + _RETRY_WRITE_BATCH])
             self._report_progress(99.0, phase="cleanup")
 
+            success_count = len([s for s in (fetch_stats.success_signatures - fetch_stats.no_data_signatures) if task_key_by_signature.get(s)])
+            no_data_count = len([s for s in fetch_stats.no_data_signatures if task_key_by_signature.get(s)])
+            failed_count = len([s for s in fetch_stats.failed_signatures if task_key_by_signature.get(s)])
             self.logger.info(
                 "retry 回写完成",
                 {
-                    "success_update_count": len(success_task_keys),
-                    "success_seal_attempt": success_seal_attempt,
-                    "no_data_update_count": len(no_data_task_keys),
-                    "failed_update_count": len(failed_updates),
+                    "success_delete_count": success_count,
+                    "no_data_update_count": no_data_count,
+                    "failed_update_count": failed_count,
                     "duration_seconds": round(time.monotonic() - cleanup_started, 3),
                 },
             )

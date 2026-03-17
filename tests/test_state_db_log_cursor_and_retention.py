@@ -448,7 +448,10 @@ class TestStateDBLogCursorAndRetention(unittest.TestCase):
         job_elapsed = time.monotonic() - job_begin
 
         self.assertEqual(len(tasks), 150)
-        self.assertEqual(len(jobs), 150)
+        # maintenance_jobs 会被 _trim_maintenance_logs 自动裁剪到保留上限
+        from app.settings import LOG_KEEP_MAINTENANCE_JOBS
+        expected_jobs = min(150, int(LOG_KEEP_MAINTENANCE_JOBS))
+        self.assertEqual(len(jobs), expected_jobs)
         self.assertLess(task_elapsed, 2.0, f"list_tasks 查询耗时过高: {task_elapsed:.3f}s")
         self.assertLess(job_elapsed, 2.0, f"list_maintenance_jobs 查询耗时过高: {job_elapsed:.3f}s")
 

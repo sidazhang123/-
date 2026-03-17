@@ -87,7 +87,7 @@ maintenance:
 
   # 单次批量落库触发阈值（按行）。
   # 约束：>= 200
-  write_flush_rows: 5000
+  write_flush_rows: 50000
 
   # 失败重试总轮次（含首轮）。
   # 当前需求固定 2，可按配置调整。
@@ -225,8 +225,9 @@ log_keep:
   task_per_task: 2000
 
   # 维护日志保留最近 N 个任务的全量日志（不按单任务条数截断）。
+  # 超出范围的旧任务记录和日志会被自动清理。
   # 约束：>= 1
-  maintenance_jobs: 2
+  maintenance_jobs: 10
 
   # 概念更新日志保留最近 N 个任务的全量日志。
   # 约束：>= 1
