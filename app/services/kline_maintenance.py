@@ -1297,12 +1297,10 @@ class MarketDataMaintenanceService:
             return FetchWriteStats(
                 total_tasks=0,
                 success_tasks=0,
-                no_data_tasks=0,
                 failed_tasks=0,
                 retry_rounds_used=0,
                 rows_written_by_freq={freq: 0 for freq in KLINE_FREQ_ORDER},
                 success_signatures=set(),
-                no_data_signatures=set(),
                 failed_signatures=set(),
                 failed_errors={},
             )
@@ -1794,21 +1792,37 @@ class MarketDataMaintenanceService:
 
         if self.state_db is not None and task_key_by_signature:
             cleanup_started = time.monotonic()
-            task_by_task_key = {
-                self._retry_task_key(task, mode="historical_backfill"): task
-                for task in executable_tasks
-            }
+
+            # 构建 task_key → MaintenanceTask 映射，用于新任务 INSERT
+            task_by_task_key: dict[str, MaintenanceTask] = {}
+            for task in executable_tasks:
+                sign = task.signature()
+                tk = task_key_by_signature.get(sign)
+                if tk:
+                    task_by_task_key[tk] = task
+
             all_inserts: list[dict[str, Any]] = []
             all_updates: list[dict[str, Any]] = []
-            # 1. success（非 no_data）：从 retry 表 DELETE
+
+            # 1. success（非 no_data）：attempt_count 置为 2，永不再执行
             real_success_signs = fetch_stats.success_signatures - fetch_stats.no_data_signatures
-            success_task_keys = [
-                task_key_by_signature[sign]
-                for sign in real_success_signs
-                if sign in task_key_by_signature
-            ]
-            if success_task_keys:
-                self.state_db.delete_maintenance_retry_tasks(success_task_keys)
+            for sign in real_success_signs:
+                tk = task_key_by_signature.get(sign)
+                if not tk:
+                    continue
+                if tk in new_task_keys:
+                    t = task_by_task_key[tk]
+                    all_inserts.append({
+                        "task_key": tk, "mode": "historical_backfill",
+                        "code": t.code, "freq": t.freq,
+                        "start_date": t.start_time[:10], "end_date": t.end_time[:10],
+                        "attempt_count": 2, "last_status": "success", "last_error": None,
+                    })
+                else:
+                    all_updates.append({
+                        "task_key": tk, "attempt_count": 2,
+                        "last_status": "success", "last_error": None,
+                    })
             self._report_progress(96.0, phase="cleanup")
 
             # 2. no_data：新任务 attempt_count=1，已有任务 attempt_count+1
@@ -1866,9 +1880,11 @@ class MarketDataMaintenanceService:
             self.logger.info(
                 "retry 回写完成",
                 {
-                    "success_delete_count": success_count,
-                    "no_data_update_count": no_data_count,
-                    "failed_update_count": failed_count,
+                    "insert_count": len(all_inserts),
+                    "update_count": len(all_updates),
+                    "success_count": success_count,
+                    "no_data_count": no_data_count,
+                    "failed_count": failed_count,
                     "duration_seconds": round(time.monotonic() - cleanup_started, 3),
                 },
             )
