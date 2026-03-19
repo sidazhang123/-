@@ -93,41 +93,6 @@ function splitStocks(text) {
     .filter(Boolean);
 }
 
-function localDateTimeOrNull(v) {
-  if (!v) return null;
-  return v.length === 16 ? `${v}:00` : v;
-}
-
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function datePartFromDate(value) {
-  return `${value.getFullYear()}-${pad2(value.getMonth() + 1)}-${pad2(value.getDate())}`;
-}
-
-function calendarMonthAgo(value) {
-  const base = value instanceof Date ? value : new Date();
-  const monthAnchor = new Date(base.getFullYear(), base.getMonth() - 1, 1);
-  const maxDay = new Date(monthAnchor.getFullYear(), monthAnchor.getMonth() + 1, 0).getDate();
-  const day = Math.min(base.getDate(), maxDay);
-  return new Date(monthAnchor.getFullYear(), monthAnchor.getMonth(), day);
-}
-
-function setDefaultTaskTimeRange(force = false) {
-  const startInput = $("startTs");
-  const endInput = $("endTs");
-  if (!startInput || !endInput) return;
-
-  if (force || !startInput.value) {
-    const monthAgo = calendarMonthAgo(new Date());
-    startInput.value = `${datePartFromDate(monthAgo)}T09:30`;
-  }
-  if (force || !endInput.value) {
-    endInput.value = `${datePartFromDate(new Date())}T15:00`;
-  }
-}
-
 function selectedGroupId() {
   return $("strategyGroupSelect").value;
 }
@@ -149,16 +114,20 @@ function clearGroupParamsCommentLineClasses() {
 
 function refreshGroupParamsCommentLineHighlights() {
   if (!state.groupParamsEditor) return;
-  clearGroupParamsCommentLineClasses();
   const editor = state.groupParamsEditor;
   const re = /"__comment[^"]*"\s*:/;
-  for (let i = 0; i < editor.lineCount(); i += 1) {
-    const text = editor.getLine(i) || "";
-    if (!re.test(text)) continue;
-    const handle = editor.getLineHandle(i);
-    editor.addLineClass(handle, "text", "cm-comment-line");
-    state.groupParamsCommentLines.push(handle);
-  }
+  const scrollInfo = editor.getScrollInfo();
+  editor.operation(() => {
+    clearGroupParamsCommentLineClasses();
+    for (let i = 0; i < editor.lineCount(); i += 1) {
+      const text = editor.getLine(i) || "";
+      if (!re.test(text)) continue;
+      const handle = editor.getLineHandle(i);
+      editor.addLineClass(handle, "text", "cm-comment-line");
+      state.groupParamsCommentLines.push(handle);
+    }
+    editor.scrollTo(scrollInfo.left, scrollInfo.top);
+  });
 }
 
 function setGroupParamsText(value) {
@@ -225,8 +194,6 @@ function collectMonitorSettings() {
   return {
     source_db: $("sourceDb").value || "",
     stocks_input: $("stocksInput").value || "",
-    start_ts: $("startTs").value || "",
-    end_ts: $("endTs").value || "",
     sample_size: getCurrentSampleSize(),
     strategy_group_id: selectedGroupId() || "",
     group_params_text: getGroupParamsText() || "{}",
@@ -371,8 +338,7 @@ function renderGroupDescription(group) {
   }
   if (group.execution && typeof group.execution === "object") {
     lines.push(
-      `执行特性：时间窗必填=${group.execution.requires_time_window ? "是" : "否"}，` +
-      `任务内并行=${group.execution.supports_intra_task_parallel ? "是" : "否"}，` +
+      `执行特性：任务内并行=${group.execution.supports_intra_task_parallel ? "是" : "否"}，` +
       `缓存=${group.execution.cache_scope || "none"}`
     );
   }
@@ -578,12 +544,6 @@ function applyMonitorSettings(settings) {
   if (typeof settings.stocks_input === "string") {
     $("stocksInput").value = settings.stocks_input;
   }
-  if (typeof settings.start_ts === "string") {
-    $("startTs").value = settings.start_ts;
-  }
-  if (typeof settings.end_ts === "string") {
-    $("endTs").value = settings.end_ts;
-  }
   const sampleInput = $("sampleSize");
   if (sampleInput) {
     sampleInput.value = String(normalizeSampleSize(settings.sample_size));
@@ -610,7 +570,6 @@ function applyMonitorSettings(settings) {
 async function loadMonitorSettings() {
   const data = await getJSON("/api/ui-settings/monitor");
   applyMonitorSettings(data.settings);
-  setDefaultTaskTimeRange(true);
   state.settingsDirty = false;
   setSaveHint("参数修改后请点“保存参数设置”。", "hint");
 }
@@ -1035,18 +994,9 @@ async function createTask(runMode = "full") {
     return;
   }
 
-  const startTs = localDateTimeOrNull($("startTs").value);
-  const endTs = localDateTimeOrNull($("endTs").value);
-  if (group?.execution?.requires_time_window && (!startTs || !endTs)) {
-    alert(`策略组 ${group.name || group.id} 要求开始时间和结束时间必填`);
-    return;
-  }
-
   const sampleSize = getCurrentSampleSize();
   const payload = {
     stocks: splitStocks($("stocksInput").value),
-    start_ts: startTs,
-    end_ts: endTs,
     source_db: $("sourceDb").value.trim() || null,
     run_mode: runMode,
     sample_size: sampleSize,
@@ -1160,7 +1110,7 @@ function bindEvents() {
     markSettingsDirty();
   });
 
-  const dirtyInputIds = ["sourceDb", "stocksInput", "startTs", "endTs"];
+  const dirtyInputIds = ["sourceDb", "stocksInput"];
   for (const id of dirtyInputIds) {
     const el = $(id);
     if (!el) continue;
@@ -1212,7 +1162,6 @@ async function init() {
     await loadMonitorSettings();
   } catch (err) {
     console.warn("加载监控页参数设置失败，将使用页面默认值", err);
-    setDefaultTaskTimeRange(true);
     setSaveHint("参数修改后请点“保存参数设置”。", "hint");
   }
   const params = new URLSearchParams(window.location.search);

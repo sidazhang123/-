@@ -106,7 +106,7 @@ class TaskManager:
         1. 校验运行前置条件、合并策略参数、写入任务主表并提交后台执行。
         边界条件：
         1. 维护任务运行中或概念任务运行中时，禁止创建筛选任务。
-        2. 若策略要求时间窗口，则 `start_ts/end_ts` 必填且必须满足 `start_ts <= end_ts`。
+        2. 若调用方显式传入时间窗口，则必须满足 `start_ts <= end_ts`。
         """
         source_db_path = Path(source_db) if source_db else SOURCE_DB_PATH
 
@@ -125,8 +125,6 @@ class TaskManager:
 
         if start_ts and end_ts and start_ts > end_ts:
             raise ValueError("start_ts 不能晚于 end_ts")
-        if group_meta.execution.requires_time_window and (start_ts is None or end_ts is None):
-            raise ValueError(f"策略组 {group_meta.group_id} 要求 start_ts 和 end_ts 必填")
 
         task_id = str(uuid4())
         self.state_db.create_task(
@@ -403,9 +401,6 @@ class TaskManager:
         3. 汇总阶段指标并写入 summary；
         4. 按股票逐个落库结果/状态并推进进度。
         """
-        if start_ts is None or end_ts is None:
-            raise ValueError(f"策略组 {strategy_group_id} 需要 start_ts 和 end_ts")
-
         remaining_codes = [code for code in codes if code not in processed_codes]
         if not remaining_codes:
             return processed_count, signal_code_set

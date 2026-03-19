@@ -98,7 +98,7 @@ strategies/
   "module": "strategies.groups.my_pattern_v1",
   "engine": "specialized",
   "execution": {
-    "requires_time_window": true,
+    "requires_time_window": false,
     "supports_intra_task_parallel": false,
     "cache_scope": "none",
     "required_timeframes": ["d"],
@@ -136,8 +136,8 @@ strategies/
 def run_my_pattern_v1_specialized(
     *,
     source_db_path: Path,
-    start_ts: datetime,
-    end_ts: datetime,
+  start_ts: datetime | None,
+  end_ts: datetime | None,
     codes: list[str],
     code_to_name: dict[str, str],
     group_params: dict[str, Any],
@@ -147,6 +147,12 @@ def run_my_pattern_v1_specialized(
     cache_dir: Path | None = None,
 ) -> tuple[dict[str, StockScanResult], dict[str, Any]]:
 ```
+
+筛选页时间参数约定：
+
+1. 前端不再暴露 `start_ts/end_ts` 输入框。
+2. specialized 策略在未显式传入时间窗时，应按策略所需最小历史量自行推导默认观察窗。
+3. `start_ts/end_ts` 仍可保留为脚本化调用或回测场景的可选入参，但不能再作为筛选页必填前置条件。
 
 实现建议顺序：
 

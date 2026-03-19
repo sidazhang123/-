@@ -511,8 +511,8 @@ def _scan_one_code(
 def run_bu_zhi_dao_v1_specialized(
     *,
     source_db_path: Path,
-    start_ts: datetime,
-    end_ts: datetime,
+    start_ts: datetime | None,
+    end_ts: datetime | None,
     codes: list[str],
     code_to_name: dict[str, str],
     group_params: dict[str, Any],
@@ -530,7 +530,7 @@ def run_bu_zhi_dao_v1_specialized(
     """
 
     _ = (cache_scope, cache_dir)
-    if start_ts > end_ts:
+    if start_ts is not None and end_ts is not None and start_ts > end_ts:
         raise ValueError("start_ts 不能晚于 end_ts")
 
     daily_params = _normalize_daily_params(group_params)
@@ -552,8 +552,13 @@ def run_bu_zhi_dao_v1_specialized(
             "execution_fallback_to_backtrader": execution_params["fallback_to_backtrader"],
         }
 
-    start_day = start_ts.date()
-    end_day = end_ts.date()
+    end_dt = end_ts or datetime.now()
+    screen_span_days = max(
+        int(daily_params["window_days"]) + int(daily_params["post_check_end_day"]) + 20,
+        60,
+    )
+    start_day = start_ts.date() if start_ts is not None else (end_dt - timedelta(days=screen_span_days)).date()
+    end_day = end_dt.date()
     lookback_days = int(daily_params["anchor_pre_volume_lookback_days"])
     fetch_padding = max(lookback_days + int(daily_params["window_days"]) + 10, 45)
     fetch_start_day = start_day - timedelta(days=fetch_padding)

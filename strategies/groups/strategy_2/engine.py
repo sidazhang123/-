@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -254,8 +254,8 @@ def _scan_one_code(
 def run_strategy_2_specialized(
     *,
     source_db_path: Path,
-    start_ts: datetime,
-    end_ts: datetime,
+    start_ts: datetime | None,
+    end_ts: datetime | None,
     codes: list[str],
     code_to_name: dict[str, str],
     group_params: dict[str, Any],
@@ -305,8 +305,9 @@ def run_strategy_2_specialized(
     # 注意：走到这里时，codes 可能已经被概念预筛选裁剪。
     # 不要在 engine 内再次按相同概念规则过滤，否则会造成双重筛选和统计失真。
 
-    start_day = start_ts.date()
-    end_day = end_ts.date()
+    end_dt = end_ts or datetime.now()
+    start_day = start_ts.date() if start_ts is not None else (end_dt - timedelta(days=90)).date()
+    end_day = end_dt.date()
 
     # ---- Phase 1: 数据加载 ----
     daily_phase_start = time.perf_counter()

@@ -5,7 +5,7 @@
   "module": "strategies.groups.strategy_2",
   "engine": "specialized",
   "execution": {
-    "requires_time_window": true,
+    "requires_time_window": false,
     "supports_intra_task_parallel": false,
     "cache_scope": "none",
     "required_timeframes": ["d"],

@@ -91,7 +91,12 @@ strategies.groups.<strategy_id>.engine:run_<strategy_id>_specialized
 
 只声明实际会加载的周期，不要无意义地把所有周期都填上。
 
-### 5.4 `param_help`
+### 5.4 `requires_time_window`
+
+筛选页不再要求前端传入 `start_ts/end_ts`，模板策略应将 `requires_time_window` 保持为 `false`。
+如果后续要支持脚本化回测，可以继续把这两个字段作为可选入参处理，但不要恢复成筛选页必填项。
+
+### 5.5 `param_help`
 
 这里不是装饰性文案，而是前端和后续 AI 真正会读的参数说明。要求：
 
@@ -117,7 +122,15 @@ strategies.groups.<strategy_id>.engine:run_<strategy_id>_specialized
 3. `result_map` 只包含命中或异常股票的约定。
 4. “概念过滤由 TaskManager 先执行”的边界。
 
-### 6.3 payload 硬约束
+### 6.3 时间参数约定
+
+`engine.py` 主入口中的 `start_ts/end_ts` 应视为可选输入：
+
+1. `end_ts` 为空时，默认按当前时间作为筛选锚点。
+2. `start_ts` 为空时，应按策略实际最小历史量自行推导默认观察窗。
+3. 不要再把它们当成筛选页必填参数。
+
+### 6.4 payload 硬约束
 
 每个信号的 payload 至少要保证：
 

@@ -10,7 +10,7 @@ Goal:
 from __future__ import annotations
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -339,8 +339,8 @@ def _scan_one_code(
 def run_bigbro_buy_specialized(
     *,
     source_db_path: Path,
-    start_ts: datetime,
-    end_ts: datetime,
+    start_ts: datetime | None,
+    end_ts: datetime | None,
     codes: list[str],
     code_to_name: dict[str, str],
     group_params: dict[str, Any],
@@ -369,8 +369,10 @@ def run_bigbro_buy_specialized(
             "execution_fallback_to_backtrader": execution_params["fallback_to_backtrader"],
         }
 
-    start_day = start_ts.date()
-    end_day = end_ts.date()
+    end_dt = end_ts or datetime.now()
+    screen_span_days = max(int(d_params.get("lookback_days", 10)) + 20, 90)
+    start_day = start_ts.date() if start_ts is not None else (end_dt - timedelta(days=screen_span_days)).date()
+    end_day = end_dt.date()
 
     daily_phase_start = time.perf_counter()
     daily_raw = _load_daily_bars(

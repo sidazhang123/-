@@ -968,8 +968,8 @@ def _scan_intraday_worker(payload: dict[str, Any]) -> dict[str, Any]:
 def run_burst_pullback_box_specialized(
     *,
     source_db_path: Path,
-    start_ts: datetime,
-    end_ts: datetime,
+    start_ts: datetime | None,
+    end_ts: datetime | None,
     codes: list[str],
     code_to_name: dict[str, str],
     group_params: dict[str, Any],
@@ -991,10 +991,19 @@ def run_burst_pullback_box_specialized(
     daily_params = _normalize_daily_params(group_params)
     intraday_params = _normalize_intraday_params(group_params)
     execution_params = _normalize_execution_params(group_params)
+    effective_end_ts = end_ts or datetime.now()
+    screening_span_days = max(
+        int(daily_params["lookback_days"])
+        + int(daily_params["post_days"])
+        + int(intraday_params["start_offset_days_max"])
+        + 20,
+        60,
+    )
+    effective_start_ts = start_ts or (effective_end_ts - timedelta(days=screening_span_days))
     total_daily_rows = _count_daily_rows(
         source_db_path=source_db_path,
-        start_ts=start_ts,
-        end_ts=end_ts,
+        start_ts=effective_start_ts,
+        end_ts=effective_end_ts,
         codes=codes,
         daily_params=daily_params,
         intraday_params=intraday_params,
@@ -1005,8 +1014,8 @@ def run_burst_pullback_box_specialized(
         source_db_path=source_db_path,
         cache_dir=strategy_cache_dir,
         strategy_group_id=strategy_group_id,
-        start_ts=start_ts,
-        end_ts=end_ts,
+        start_ts=effective_start_ts,
+        end_ts=effective_end_ts,
         codes=codes,
         daily_params=daily_params,
         intraday_params=intraday_params,
@@ -1113,8 +1122,8 @@ def run_burst_pullback_box_specialized(
             cache_key = _build_intraday_scan_cache_key(
                 source_db_path=source_db_path,
                 strategy_group_id=strategy_group_id,
-                start_ts=start_ts,
-                end_ts=end_ts,
+                start_ts=effective_start_ts,
+                end_ts=effective_end_ts,
                 code=code,
                 intraday_params=intraday_params,
                 anchors=payload["anchors"],

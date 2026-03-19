@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -296,8 +296,8 @@ def _scan_one_code(
 def run_xianren_zhilu_v1_specialized(
     *,
     source_db_path: Path,
-    start_ts: datetime,
-    end_ts: datetime,
+    start_ts: datetime | None,
+    end_ts: datetime | None,
     codes: list[str],
     code_to_name: dict[str, str],
     group_params: dict[str, Any],
@@ -327,8 +327,10 @@ def run_xianren_zhilu_v1_specialized(
     if not codes:
         return {}, empty_metrics
 
-    start_day = start_ts.date()
-    end_day = end_ts.date()
+    end_dt = end_ts or datetime.now()
+    fallback_days = max(int(daily_params["lookback_days"]) + 15, 60)
+    start_day = start_ts.date() if start_ts is not None else (end_dt - timedelta(days=fallback_days)).date()
+    end_day = end_dt.date()
 
     daily_phase_start = time.perf_counter()
     daily_raw = _load_daily_bars(

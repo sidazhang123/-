@@ -542,17 +542,6 @@ def save_monitor_ui_settings(payload: MonitorFormSettingsPayload, request: Reque
     registry = request.app.state.strategy_registry
     settings = payload.model_dump()
 
-    start_ts_raw = (settings.get("start_ts") or "").strip()
-    end_ts_raw = (settings.get("end_ts") or "").strip()
-    start_dt = _coerce_datetime(start_ts_raw) if start_ts_raw else None
-    end_dt = _coerce_datetime(end_ts_raw) if end_ts_raw else None
-    if start_ts_raw and start_dt is None:
-        raise HTTPException(status_code=400, detail="start_ts 格式不合法")
-    if end_ts_raw and end_dt is None:
-        raise HTTPException(status_code=400, detail="end_ts 格式不合法")
-    if start_dt and end_dt and start_dt > end_dt:
-        raise HTTPException(status_code=400, detail="start_ts 不能晚于 end_ts")
-
     group_id = str(settings.get("strategy_group_id") or "").strip()
     if not group_id:
         raise HTTPException(status_code=400, detail="strategy_group_id 不能为空")
@@ -598,8 +587,6 @@ def save_monitor_ui_settings(payload: MonitorFormSettingsPayload, request: Reque
     except StrategyRegistryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    settings["start_ts"] = start_ts_raw
-    settings["end_ts"] = end_ts_raw
     settings["strategy_group_id"] = group_id
     settings["group_params_text"] = group_params_text
     state_db.set_monitor_form_settings(settings)

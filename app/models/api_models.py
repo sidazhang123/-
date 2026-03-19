@@ -93,8 +93,6 @@ class MonitorFormSettingsPayload(BaseModel):
 
     source_db: str = ""
     stocks_input: str = ""
-    start_ts: str = ""
-    end_ts: str = ""
     sample_size: int = Field(default=20, ge=1, le=5000)
     strategy_group_id: str = ""
     group_params_text: str = "{}"

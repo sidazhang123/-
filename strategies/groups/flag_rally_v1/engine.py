@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -466,8 +466,8 @@ def _scan_one_code(
 def run_flag_rally_v1_specialized(
     *,
     source_db_path: Path,
-    start_ts: datetime,
-    end_ts: datetime,
+    start_ts: datetime | None,
+    end_ts: datetime | None,
     codes: list[str],
     code_to_name: dict[str, str],
     group_params: dict[str, Any],
@@ -500,11 +500,13 @@ def run_flag_rally_v1_specialized(
     if not codes:
         return {}, empty_metrics
 
-    start_day = start_ts.date()
-    end_day = end_ts.date()
+    end_dt = end_ts or datetime.now()
+    screen_span_days = max(int(daily_params["lookback_days"]) + 20, 60)
+    start_day = start_ts.date() if start_ts is not None else (end_dt - timedelta(days=screen_span_days)).date()
+    end_day = end_dt.date()
     lookback_days = int(daily_params["lookback_days"])
     fetch_padding = max(lookback_days + 30, 60)
-    fetch_start_day = start_day - pd.Timedelta(days=fetch_padding)
+    fetch_start_day = start_day - timedelta(days=fetch_padding)
 
     daily_phase_start = time.perf_counter()
     daily_raw = _load_daily_bars(
