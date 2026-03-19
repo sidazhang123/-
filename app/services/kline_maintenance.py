@@ -1297,10 +1297,12 @@ class MarketDataMaintenanceService:
             return FetchWriteStats(
                 total_tasks=0,
                 success_tasks=0,
+                no_data_tasks=0,
                 failed_tasks=0,
                 retry_rounds_used=0,
                 rows_written_by_freq={freq: 0 for freq in KLINE_FREQ_ORDER},
                 success_signatures=set(),
+                no_data_signatures=set(),
                 failed_signatures=set(),
                 failed_errors={},
             )

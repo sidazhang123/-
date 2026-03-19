@@ -284,6 +284,36 @@ class TestKlineMaintenanceRefactor(unittest.TestCase):
             count = int(con.execute("select count(*) from klines_d").fetchone()[0] or 0)
         self.assertGreaterEqual(count, 2)
 
+    def test_fetch_with_no_tasks_returns_zero_stats(self) -> None:
+        """
+        输入：
+        1. 空任务列表。
+        输出：
+        1. 直接返回零统计，不触发 simple_api 调用。
+        用途：
+        1. 验证无任务场景不会因统计对象参数缺失而报错。
+        边界条件：
+        1. no_data 与 failed 相关集合、计数均应为空。
+        """
+
+        stats = self.service._execute_fetch_and_write(
+            mode="historical_backfill",
+            tasks=[],
+            progress_start=55.0,
+            progress_end=95.0,
+        )
+
+        self.assertEqual(stats.total_tasks, 0)
+        self.assertEqual(stats.success_tasks, 0)
+        self.assertEqual(stats.no_data_tasks, 0)
+        self.assertEqual(stats.failed_tasks, 0)
+        self.assertEqual(stats.retry_rounds_used, 0)
+        self.assertEqual(stats.rows_written_by_freq, {freq: 0 for freq in km.KLINE_FREQ_ORDER})
+        self.assertEqual(stats.success_signatures, set())
+        self.assertEqual(stats.no_data_signatures, set())
+        self.assertEqual(stats.failed_signatures, set())
+        self.assertEqual(stats.failed_errors, {})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
