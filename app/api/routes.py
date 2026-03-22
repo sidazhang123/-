@@ -14,7 +14,6 @@ API 路由层。
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 from datetime import datetime, timedelta
 from typing import Any
@@ -39,9 +38,9 @@ from app.models.api_models import (
     MaintenanceStatusResponse,
     MonitorFormSettingsPayload,
     ResultStockConceptEntry,
+    ResultTopConceptSummary,
     ResultStockConceptsResponse,
     ResultsResponse,
-    StockStatesResponse,
     TaskControlResponse,
     TaskStatusResponse,
 )
@@ -282,31 +281,6 @@ def _help_text_from_node(node: Any) -> str:
     return ""
 
 
-def _build_annotated_params(params: Any, help_node: Any) -> Any:
-    """
-    递归给参数结构附加注释字段。
-
-    规则：
-    1. 根节点注释写入 `__comment__`。
-    2. 子字段注释写入 `__comment_<field>`。
-    3. 这些注释字段会随参数一起发给前端，用于渲染表单帮助信息，并在用户提交时做完整性校验。
-    """
-    if not isinstance(params, dict):
-        return params
-    result: dict[str, Any] = {}
-    root_help = _help_text_from_node(help_node)
-    if root_help:
-        result["__comment__"] = root_help
-
-    for key, value in params.items():
-        child_help_node = help_node.get(key) if isinstance(help_node, dict) else None
-        child_help_text = _help_text_from_node(child_help_node)
-        if child_help_text:
-            result[f"__comment_{key}"] = child_help_text
-        result[key] = _build_annotated_params(value, child_help_node)
-    return result
-
-
 def _strip_comment_keys(value: Any) -> Any:
     """
     递归删除参数结构中的 `__comment*` 注释字段。
@@ -323,49 +297,6 @@ def _strip_comment_keys(value: Any) -> Any:
             continue
         result[key] = _strip_comment_keys(child)
     return result
-
-
-def _validate_comment_integrity(
-    submitted: Any,
-    expected: Any,
-    *,
-    path: str = "group_params",
-) -> list[str]:
-    """
-    校验前端提交的注释字段没有丢失、篡改或新增。
-
-    这些 `__comment*` 字段来自 manifest 的 `param_help`，属于框架协议的一部分，
-    前端可以展示，但不允许用户修改其内容。
-    """
-    errors: list[str] = []
-    if not isinstance(submitted, dict) or not isinstance(expected, dict):
-        return errors
-
-    for key, expected_value in expected.items():
-        if key.startswith("__comment"):
-            if key not in submitted:
-                errors.append(f"{path} 缺少注释字段: {key}")
-                continue
-            if submitted.get(key) != expected_value:
-                errors.append(f"{path} 注释字段不可修改: {key}")
-
-    for key in submitted.keys():
-        if key.startswith("__comment") and key not in expected:
-            errors.append(f"{path} 存在未知注释字段: {key}")
-
-    for key, expected_value in expected.items():
-        if key.startswith("__comment"):
-            continue
-        if key in submitted and isinstance(submitted.get(key), dict) and isinstance(expected_value, dict):
-            child_path = f"{path}.{key}"
-            errors.extend(
-                _validate_comment_integrity(
-                    submitted.get(key),
-                    expected_value,
-                    path=child_path,
-                )
-            )
-    return errors
 
 
 def _validate_params_shape(
@@ -409,6 +340,21 @@ def _validate_params_shape(
             )
         return errors
 
+    if isinstance(template, list):
+        if not isinstance(submitted, list):
+            return [f"{path} 必须是数组"]
+        if not template:
+            return errors
+        for index, item in enumerate(submitted):
+            errors.extend(
+                _validate_params_shape(
+                    item,
+                    template[0],
+                    path=f"{path}[{index}]",
+                )
+            )
+        return errors
+
     if isinstance(template, bool):
         if not isinstance(submitted, bool):
             errors.append(f"{path} 必须是布尔值")
@@ -435,6 +381,65 @@ def _validate_params_shape(
     if not isinstance(submitted, type(template)):
         errors.append(f"{path} 类型不合法，应为 {type(template).__name__}")
     return errors
+
+
+def _parse_legacy_group_params(raw_value: Any) -> dict[str, Any]:
+    if not isinstance(raw_value, str):
+        return {}
+    text = raw_value.strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return _strip_comment_keys(parsed)
+
+
+def _normalize_monitor_settings_payload(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(settings) if isinstance(settings, dict) else {}
+    group_params = normalized.get("group_params")
+    if not isinstance(group_params, dict):
+        group_params = _parse_legacy_group_params(normalized.get("group_params_text"))
+    normalized["group_params"] = group_params if isinstance(group_params, dict) else {}
+    normalized.pop("group_params_text", None)
+    return normalized
+
+
+def _build_top_concept_summaries(
+    concept_map: dict[str, list[dict[str, Any]]],
+    *,
+    total_hit_stocks: int,
+) -> list[ResultTopConceptSummary]:
+    concept_counter: dict[str, set[str]] = {}
+    for code, entries in concept_map.items():
+        code_token = str(code or "").strip()
+        if not code_token:
+            continue
+        seen_boards: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            board_name = str(entry.get("board_name") or "").strip()
+            if not board_name or board_name in seen_boards:
+                continue
+            seen_boards.add(board_name)
+            concept_counter.setdefault(board_name, set()).add(code_token)
+
+    sorted_items = sorted(
+        concept_counter.items(),
+        key=lambda item: (-len(item[1]), item[0]),
+    )
+    return [
+        ResultTopConceptSummary(
+            board_name=board_name,
+            hit_stock_count=len(code_set),
+            total_hit_stocks=total_hit_stocks,
+        )
+        for board_name, code_set in sorted_items[:3]
+    ]
 
 
 @router.get("/health")
@@ -522,7 +527,7 @@ def get_monitor_ui_settings(request: Request) -> dict[str, Any]:
     1. 关键边界与异常分支按函数体内判断与调用约定处理。
     """
     state_db = request.app.state.state_db
-    return {"settings": state_db.get_monitor_form_settings()}
+    return {"settings": _normalize_monitor_settings_payload(state_db.get_monitor_form_settings())}
 
 
 @router.post("/ui-settings/monitor")
@@ -551,31 +556,11 @@ def save_monitor_ui_settings(payload: MonitorFormSettingsPayload, request: Reque
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    group_params_text = settings.get("group_params_text")
-    if not isinstance(group_params_text, str):
-        raise HTTPException(status_code=400, detail="group_params_text 必须是字符串")
-    group_params_text = group_params_text.strip() or "{}"
+    group_params = settings.get("group_params")
+    if not isinstance(group_params, dict):
+        raise HTTPException(status_code=400, detail="group_params 必须是对象")
 
-    try:
-        parsed_params = json.loads(group_params_text)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"group_params JSON 格式错误: line {exc.lineno}, col {exc.colno}",
-        ) from exc
-    if not isinstance(parsed_params, dict):
-        raise HTTPException(status_code=400, detail="group_params JSON 顶层必须是对象")
-
-    expected_annotated = _build_annotated_params(copy.deepcopy(meta.default_params), meta.param_help or {})
-    comment_errors = _validate_comment_integrity(parsed_params, expected_annotated, path="group_params")
-    if comment_errors:
-        raise HTTPException(
-            status_code=400,
-            detail="注释字段不可修改或删除: " + "；".join(comment_errors[:8]),
-        )
-
-    cleaned_params = _strip_comment_keys(parsed_params)
-    data_errors = _validate_params_shape(cleaned_params, meta.default_params, path="group_params")
+    data_errors = _validate_params_shape(group_params, meta.default_params, path="group_params")
     if data_errors:
         raise HTTPException(
             status_code=400,
@@ -583,12 +568,12 @@ def save_monitor_ui_settings(payload: MonitorFormSettingsPayload, request: Reque
         )
 
     try:
-        registry.merge_group_params(group_id, cleaned_params)
+        registry.merge_group_params(group_id, group_params)
     except StrategyRegistryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     settings["strategy_group_id"] = group_id
-    settings["group_params_text"] = group_params_text
+    settings["group_params"] = group_params
     state_db.set_monitor_form_settings(settings)
     return {"settings": settings}
 
@@ -665,7 +650,6 @@ def create_task(payload: CreateTaskRequest, request: Request) -> CreateTaskRespo
     return CreateTaskResponse(task_id=task_id)
 
 
-@router.post("/tasks/{task_id}/pause", response_model=TaskControlResponse)
 @router.get("/tasks/{task_id}/result-stock-concepts", response_model=ResultStockConceptsResponse)
 def get_result_stock_concepts(task_id: str, request: Request) -> ResultStockConceptsResponse:
     """
@@ -690,17 +674,19 @@ def get_result_stock_concepts(task_id: str, request: Request) -> ResultStockConc
     formula = summary.get("concept_formula") if isinstance(summary.get("concept_formula"), dict) else {}
 
     if not codes:
-        return ResultStockConceptsResponse(task_id=task_id, formula=formula, items={})
+        return ResultStockConceptsResponse(task_id=task_id, formula=formula, top_concepts=[], items={})
 
     market_db = MarketDataDB(task["source_db"])
     raw_map = market_db.get_stock_concepts_by_codes(codes)
+    top_concepts = _build_top_concept_summaries(raw_map, total_hit_stocks=len(codes))
     items = {
         code: [ResultStockConceptEntry(**entry) for entry in entries]
         for code, entries in raw_map.items()
     }
-    return ResultStockConceptsResponse(task_id=task_id, formula=formula, items=items)
+    return ResultStockConceptsResponse(task_id=task_id, formula=formula, top_concepts=top_concepts, items=items)
 
 
+@router.post("/tasks/{task_id}/pause", response_model=TaskControlResponse)
 def pause_task(task_id: str, request: Request) -> TaskControlResponse:
     """
     输入：
@@ -1153,34 +1139,6 @@ def get_stock_chart(
         "candles": candles,
     }
 
-
-@router.get("/tasks/{task_id}/stock-states", response_model=StockStatesResponse)
-def get_stock_states(
-    task_id: str,
-    request: Request,
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=200, ge=1, le=5000),
-) -> StockStatesResponse:
-    """
-    输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
-    3. offset: 输入参数，具体约束以调用方和实现为准。
-    4. limit: 输入参数，具体约束以调用方和实现为准。
-    输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
-    用途：
-    1. 执行 `get_stock_states` 对应的业务或工具逻辑。
-    边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
-    """
-    state_db = request.app.state.state_db
-    if not state_db.get_task(task_id):
-        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
-    items = state_db.get_stock_states(task_id=task_id, offset=offset, limit=limit)
-    return StockStatesResponse(items=items)
-
-
 @router.post("/maintenance/jobs", response_model=MaintenanceCreateResponse)
 def create_maintenance_job(payload: MaintenanceCreateRequest, request: Request) -> MaintenanceCreateResponse:
     """
@@ -1550,14 +1508,13 @@ def _concept_status_dict(job: dict[str, Any]) -> dict[str, Any]:
 
 @router.get("/tasks/{task_id}/stream")
 async def task_event_stream(task_id: str, request: Request):
-    """SSE 推送：筛选任务状态 + 增量日志 + 逐股进度（监控页）。"""
+    """SSE 推送：筛选任务状态 + 增量日志（监控页）。"""
     state_db = request.app.state.state_db
 
     async def generate():
         info_cursor: int | None = None
         error_cursor: int | None = None
         last_status_key: tuple | None = None
-        last_stock_trigger: tuple | None = None
 
         yield _sse_event("connected", {"task_id": task_id})
 
@@ -1631,19 +1588,6 @@ async def task_event_stream(task_id: str, request: Request):
                     yield _sse_event("logs-error", error_items)
                 elif error_cursor is None:
                     error_cursor = 0
-            except Exception:
-                pass
-
-            # -- 逐股进度（处理数或命中数变化时推送） --
-            try:
-                stock_trigger = (status_data["processed_stocks"], status_data["result_count"])
-                if stock_trigger != last_stock_trigger:
-                    last_stock_trigger = stock_trigger
-                    stock_items = await asyncio.to_thread(
-                        state_db.get_stock_states,
-                        task_id=task_id, offset=0, limit=3000,
-                    )
-                    yield _sse_event("stock-states", stock_items)
             except Exception:
                 pass
 

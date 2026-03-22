@@ -77,11 +77,6 @@ class ResultsResponse(BaseModel):
     has_more: bool
     items: list[dict[str, Any]]
 
-
-class StockStatesResponse(BaseModel):
-    items: list[dict[str, Any]]
-
-
 class TaskControlResponse(BaseModel):
     task_id: str
     status: str
@@ -95,7 +90,7 @@ class MonitorFormSettingsPayload(BaseModel):
     stocks_input: str = ""
     sample_size: int = Field(default=20, ge=1, le=5000)
     strategy_group_id: str = ""
-    group_params_text: str = "{}"
+    group_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class MaintenanceCreateRequest(BaseModel):
@@ -197,7 +192,14 @@ class ResultStockConceptEntry(BaseModel):
     updated_at: datetime | None = None
 
 
+class ResultTopConceptSummary(BaseModel):
+    board_name: str
+    hit_stock_count: int
+    total_hit_stocks: int
+
+
 class ResultStockConceptsResponse(BaseModel):
     task_id: str
     formula: dict[str, Any] = Field(default_factory=dict)
+    top_concepts: list[ResultTopConceptSummary] = Field(default_factory=list)
     items: dict[str, list[ResultStockConceptEntry]] = Field(default_factory=dict)

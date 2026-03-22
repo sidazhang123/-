@@ -2,8 +2,8 @@
 状态库访问层（StateDB）。
 
 职责：
-1. 管理任务状态、任务日志、筛选结果、逐股进度与前端配置持久化。
-2. 负责 schema 初始化与版本升级策略（当前 schema_version=v4）。
+1. 管理任务状态、任务日志、筛选结果与前端配置持久化。
+2. 负责 schema 初始化与版本升级策略（当前 schema_version=v5）。
 3. 对外提供线程安全读写接口，供任务管理器与 API 路由调用。
 
 设计约束：
@@ -38,9 +38,10 @@ def _json_dumps(obj: Any) -> str:
 
 
 class StateDB:
-    SCHEMA_VERSION = "4"
+    SCHEMA_VERSION = "5"
     RETRY_TASK_QUERY_BATCH_SIZE = 2000
-    MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v1"
+    MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v2"
+    LEGACY_MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v1"
     MAINTENANCE_FORM_SETTINGS_KEY = "ui.maintenance.form_settings.v1"
 
     def __init__(self, db_path: Path):
@@ -139,7 +140,7 @@ class StateDB:
         """
         初始化或升级状态库 schema。
 
-        当前目标版本：`schema_version = 4`。
+        当前目标版本：`schema_version = 5`。
         升级策略采用非破坏式迁移：优先保留任务和日志历史，再补齐新增表、索引和序列，最后更新 `app_meta`。
         """
         def _op(con: duckdb.DuckDBPyConnection) -> None:
@@ -233,24 +234,6 @@ class StateDB:
                     signal_label varchar not null,
                     rule_payload_json varchar,
                     created_at timestamp not null
-                )
-                """
-            )
-
-            con.execute(
-                """
-                create table if not exists task_stock_states (
-                    task_id varchar not null,
-                    code varchar not null,
-                    name varchar,
-                    status varchar not null,
-                    processed_bars bigint default 0,
-                    signal_count bigint default 0,
-                    last_dt timestamp,
-                    last_rules_json varchar,
-                    error_message varchar,
-                    updated_at timestamp not null,
-                    primary key (task_id, code)
                 )
                 """
             )
@@ -477,7 +460,9 @@ class StateDB:
         边界条件：
         1. 关键边界与异常分支按函数体内判断与调用约定处理。
         """
-        value = self.get_meta_json(self.MONITOR_FORM_SETTINGS_KEY, default={})
+        value = self.get_meta_json(self.MONITOR_FORM_SETTINGS_KEY, default=None)
+        if value is None:
+            value = self.get_meta_json(self.LEGACY_MONITOR_FORM_SETTINGS_KEY, default={})
         if isinstance(value, dict):
             return value
         return {}
@@ -1900,6 +1885,17 @@ class StateDB:
             边界条件：
             1. 关键边界与异常分支按函数体内判断与调用约定处理。
             """
+            table_exists = con.execute(
+                """
+                select 1
+                from information_schema.tables
+                where table_schema = current_schema()
+                  and table_name = 'task_stock_states'
+                """
+            ).fetchone()
+            if not table_exists:
+                return
+
             con.execute(
                 """
                 insert into task_stock_states (
@@ -2357,6 +2353,17 @@ class StateDB:
             边界条件：
             1. 关键边界与异常分支按函数体内判断与调用约定处理。
             """
+            table_exists = con.execute(
+                """
+                select 1
+                from information_schema.tables
+                where table_schema = current_schema()
+                  and table_name = 'task_stock_states'
+                """
+            ).fetchone()
+            if not table_exists:
+                return []
+
             return con.execute(
                 """
                 select code, name, status, processed_bars, signal_count, last_dt, last_rules_json, error_message, updated_at
@@ -2724,27 +2731,32 @@ class StateDB:
         1. 不改变既有 completed/failed 口径与 task_results 去重口径。
         """
 
-        def _op(con: duckdb.DuckDBPyConnection) -> tuple[list[tuple[Any, ...]], list[tuple[Any, ...]]]:
+        task = self.get_task(task_id)
+        if not task:
+            return set(), set()
+
+        summary = task.get("summary") if isinstance(task.get("summary"), dict) else {}
+        resolved_codes = summary.get("resolved_codes") if isinstance(summary.get("resolved_codes"), list) else []
+        processed_count = int(summary.get("processed_codes") or task.get("processed_stocks") or 0)
+        processed_count = max(0, min(processed_count, len(resolved_codes)))
+        processed_codes = {
+            str(code)
+            for code in resolved_codes[:processed_count]
+            if isinstance(code, str) and code
+        }
+
+        def _op(con: duckdb.DuckDBPyConnection) -> list[tuple[Any, ...]]:
             """
             输入：
             1. con: 状态库读连接。
             输出：
-            1. 返回已处理股票行与结果股票行。
+            1. 返回结果股票行。
             用途：
-            1. 复用同一条读连接，减少任务恢复阶段的重复独立查询。
+            1. 读取恢复任务所需的已命中股票集合。
             边界条件：
             1. 查询为空时返回空列表，由外层统一转为集合。
             """
-            processed_rows = con.execute(
-                """
-                select code
-                from task_stock_states
-                where task_id = ?
-                  and status in ('completed', 'failed')
-                """,
-                [task_id],
-            ).fetchall()
-            signal_rows = con.execute(
+            return con.execute(
                 """
                 select distinct code
                 from task_results
@@ -2752,10 +2764,10 @@ class StateDB:
                 """,
                 [task_id],
             ).fetchall()
-            return processed_rows, signal_rows
 
-        processed_rows, signal_rows = self._with_read_connection(_op)
-        return ({row[0] for row in processed_rows}, {row[0] for row in signal_rows})
+        signal_rows = self._with_read_connection(_op)
+        signal_code_set = {str(row[0]) for row in signal_rows if row and row[0]}
+        return processed_codes, signal_code_set
 
     def get_result_code_set(self, task_id: str) -> set[str]:
         """

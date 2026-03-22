@@ -227,38 +227,10 @@ class TestStateDBLogCursorAndRetention(unittest.TestCase):
 
         task_id = "task-recovery-snapshot-case"
         self._create_task(task_id)
-        self.state_db.upsert_stock_state(
-            task_id=task_id,
-            code="000001",
-            name="平安银行",
-            status="completed",
-            processed_bars=100,
-            signal_count=1,
-            last_dt=datetime(2026, 2, 17, 15, 0, 0),
-            last_rules={"ok": True},
-            error_message=None,
-        )
-        self.state_db.upsert_stock_state(
-            task_id=task_id,
-            code="000002",
-            name="万科A",
-            status="failed",
-            processed_bars=0,
-            signal_count=0,
-            last_dt=None,
-            last_rules=None,
-            error_message="boom",
-        )
-        self.state_db.upsert_stock_state(
-            task_id=task_id,
-            code="000004",
-            name="国华网安",
-            status="running",
-            processed_bars=10,
-            signal_count=0,
-            last_dt=None,
-            last_rules=None,
-            error_message=None,
+        self.state_db.update_task_fields(
+            task_id,
+            processed_stocks=2,
+            summary_json='{"resolved_codes":["000001","000002","000004"],"processed_codes":2}',
         )
         self.state_db.add_result(
             task_id=task_id,

@@ -5793,3 +5793,465 @@ Traceback (most recent call last):
   File "C:\Users\sida\AppData\Local\Programs\Python\Python310\lib\asyncio\locks.py", line 213, in wait
     await fut
 asyncio.exceptions.CancelledError: Task cancelled, timeout graceful shutdown exceeded
+2026-03-22 16:51:20,750 [INFO] uvicorn.error - Started server process [9644]
+2026-03-22 16:51:20,751 [INFO] uvicorn.error - Waiting for application startup.
+2026-03-22 16:51:20,764 [INFO] screening_app - zsdtdx 配置路径已设置: C:\Users\pkwccheng\Desktop\图形量价选股\app\zsdtdx_config.yaml
+2026-03-22 16:51:20,764 [INFO] screening_app - zsdtdx 并行抓取器启动预热已跳过 | {"startup_prewarm_parallel_fetcher_enabled": false, "configured_workers": 8}
+2026-03-22 16:51:20,765 [INFO] uvicorn.error - Application startup complete.
+2026-03-22 16:51:20,766 [INFO] uvicorn.error - Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-03-22 16:51:25,307 [INFO] uvicorn.access - 127.0.0.1:6559 - "GET / HTTP/1.1" 200
+2026-03-22 16:51:25,322 [INFO] uvicorn.access - 127.0.0.1:6559 - "GET /static/styles.css?v=20260322-monitor-param-panel HTTP/1.1" 200
+2026-03-22 16:51:25,323 [INFO] uvicorn.access - 127.0.0.1:6560 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 200
+2026-03-22 16:51:25,323 [INFO] uvicorn.access - 127.0.0.1:6561 - "GET /static/vendor/lucide/lucide.min.js HTTP/1.1" 200
+2026-03-22 16:51:25,540 [INFO] uvicorn.access - 127.0.0.1:6561 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 16:51:25,556 [INFO] uvicorn.access - 127.0.0.1:6560 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 16:51:25,611 [INFO] uvicorn.access - 127.0.0.1:6560 - "GET /static/vendor/fonts/inter-variable.woff2 HTTP/1.1" 200
+2026-03-22 16:51:25,619 [INFO] uvicorn.access - 127.0.0.1:6560 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 16:51:25,656 [INFO] uvicorn.access - 127.0.0.1:6560 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 16:51:25,665 [INFO] uvicorn.access - 127.0.0.1:6560 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37 HTTP/1.1" 200
+2026-03-22 16:51:25,683 [INFO] uvicorn.access - 127.0.0.1:6560 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 16:51:25,684 [INFO] uvicorn.access - 127.0.0.1:6559 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 16:51:25,746 [INFO] uvicorn.access - 127.0.0.1:6559 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/stream HTTP/1.1" 200
+2026-03-22 16:51:25,748 [INFO] uvicorn.access - 127.0.0.1:6560 - "GET /static/vendor/fonts/jetbrains-mono-regular.woff2 HTTP/1.1" 200
+2026-03-22 16:51:26,484 [INFO] uvicorn.access - 127.0.0.1:6559 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 16:52:24,290 [INFO] uvicorn.access - 127.0.0.1:6568 - "GET /maintenance HTTP/1.1" 200
+2026-03-22 16:52:24,326 [INFO] uvicorn.access - 127.0.0.1:6568 - "GET /static/styles.css?v=20260311-compact-button-groups HTTP/1.1" 200
+2026-03-22 16:52:24,330 [INFO] uvicorn.access - 127.0.0.1:6569 - "GET /static/maintenance.js?v=20260311-error-tab-alert HTTP/1.1" 200
+2026-03-22 16:52:24,542 [INFO] uvicorn.access - 127.0.0.1:6569 - "GET /api/ui-settings/maintenance HTTP/1.1" 200
+2026-03-22 16:52:24,548 [INFO] uvicorn.access - 127.0.0.1:6568 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 16:52:24,556 [INFO] uvicorn.access - 127.0.0.1:6569 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 16:52:24,588 [INFO] uvicorn.access - 127.0.0.1:6570 - "GET /api/maintenance/jobs?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 16:52:24,617 [INFO] uvicorn.access - 127.0.0.1:6570 - "GET /api/maintenance/jobs/6088534a-989f-42ec-aff3-2bfb2e94b378/stream HTTP/1.1" 200
+2026-03-22 16:52:24,997 [INFO] uvicorn.access - 127.0.0.1:6568 - "GET /api/maintenance/runtime-metadata HTTP/1.1" 200
+2026-03-22 16:52:30,086 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /results HTTP/1.1" 200
+2026-03-22 16:52:30,115 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /static/vendor/echarts/echarts.min.js HTTP/1.1" 200
+2026-03-22 16:52:30,116 [INFO] uvicorn.access - 127.0.0.1:6576 - "GET /static/results.js?v=20260322-results-top-concepts HTTP/1.1" 200
+2026-03-22 16:52:30,285 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 16:52:30,288 [INFO] uvicorn.access - 127.0.0.1:6576 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 16:52:30,318 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37 HTTP/1.1" 200
+2026-03-22 16:52:30,333 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 16:52:30,352 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/result-stocks HTTP/1.1" 200
+2026-03-22 16:52:30,507 [INFO] uvicorn.access - 127.0.0.1:6577 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:52:30,563 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/result-stock-concepts HTTP/1.1" 200
+2026-03-22 16:52:30,596 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/status-stream HTTP/1.1" 200
+2026-03-22 16:52:30,602 [INFO] uvicorn.access - 127.0.0.1:6575 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 16:52:31,055 [INFO] uvicorn.access - 127.0.0.1:6577 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:52:34,307 [INFO] uvicorn.access - 127.0.0.1:6577 - "GET / HTTP/1.1" 200
+2026-03-22 16:52:34,349 [INFO] uvicorn.access - 127.0.0.1:6577 - "GET /static/styles.css?v=20260322-monitor-param-panel HTTP/1.1" 304
+2026-03-22 16:52:34,399 [INFO] uvicorn.access - 127.0.0.1:6577 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 16:52:34,403 [INFO] uvicorn.access - 127.0.0.1:6577 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 16:52:34,419 [INFO] uvicorn.access - 127.0.0.1:6583 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 16:52:34,420 [INFO] uvicorn.access - 127.0.0.1:6582 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 16:52:34,434 [INFO] uvicorn.access - 127.0.0.1:6582 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 16:52:34,441 [INFO] uvicorn.access - 127.0.0.1:6582 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37 HTTP/1.1" 200
+2026-03-22 16:52:34,460 [INFO] uvicorn.access - 127.0.0.1:6582 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 16:52:34,461 [INFO] uvicorn.access - 127.0.0.1:6583 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 16:52:34,487 [INFO] uvicorn.access - 127.0.0.1:6583 - "GET /api/tasks/5f1cb5b3-cfca-4f09-8b33-6f2d0bf38f37/stream HTTP/1.1" 200
+2026-03-22 16:52:50,250 [INFO] uvicorn.access - 127.0.0.1:6584 - "POST /api/tasks HTTP/1.1" 200
+2026-03-22 16:52:50,256 [INFO] uvicorn.access - 127.0.0.1:6584 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 16:52:50,262 [INFO] uvicorn.access - 127.0.0.1:6584 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 16:52:50,272 [INFO] uvicorn.access - 127.0.0.1:6585 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 16:52:50,274 [INFO] uvicorn.access - 127.0.0.1:6584 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 16:52:50,279 [INFO] uvicorn.access - 127.0.0.1:6584 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 16:52:50,296 [INFO] screening_app - [9cda7c87-40db-4000-9330-0a40236d28f0] 任务已开始
+2026-03-22 16:52:50,301 [INFO] screening_app - [9cda7c87-40db-4000-9330-0a40236d28f0] 策略组加载完成
+2026-03-22 16:52:50,417 [INFO] screening_app - [9cda7c87-40db-4000-9330-0a40236d28f0] 专用引擎阶段开始
+2026-03-22 16:53:11,827 [INFO] screening_app - [9cda7c87-40db-4000-9330-0a40236d28f0] 专用引擎阶段完成
+2026-03-22 16:53:25,302 [INFO] uvicorn.access - 127.0.0.1:6590 - "GET /static/results.js?v=20260322-results-top-concepts HTTP/1.1" 304
+2026-03-22 16:53:25,570 [INFO] uvicorn.access - 127.0.0.1:6591 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 16:53:25,576 [INFO] uvicorn.access - 127.0.0.1:6590 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 16:53:25,599 [INFO] uvicorn.access - 127.0.0.1:6590 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 16:53:25,662 [INFO] uvicorn.access - 127.0.0.1:6590 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 16:53:25,667 [INFO] uvicorn.access - 127.0.0.1:6590 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 16:53:25,680 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 16:53:25,711 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stock-concepts HTTP/1.1" 200
+2026-03-22 16:53:25,716 [INFO] uvicorn.access - 127.0.0.1:6590 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:53:25,786 [INFO] uvicorn.access - 127.0.0.1:6590 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/status-stream HTTP/1.1" 200
+2026-03-22 16:53:26,090 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:53:30,502 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 16:53:30,526 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 16:53:30,539 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 16:53:30,558 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:53:30,602 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/status-stream HTTP/1.1" 200
+2026-03-22 16:53:30,910 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:53:34,663 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 16:53:34,680 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:53:35,025 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:53:36,688 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 16:53:36,708 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:53:37,056 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:53:38,698 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 16:53:38,722 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:53:39,068 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:53:40,705 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 16:53:40,724 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:53:41,072 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:53:42,711 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 16:53:42,732 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:53:43,087 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:53:43,258 [INFO] screening_app - [9cda7c87-40db-4000-9330-0a40236d28f0] 任务已完成
+2026-03-22 16:53:44,729 [INFO] uvicorn.access - 127.0.0.1:6592 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 16:53:44,738 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 16:53:44,906 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 16:53:45,379 [INFO] uvicorn.access - 127.0.0.1:6593 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 16:53:54,367 [INFO] uvicorn.access - 127.0.0.1:6594 - "GET / HTTP/1.1" 200
+2026-03-22 16:53:54,406 [INFO] uvicorn.access - 127.0.0.1:6594 - "GET /static/styles.css?v=20260322-monitor-param-panel HTTP/1.1" 304
+2026-03-22 16:53:54,407 [INFO] uvicorn.access - 127.0.0.1:6595 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 304
+2026-03-22 16:53:54,495 [INFO] uvicorn.access - 127.0.0.1:6595 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 16:53:54,496 [INFO] uvicorn.access - 127.0.0.1:6594 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 16:53:54,518 [INFO] uvicorn.access - 127.0.0.1:6595 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 16:53:54,525 [INFO] uvicorn.access - 127.0.0.1:6595 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 16:53:54,531 [INFO] uvicorn.access - 127.0.0.1:6595 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 16:53:54,538 [INFO] uvicorn.access - 127.0.0.1:6595 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 16:53:54,553 [INFO] uvicorn.access - 127.0.0.1:6595 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 16:53:54,554 [INFO] uvicorn.access - 127.0.0.1:6596 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 16:53:54,576 [INFO] uvicorn.access - 127.0.0.1:6596 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:01:26,963 [INFO] uvicorn.access - 127.0.0.1:6732 - "GET /static/styles.css?v=20260322-monitor-param-panel HTTP/1.1" 200
+2026-03-22 17:01:26,968 [INFO] uvicorn.access - 127.0.0.1:6732 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:01:27,079 [INFO] uvicorn.access - 127.0.0.1:6732 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:01:32,673 [INFO] uvicorn.access - 127.0.0.1:6740 - "GET / HTTP/1.1" 200
+2026-03-22 17:01:32,710 [INFO] uvicorn.access - 127.0.0.1:6740 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:01:32,721 [INFO] uvicorn.access - 127.0.0.1:6740 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:01:32,725 [INFO] uvicorn.access - 127.0.0.1:6741 - "GET /static/vendor/lucide/lucide.min.js HTTP/1.1" 200
+2026-03-22 17:01:32,726 [INFO] uvicorn.access - 127.0.0.1:6742 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 200
+2026-03-22 17:01:32,944 [INFO] uvicorn.access - 127.0.0.1:6740 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:01:32,946 [INFO] uvicorn.access - 127.0.0.1:6742 - "GET /static/vendor/fonts/inter-variable.woff2 HTTP/1.1" 200
+2026-03-22 17:01:32,956 [INFO] uvicorn.access - 127.0.0.1:6741 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:01:32,969 [INFO] uvicorn.access - 127.0.0.1:6741 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:01:32,975 [INFO] uvicorn.access - 127.0.0.1:6741 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:01:32,978 [INFO] uvicorn.access - 127.0.0.1:6742 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:01:33,037 [INFO] uvicorn.access - 127.0.0.1:6742 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:01:33,047 [INFO] uvicorn.access - 127.0.0.1:6742 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:01:33,066 [INFO] uvicorn.access - 127.0.0.1:6742 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:01:33,068 [INFO] uvicorn.access - 127.0.0.1:6741 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:01:33,077 [INFO] uvicorn.access - 127.0.0.1:6741 - "GET /static/vendor/fonts/jetbrains-mono-regular.woff2 HTTP/1.1" 200
+2026-03-22 17:01:33,118 [INFO] uvicorn.access - 127.0.0.1:6741 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:01:43,418 [INFO] uvicorn.access - 127.0.0.1:6756 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:01:43,430 [INFO] uvicorn.access - 127.0.0.1:6756 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:04:36,072 [INFO] uvicorn.access - 127.0.0.1:7197 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:04:36,092 [INFO] uvicorn.access - 127.0.0.1:7197 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:06:21,443 [INFO] uvicorn.access - 127.0.0.1:7319 - "GET / HTTP/1.1" 200
+2026-03-22 17:06:21,481 [INFO] uvicorn.access - 127.0.0.1:7319 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:06:21,495 [INFO] uvicorn.access - 127.0.0.1:7319 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:06:21,496 [INFO] uvicorn.access - 127.0.0.1:7320 - "GET /static/vendor/lucide/lucide.min.js HTTP/1.1" 200
+2026-03-22 17:06:21,497 [INFO] uvicorn.access - 127.0.0.1:7321 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 200
+2026-03-22 17:06:21,716 [INFO] uvicorn.access - 127.0.0.1:7319 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:06:21,719 [INFO] uvicorn.access - 127.0.0.1:7321 - "GET /static/vendor/fonts/inter-variable.woff2 HTTP/1.1" 200
+2026-03-22 17:06:21,740 [INFO] uvicorn.access - 127.0.0.1:7320 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:06:21,742 [INFO] uvicorn.access - 127.0.0.1:7321 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:06:21,745 [INFO] uvicorn.access - 127.0.0.1:7320 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:06:21,752 [INFO] uvicorn.access - 127.0.0.1:7320 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:06:21,775 [INFO] uvicorn.access - 127.0.0.1:7320 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:06:21,791 [INFO] uvicorn.access - 127.0.0.1:7320 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:06:21,808 [INFO] uvicorn.access - 127.0.0.1:7320 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:06:21,810 [INFO] uvicorn.access - 127.0.0.1:7321 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:06:21,836 [INFO] uvicorn.access - 127.0.0.1:7321 - "GET /static/vendor/fonts/jetbrains-mono-regular.woff2 HTTP/1.1" 200
+2026-03-22 17:06:21,855 [INFO] uvicorn.access - 127.0.0.1:7321 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:07:25,775 [INFO] uvicorn.access - 127.0.0.1:7344 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:07:25,790 [INFO] uvicorn.access - 127.0.0.1:7344 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:10:00,047 [INFO] uvicorn.access - 127.0.0.1:7426 - "GET / HTTP/1.1" 200
+2026-03-22 17:11:24,657 [INFO] uvicorn.access - 127.0.0.1:7536 - "GET / HTTP/1.1" 200
+2026-03-22 17:11:24,666 [INFO] uvicorn.access - 127.0.0.1:7536 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:11:24,668 [INFO] uvicorn.access - 127.0.0.1:7537 - "GET /static/vendor/lucide/lucide.min.js HTTP/1.1" 200
+2026-03-22 17:11:24,668 [INFO] uvicorn.access - 127.0.0.1:7538 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 200
+2026-03-22 17:11:24,712 [INFO] uvicorn.access - 127.0.0.1:7537 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:11:24,790 [INFO] uvicorn.access - 127.0.0.1:7538 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:11:24,792 [INFO] uvicorn.access - 127.0.0.1:7537 - "GET /static/vendor/fonts/inter-variable.woff2 HTTP/1.1" 200
+2026-03-22 17:11:24,798 [INFO] uvicorn.access - 127.0.0.1:7537 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:11:24,836 [INFO] uvicorn.access - 127.0.0.1:7537 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:11:24,862 [INFO] uvicorn.access - 127.0.0.1:7537 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:11:24,875 [INFO] uvicorn.access - 127.0.0.1:7537 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:11:24,876 [INFO] uvicorn.access - 127.0.0.1:7536 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:11:24,929 [INFO] uvicorn.access - 127.0.0.1:7537 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:11:24,929 [INFO] uvicorn.access - 127.0.0.1:7536 - "GET /static/vendor/fonts/jetbrains-mono-regular.woff2 HTTP/1.1" 200
+2026-03-22 17:11:51,556 [INFO] uvicorn.access - 127.0.0.1:7547 - "GET / HTTP/1.1" 200
+2026-03-22 17:11:51,564 [INFO] uvicorn.access - 127.0.0.1:7547 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:11:51,564 [INFO] uvicorn.access - 127.0.0.1:7548 - "GET /static/vendor/lucide/lucide.min.js HTTP/1.1" 200
+2026-03-22 17:11:51,564 [INFO] uvicorn.access - 127.0.0.1:7549 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 200
+2026-03-22 17:11:51,648 [INFO] uvicorn.access - 127.0.0.1:7548 - "GET /static/vendor/fonts/inter-variable.woff2 HTTP/1.1" 200
+2026-03-22 17:11:51,680 [INFO] uvicorn.access - 127.0.0.1:7549 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:11:51,685 [INFO] uvicorn.access - 127.0.0.1:7548 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:11:51,691 [INFO] uvicorn.access - 127.0.0.1:7548 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:11:51,720 [INFO] uvicorn.access - 127.0.0.1:7548 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:11:51,746 [INFO] uvicorn.access - 127.0.0.1:7548 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:11:51,759 [INFO] uvicorn.access - 127.0.0.1:7548 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:11:51,760 [INFO] uvicorn.access - 127.0.0.1:7547 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:11:51,815 [INFO] uvicorn.access - 127.0.0.1:7547 - "GET /static/vendor/fonts/jetbrains-mono-regular.woff2 HTTP/1.1" 200
+2026-03-22 17:11:51,817 [INFO] uvicorn.access - 127.0.0.1:7548 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:14:17,674 [INFO] uvicorn.access - 127.0.0.1:8415 - "GET / HTTP/1.1" 200
+2026-03-22 17:14:17,691 [INFO] uvicorn.access - 127.0.0.1:8415 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:14:17,692 [INFO] uvicorn.access - 127.0.0.1:8416 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 304
+2026-03-22 17:14:17,957 [INFO] uvicorn.access - 127.0.0.1:8415 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:14:18,016 [INFO] uvicorn.access - 127.0.0.1:8415 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:14:18,021 [INFO] uvicorn.access - 127.0.0.1:8416 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:14:18,049 [INFO] uvicorn.access - 127.0.0.1:8416 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:14:18,061 [INFO] uvicorn.access - 127.0.0.1:8416 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:14:18,084 [INFO] uvicorn.access - 127.0.0.1:8416 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:14:18,085 [INFO] uvicorn.access - 127.0.0.1:8423 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:14:18,168 [INFO] uvicorn.access - 127.0.0.1:8423 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:14:18,501 [INFO] uvicorn.access - 127.0.0.1:8423 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:14:48,106 [INFO] uvicorn.access - 127.0.0.1:8451 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 304
+2026-03-22 17:14:48,117 [INFO] uvicorn.access - 127.0.0.1:8451 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:14:48,335 [INFO] uvicorn.access - 127.0.0.1:8451 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:15:18,812 [INFO] uvicorn.access - 127.0.0.1:8476 - "GET / HTTP/1.1" 200
+2026-03-22 17:15:18,838 [INFO] uvicorn.access - 127.0.0.1:8476 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:15:19,070 [INFO] uvicorn.access - 127.0.0.1:8477 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:15:19,080 [INFO] uvicorn.access - 127.0.0.1:8476 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:15:19,098 [INFO] uvicorn.access - 127.0.0.1:8476 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:15:19,103 [INFO] uvicorn.access - 127.0.0.1:8476 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:15:19,113 [INFO] uvicorn.access - 127.0.0.1:8476 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:15:19,125 [INFO] uvicorn.access - 127.0.0.1:8476 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:15:19,137 [INFO] uvicorn.access - 127.0.0.1:8476 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:15:19,141 [INFO] uvicorn.access - 127.0.0.1:8478 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:15:19,159 [INFO] uvicorn.access - 127.0.0.1:8478 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:15:21,763 [INFO] uvicorn.access - 127.0.0.1:8478 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 304
+2026-03-22 17:15:21,789 [INFO] uvicorn.access - 127.0.0.1:8478 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:15:22,002 [INFO] uvicorn.access - 127.0.0.1:8478 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:15:24,105 [INFO] uvicorn.access - 127.0.0.1:8478 - "GET / HTTP/1.1" 200
+2026-03-22 17:15:24,149 [INFO] uvicorn.access - 127.0.0.1:8478 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:15:24,151 [INFO] uvicorn.access - 127.0.0.1:8485 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:15:24,154 [INFO] uvicorn.access - 127.0.0.1:8483 - "GET /static/vendor/lucide/lucide.min.js HTTP/1.1" 200
+2026-03-22 17:15:24,155 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 200
+2026-03-22 17:15:24,367 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /static/vendor/fonts/inter-variable.woff2 HTTP/1.1" 200
+2026-03-22 17:15:24,368 [INFO] uvicorn.access - 127.0.0.1:8483 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:15:24,384 [INFO] uvicorn.access - 127.0.0.1:8483 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:15:24,385 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:15:24,400 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:15:24,406 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:15:24,413 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:15:24,423 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:15:24,447 [INFO] uvicorn.access - 127.0.0.1:8478 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:15:24,452 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:15:24,462 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /static/vendor/fonts/jetbrains-mono-regular.woff2 HTTP/1.1" 200
+2026-03-22 17:15:24,478 [INFO] uvicorn.access - 127.0.0.1:8484 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:15:32,854 [INFO] uvicorn.access - 127.0.0.1:8495 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:15:32,868 [INFO] uvicorn.access - 127.0.0.1:8495 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:17:09,877 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET / HTTP/1.1" 200
+2026-03-22 17:17:09,930 [INFO] uvicorn.access - 127.0.0.1:8681 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:17:09,931 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:17:09,932 [INFO] uvicorn.access - 127.0.0.1:8679 - "GET /static/vendor/lucide/lucide.min.js HTTP/1.1" 200
+2026-03-22 17:17:09,933 [INFO] uvicorn.access - 127.0.0.1:8680 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 200
+2026-03-22 17:17:10,164 [INFO] uvicorn.access - 127.0.0.1:8679 - "GET /static/vendor/fonts/inter-variable.woff2 HTTP/1.1" 200
+2026-03-22 17:17:10,165 [INFO] uvicorn.access - 127.0.0.1:8680 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:17:10,172 [INFO] uvicorn.access - 127.0.0.1:8679 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:17:10,179 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:17:10,197 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:17:10,202 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:17:10,230 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:17:10,246 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:17:10,271 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:17:10,273 [INFO] uvicorn.access - 127.0.0.1:8680 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:17:10,302 [INFO] uvicorn.access - 127.0.0.1:8680 - "GET /static/vendor/fonts/jetbrains-mono-regular.woff2 HTTP/1.1" 200
+2026-03-22 17:17:10,304 [INFO] uvicorn.access - 127.0.0.1:8678 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:18:29,661 [INFO] uvicorn.access - 127.0.0.1:11868 - "GET / HTTP/1.1" 200
+2026-03-22 17:18:29,965 [INFO] uvicorn.access - 127.0.0.1:11868 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:18:30,189 [INFO] uvicorn.access - 127.0.0.1:11868 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:18:30,197 [INFO] uvicorn.access - 127.0.0.1:11876 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:18:30,290 [INFO] uvicorn.access - 127.0.0.1:11868 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:18:30,320 [INFO] uvicorn.access - 127.0.0.1:11959 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:18:30,426 [INFO] uvicorn.access - 127.0.0.1:11959 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:18:30,829 [INFO] uvicorn.access - 127.0.0.1:11959 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:18:31,052 [INFO] uvicorn.access - 127.0.0.1:11959 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:18:31,088 [INFO] uvicorn.access - 127.0.0.1:11868 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:18:31,167 [INFO] uvicorn.access - 127.0.0.1:11868 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:19:00,085 [INFO] uvicorn.access - 127.0.0.1:13093 - "GET / HTTP/1.1" 200
+2026-03-22 17:19:00,121 [INFO] uvicorn.access - 127.0.0.1:13093 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 304
+2026-03-22 17:19:00,193 [INFO] uvicorn.access - 127.0.0.1:13094 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:19:00,213 [INFO] uvicorn.access - 127.0.0.1:13093 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:19:00,225 [INFO] uvicorn.access - 127.0.0.1:13093 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:19:00,230 [INFO] uvicorn.access - 127.0.0.1:13095 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:19:00,382 [INFO] uvicorn.access - 127.0.0.1:13095 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:19:00,396 [INFO] uvicorn.access - 127.0.0.1:13095 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:19:00,412 [INFO] uvicorn.access - 127.0.0.1:13095 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:19:00,414 [INFO] uvicorn.access - 127.0.0.1:13093 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:19:00,431 [INFO] uvicorn.access - 127.0.0.1:13093 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:19:19,909 [INFO] uvicorn.access - 127.0.0.1:13180 - "GET /static/styles.css?v=20260311-compact-button-groups HTTP/1.1" 200
+2026-03-22 17:19:19,973 [INFO] uvicorn.access - 127.0.0.1:13180 - "GET /api/ui-settings/maintenance HTTP/1.1" 200
+2026-03-22 17:19:20,018 [INFO] uvicorn.access - 127.0.0.1:13182 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:19:20,024 [INFO] uvicorn.access - 127.0.0.1:13183 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:19:20,025 [INFO] uvicorn.access - 127.0.0.1:13181 - "GET /api/maintenance/jobs?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:19:20,041 [INFO] uvicorn.access - 127.0.0.1:13181 - "GET /api/maintenance/jobs/6088534a-989f-42ec-aff3-2bfb2e94b378/stream HTTP/1.1" 200
+2026-03-22 17:19:20,414 [INFO] uvicorn.access - 127.0.0.1:13180 - "GET /api/maintenance/runtime-metadata HTTP/1.1" 200
+2026-03-22 17:19:27,662 [INFO] uvicorn.access - 127.0.0.1:13195 - "GET /results HTTP/1.1" 200
+2026-03-22 17:19:27,693 [INFO] uvicorn.access - 127.0.0.1:13196 - "GET /static/results.js?v=20260322-results-top-concepts HTTP/1.1" 304
+2026-03-22 17:19:27,694 [INFO] uvicorn.access - 127.0.0.1:13195 - "GET /static/styles.css?v=20260311-compact-button-groups HTTP/1.1" 304
+2026-03-22 17:19:27,786 [INFO] uvicorn.access - 127.0.0.1:13195 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:19:27,788 [INFO] uvicorn.access - 127.0.0.1:13195 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:19:27,823 [INFO] uvicorn.access - 127.0.0.1:13196 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:19:27,830 [INFO] uvicorn.access - 127.0.0.1:13196 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:19:27,841 [INFO] uvicorn.access - 127.0.0.1:13196 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 17:19:28,003 [INFO] uvicorn.access - 127.0.0.1:13197 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 17:19:28,068 [INFO] uvicorn.access - 127.0.0.1:13196 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stock-concepts HTTP/1.1" 200
+2026-03-22 17:19:28,105 [INFO] uvicorn.access - 127.0.0.1:13196 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/status-stream HTTP/1.1" 200
+2026-03-22 17:19:28,115 [INFO] uvicorn.access - 127.0.0.1:13196 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:19:28,508 [INFO] uvicorn.access - 127.0.0.1:13197 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:22:04,082 [INFO] uvicorn.access - 127.0.0.1:13285 - "GET /static/styles.css?v=20260311-compact-button-groups HTTP/1.1" 200
+2026-03-22 17:22:04,098 [INFO] uvicorn.access - 127.0.0.1:13285 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:22:04,477 [INFO] uvicorn.access - 127.0.0.1:13285 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:22:05,982 [INFO] uvicorn.access - 127.0.0.1:13285 - "GET /results?task_id=9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:22:06,016 [INFO] uvicorn.access - 127.0.0.1:13285 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404
+2026-03-22 17:22:06,024 [INFO] uvicorn.access - 127.0.0.1:13285 - "GET /static/styles.css?v=20260322-results-top3-style HTTP/1.1" 200
+2026-03-22 17:22:06,031 [INFO] uvicorn.access - 127.0.0.1:13286 - "GET /static/vendor/echarts/echarts.min.js HTTP/1.1" 200
+2026-03-22 17:22:06,032 [INFO] uvicorn.access - 127.0.0.1:13287 - "GET /static/vendor/lucide/lucide.min.js HTTP/1.1" 200
+2026-03-22 17:22:06,033 [INFO] uvicorn.access - 127.0.0.1:13288 - "GET /static/results.js?v=20260322-results-top-concepts HTTP/1.1" 200
+2026-03-22 17:22:06,255 [INFO] uvicorn.access - 127.0.0.1:13286 - "GET /static/vendor/lucide/lucide.min.js.map HTTP/1.1" 404
+2026-03-22 17:22:06,258 [INFO] uvicorn.access - 127.0.0.1:13287 - "GET /static/vendor/fonts/inter-variable.woff2 HTTP/1.1" 200
+2026-03-22 17:22:06,332 [INFO] uvicorn.access - 127.0.0.1:13287 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:22:06,332 [INFO] uvicorn.access - 127.0.0.1:13287 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:22:06,402 [INFO] uvicorn.access - 127.0.0.1:13286 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:22:06,403 [INFO] uvicorn.access - 127.0.0.1:13288 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:22:06,431 [INFO] uvicorn.access - 127.0.0.1:13288 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stocks HTTP/1.1" 200
+2026-03-22 17:22:06,554 [INFO] uvicorn.access - 127.0.0.1:13288 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/result-stock-concepts HTTP/1.1" 200
+2026-03-22 17:22:06,593 [INFO] uvicorn.access - 127.0.0.1:13286 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 17:22:06,700 [INFO] uvicorn.access - 127.0.0.1:13286 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/status-stream HTTP/1.1" 200
+2026-03-22 17:22:06,718 [INFO] uvicorn.access - 127.0.0.1:13286 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:22:07,106 [INFO] uvicorn.access - 127.0.0.1:13288 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:26:23,403 [INFO] uvicorn.access - 127.0.0.1:13780 - "GET / HTTP/1.1" 200
+2026-03-22 17:26:23,462 [INFO] uvicorn.access - 127.0.0.1:13780 - "GET /static/styles.css?v=20260322-monitor-param-panel-h HTTP/1.1" 200
+2026-03-22 17:26:23,463 [INFO] uvicorn.access - 127.0.0.1:13781 - "GET /static/monitor.js?v=20260322-param-panel HTTP/1.1" 304
+2026-03-22 17:26:23,665 [INFO] uvicorn.access - 127.0.0.1:13781 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:26:23,675 [INFO] uvicorn.access - 127.0.0.1:13780 - "GET /api/strategy-groups HTTP/1.1" 200
+2026-03-22 17:26:23,688 [INFO] uvicorn.access - 127.0.0.1:13780 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:26:23,693 [INFO] uvicorn.access - 127.0.0.1:13782 - "GET /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:26:23,747 [INFO] uvicorn.access - 127.0.0.1:13782 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:26:23,756 [INFO] uvicorn.access - 127.0.0.1:13782 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0 HTTP/1.1" 200
+2026-03-22 17:26:23,772 [INFO] uvicorn.access - 127.0.0.1:13782 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:26:23,773 [INFO] uvicorn.access - 127.0.0.1:13780 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:26:23,790 [INFO] uvicorn.access - 127.0.0.1:13780 - "GET /api/tasks/9cda7c87-40db-4000-9330-0a40236d28f0/stream HTTP/1.1" 200
+2026-03-22 17:26:51,364 [INFO] uvicorn.access - 127.0.0.1:13807 - "POST /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:27:47,243 [INFO] uvicorn.access - 127.0.0.1:13813 - "POST /api/ui-settings/monitor HTTP/1.1" 200
+2026-03-22 17:27:48,026 [INFO] uvicorn.access - 127.0.0.1:13813 - "POST /api/tasks HTTP/1.1" 200
+2026-03-22 17:27:48,036 [INFO] uvicorn.access - 127.0.0.1:13813 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:27:48,041 [INFO] uvicorn.access - 127.0.0.1:13813 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0 HTTP/1.1" 200
+2026-03-22 17:27:48,049 [INFO] uvicorn.access - 127.0.0.1:13813 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/logs?level=info&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:27:48,049 [INFO] uvicorn.access - 127.0.0.1:13814 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/logs?level=error&limit=200&offset=0 HTTP/1.1" 200
+2026-03-22 17:27:48,054 [INFO] screening_app - [c5e089af-3a13-4841-8222-d092eef20fe0] 任务已开始
+2026-03-22 17:27:48,054 [INFO] uvicorn.access - 127.0.0.1:13814 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stream HTTP/1.1" 200
+2026-03-22 17:27:48,059 [INFO] screening_app - [c5e089af-3a13-4841-8222-d092eef20fe0] 策略组加载完成
+2026-03-22 17:27:48,160 [INFO] screening_app - [c5e089af-3a13-4841-8222-d092eef20fe0] 专用引擎阶段开始
+2026-03-22 17:28:09,515 [INFO] screening_app - [c5e089af-3a13-4841-8222-d092eef20fe0] 专用引擎阶段完成
+2026-03-22 17:28:41,904 [INFO] screening_app - [c5e089af-3a13-4841-8222-d092eef20fe0] 任务已完成
+2026-03-22 17:28:47,027 [INFO] uvicorn.access - 127.0.0.1:13814 - "GET /results HTTP/1.1" 200
+2026-03-22 17:28:47,074 [INFO] uvicorn.access - 127.0.0.1:13814 - "GET /static/styles.css?v=20260322-results-top3-style HTTP/1.1" 304
+2026-03-22 17:28:47,075 [INFO] uvicorn.access - 127.0.0.1:13843 - "GET /static/results.js?v=20260322-results-top-concepts HTTP/1.1" 304
+2026-03-22 17:28:47,299 [INFO] uvicorn.access - 127.0.0.1:13814 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:28:47,302 [INFO] uvicorn.access - 127.0.0.1:13843 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:28:47,397 [INFO] uvicorn.access - 127.0.0.1:13843 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0 HTTP/1.1" 200
+2026-03-22 17:28:47,399 [INFO] uvicorn.access - 127.0.0.1:13844 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:28:47,412 [INFO] uvicorn.access - 127.0.0.1:13844 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/result-stocks HTTP/1.1" 200
+2026-03-22 17:28:47,543 [INFO] uvicorn.access - 127.0.0.1:13844 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/result-stock-concepts HTTP/1.1" 200
+2026-03-22 17:28:47,611 [INFO] uvicorn.access - 127.0.0.1:13843 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 17:28:47,683 [INFO] uvicorn.access - 127.0.0.1:13843 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/status-stream HTTP/1.1" 200
+2026-03-22 17:28:47,691 [INFO] uvicorn.access - 127.0.0.1:13843 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:28:48,141 [INFO] uvicorn.access - 127.0.0.1:13844 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:28:56,496 [INFO] uvicorn.access - 127.0.0.1:13851 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sh.688125&timeframe=d HTTP/1.1" 200
+2026-03-22 17:28:56,963 [INFO] uvicorn.access - 127.0.0.1:13851 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sh.688125&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:29:02,142 [INFO] uvicorn.access - 127.0.0.1:13876 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sz.300394&timeframe=d HTTP/1.1" 200
+2026-03-22 17:29:02,625 [INFO] uvicorn.access - 127.0.0.1:13876 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.300394&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:29:09,595 [INFO] uvicorn.access - 127.0.0.1:13881 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.300394&timeframe=d&limit=500&end_ts=2024-12-09T06%3A59%3A59.999Z HTTP/1.1" 200
+2026-03-22 17:29:19,857 [INFO] uvicorn.access - 127.0.0.1:13891 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sz.300857&timeframe=d HTTP/1.1" 200
+2026-03-22 17:29:20,312 [INFO] uvicorn.access - 127.0.0.1:13891 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.300857&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:29:31,026 [INFO] uvicorn.access - 127.0.0.1:13892 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sz.301338&timeframe=d HTTP/1.1" 200
+2026-03-22 17:29:31,462 [INFO] uvicorn.access - 127.0.0.1:13892 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.301338&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:29:33,525 [INFO] uvicorn.access - 127.0.0.1:13892 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sz.301377&timeframe=d HTTP/1.1" 200
+2026-03-22 17:29:33,961 [INFO] uvicorn.access - 127.0.0.1:13892 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.301377&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:29:34,135 [INFO] uvicorn.access - 127.0.0.1:13892 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sz.301629&timeframe=d HTTP/1.1" 200
+2026-03-22 17:29:34,588 [INFO] uvicorn.access - 127.0.0.1:13892 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.301629&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:29:41,159 [INFO] uvicorn.access - 127.0.0.1:13960 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sz.301629&timeframe=30 HTTP/1.1" 200
+2026-03-22 17:29:41,682 [INFO] uvicorn.access - 127.0.0.1:13960 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.301629&timeframe=30&limit=500&end_ts=2025-09-29T01%3A59%3A59.999Z HTTP/1.1" 200
+2026-03-22 17:29:43,385 [INFO] uvicorn.access - 127.0.0.1:13960 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.301629&timeframe=30&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:29:55,758 [INFO] uvicorn.access - 127.0.0.1:13967 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sz.301629&timeframe=d HTTP/1.1" 200
+2026-03-22 17:29:56,203 [INFO] uvicorn.access - 127.0.0.1:13967 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sz.301629&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:30:09,888 [INFO] uvicorn.access - 127.0.0.1:13980 - "GET /static/styles.css?v=20260311-compact-button-groups HTTP/1.1" 304
+2026-03-22 17:30:10,100 [INFO] uvicorn.access - 127.0.0.1:13980 - "GET /api/ui-settings/maintenance HTTP/1.1" 200
+2026-03-22 17:30:10,127 [INFO] uvicorn.access - 127.0.0.1:13982 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:30:10,143 [INFO] uvicorn.access - 127.0.0.1:13983 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:30:10,144 [INFO] uvicorn.access - 127.0.0.1:13981 - "GET /api/maintenance/jobs?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:30:10,181 [INFO] uvicorn.access - 127.0.0.1:13981 - "GET /api/maintenance/jobs/6088534a-989f-42ec-aff3-2bfb2e94b378/stream HTTP/1.1" 200
+2026-03-22 17:30:10,520 [INFO] uvicorn.access - 127.0.0.1:13980 - "GET /api/maintenance/runtime-metadata HTTP/1.1" 200
+2026-03-22 17:30:12,789 [INFO] uvicorn.access - 127.0.0.1:13980 - "GET /results HTTP/1.1" 200
+2026-03-22 17:30:12,809 [INFO] uvicorn.access - 127.0.0.1:13980 - "GET /static/styles.css?v=20260322-results-top3-style HTTP/1.1" 304
+2026-03-22 17:30:12,819 [INFO] uvicorn.access - 127.0.0.1:13980 - "GET /static/results.js?v=20260322-results-top-concepts HTTP/1.1" 304
+2026-03-22 17:30:12,893 [INFO] uvicorn.access - 127.0.0.1:13980 - "GET /api/tasks?offset=0&limit=150 HTTP/1.1" 200
+2026-03-22 17:30:12,895 [INFO] uvicorn.access - 127.0.0.1:13980 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:30:12,931 [INFO] uvicorn.access - 127.0.0.1:13981 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0 HTTP/1.1" 200
+2026-03-22 17:30:12,932 [INFO] uvicorn.access - 127.0.0.1:13983 - "GET /favicon.ico HTTP/1.1" 204
+2026-03-22 17:30:12,942 [INFO] uvicorn.access - 127.0.0.1:13983 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/result-stocks HTTP/1.1" 200
+2026-03-22 17:30:13,036 [INFO] uvicorn.access - 127.0.0.1:13983 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/result-stock-concepts HTTP/1.1" 200
+2026-03-22 17:30:13,097 [INFO] uvicorn.access - 127.0.0.1:13981 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/stock-chart?code=sh.601869&timeframe=d HTTP/1.1" 200
+2026-03-22 17:30:13,192 [INFO] uvicorn.access - 127.0.0.1:13981 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/status-stream HTTP/1.1" 200
+2026-03-22 17:30:13,197 [INFO] uvicorn.access - 127.0.0.1:13981 - "GET /api/stream/heartbeat HTTP/1.1" 200
+2026-03-22 17:30:13,601 [INFO] uvicorn.access - 127.0.0.1:13983 - "GET /api/tasks/c5e089af-3a13-4841-8222-d092eef20fe0/candles?code=sh.601869&timeframe=d&limit=500&start_ts=2026-03-19T07%3A00%3A00.001Z HTTP/1.1" 200
+2026-03-22 17:30:32,380 [INFO] uvicorn.error - Shutting down
+2026-03-22 17:30:32,482 [INFO] uvicorn.error - Waiting for connections to close. (CTRL+C to force quit)
+2026-03-22 17:30:47,501 [ERROR] uvicorn.error - Cancel 1 running task(s), timeout graceful shutdown exceeded
+2026-03-22 17:30:47,501 [INFO] uvicorn.error - Waiting for application shutdown.
+2026-03-22 17:30:47,501 [INFO] screening_app - zsdtdx 并行拣取器已销毁 | {"existed": false, "old_workers": 0, "pool_epoch": 0, "elapsed_seconds": 0.0}
+2026-03-22 17:30:47,583 [INFO] uvicorn.error - Application shutdown complete.
+2026-03-22 17:30:47,584 [INFO] uvicorn.error - Finished server process [9644]
+2026-03-22 17:30:47,585 [ERROR] uvicorn.error - Exception in ASGI application
+Traceback (most recent call last):
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\asyncio\runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 628, in run_until_complete
+    self.run_forever()
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\asyncio\windows_events.py", line 316, in run_forever
+    super().run_forever()
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 595, in run_forever
+    self._run_once()
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1881, in _run_once
+    handle._run()
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\uvicorn\server.py", line 68, in serve
+    with self.capture_signals():
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\contextlib.py", line 142, in __exit__
+    next(self.gen)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\uvicorn\server.py", line 332, in capture_signals
+    signal.raise_signal(captured_signal)
+KeyboardInterrupt
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\uvicorn\protocols\http\h11_impl.py", line 403, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\fastapi\applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\middleware\errors.py", line 165, in __call__
+    await self.app(scope, receive, _send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\routing.py", line 715, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\routing.py", line 735, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\routing.py", line 288, in handle
+    await self.app(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\routing.py", line 76, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\routing.py", line 74, in app
+    await response(scope, receive, send)
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\responses.py", line 252, in __call__
+    async with anyio.create_task_group() as task_group:
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\responses.py", line 259, in __call__
+    await wrap(partial(self.listen_for_disconnect, receive))
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\responses.py", line 255, in wrap
+    await func()
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\starlette\responses.py", line 232, in listen_for_disconnect
+    message = await receive()
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\site-packages\uvicorn\protocols\http\h11_impl.py", line 531, in receive
+    await self.message_event.wait()
+  File "C:\Users\pkwccheng\AppData\Local\Programs\Python\Python310\lib\asyncio\locks.py", line 213, in wait
+    await fut
+asyncio.exceptions.CancelledError: Task cancelled, timeout graceful shutdown exceeded

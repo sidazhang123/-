@@ -451,21 +451,8 @@ class TaskManager:
 
             code_result = result_map.get(code)
             if code_result is None:
-                # 无候选或无触发也写入 completed，保证任务可恢复进度的闭环。
-                self.state_db.upsert_stock_state(
-                    task_id=task_id,
-                    code=code,
-                    name=stock_name,
-                    status="completed",
-                    processed_bars=0,
-                    signal_count=0,
-                    last_dt=None,
-                    last_rules={
-                        "engine": "specialized",
-                        "anchor_candidate": False,
-                    },
-                    error_message=None,
-                )
+                # 无候选或无触发同样计入已处理数量，恢复时按 resolved_codes 前缀跳过。
+                pass
             else:
                 if code_result.error_message:
                     summary["stock_errors"] += 1
@@ -494,22 +481,6 @@ class TaskManager:
 
                 if code_result.signal_count > 0:
                     signal_code_set.add(code)
-
-                last_dt = max((signal["signal_dt"] for signal in code_result.signals), default=None)
-                self.state_db.upsert_stock_state(
-                    task_id=task_id,
-                    code=code,
-                    name=stock_name,
-                    status="completed" if not code_result.error_message else "failed",
-                    processed_bars=code_result.processed_bars,
-                    signal_count=code_result.signal_count,
-                    last_dt=last_dt,
-                    last_rules={
-                        "engine": "specialized",
-                        "anchor_candidate": True,
-                    },
-                    error_message=code_result.error_message,
-                )
 
             processed_count += 1
             summary["processed_codes"] = processed_count
@@ -862,18 +833,6 @@ class TaskManager:
                                 for err in run_errors:
                                     task_logger.error("策略执行出现问题", {"code": code, "name": stock_name, "error": err})
 
-                            self.state_db.upsert_stock_state(
-                                task_id=task_id,
-                                code=code,
-                                name=stock_name,
-                                status="completed",
-                                processed_bars=run_summary.processed_bars,
-                                signal_count=run_summary.signal_count,
-                                last_dt=run_summary.last_dt,
-                                last_rules=run_summary.last_rules,
-                                error_message="; ".join(run_errors) if run_errors else None,
-                            )
-
                             task_logger.info(
                                 "股票处理完成",
                                 {
@@ -887,17 +846,6 @@ class TaskManager:
                         except Exception as stock_exc:
                             summary["stock_errors"] += 1
                             err_text = f"{type(stock_exc).__name__}: {stock_exc}"
-                            self.state_db.upsert_stock_state(
-                                task_id=task_id,
-                                code=code,
-                                name=stock_name,
-                                status="failed",
-                                processed_bars=0,
-                                signal_count=0,
-                                last_dt=None,
-                                last_rules=None,
-                                error_message=err_text,
-                            )
                             task_logger.error(
                                 "股票处理失败",
                                 {

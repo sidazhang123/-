@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   taskId: null,
   eventSource: null,
   heartbeatSource: null,
@@ -12,22 +12,7 @@
   errorLogAutoScroll: true,
   strategyGroups: [],
   settingsDirty: false,
-  groupParamsEditor: null,
-  groupParamsMuteChange: false,
-  groupParamsCommentLines: [],
-  groupParamsFlashLineHandle: null,
-  stockStatesRaw: [],
-  stockStateSortKey: "",
-  stockStateSortDirection: "asc",
-  stockStateFilters: {
-    code: "",
-    name: "",
-    status: "",
-    processed_bars: "",
-    signal_count: "",
-    last_dt: "",
-    error_message: "",
-  },
+  groupParams: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -51,16 +36,16 @@ const LOG_LEVEL_TEXT = {
   info: "信息",
   error: "错误",
 };
+
 const LOG_DISPLAY_LIMIT = 200;
+const LOG_AUTO_SCROLL_THRESHOLD = 24;
 const SAVE_HINT_CLASS_WARN = "hint warn";
 const SAVE_HINT_CLASS_OK = "hint ok";
 const SAVE_HINT_CLASS_ERROR = "hint error";
-
 const SHARED_TASK_KEY = "screening:selected_task_id";
 const SYNC_CHANNEL_NAME = "screening-task-sync";
 const TAB_ID = `monitor-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const syncChannel = "BroadcastChannel" in window ? new BroadcastChannel(SYNC_CHANNEL_NAME) : null;
-let groupParamsFlashTimer = null;
 
 function setStreamState(text, kind) {
   const el = $("monitorStreamState");
@@ -87,84 +72,72 @@ function syncErrorTabAlert() {
 }
 
 function splitStocks(text) {
-  return text
-    .split(/[\n,，\s]+/)
-    .map((s) => s.trim())
+  return String(text || "")
+    .split(/[\n,\s，]+/)
+    .map((item) => item.trim())
     .filter(Boolean);
 }
 
 function selectedGroupId() {
-  return $("strategyGroupSelect").value;
+  return $("strategyGroupSelect")?.value || "";
 }
 
-function getGroupParamsText() {
-  if (state.groupParamsEditor) {
-    return state.groupParamsEditor.getValue();
-  }
-  return $("groupParams").value || "";
+function cloneValue(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
-function clearGroupParamsCommentLineClasses() {
-  if (!state.groupParamsEditor) return;
-  for (const handle of state.groupParamsCommentLines) {
-    state.groupParamsEditor.removeLineClass(handle, "text", "cm-comment-line");
-  }
-  state.groupParamsCommentLines = [];
+function escapeHtml(text) {
+  return String(text || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
-function refreshGroupParamsCommentLineHighlights() {
-  if (!state.groupParamsEditor) return;
-  const editor = state.groupParamsEditor;
-  const re = /"__comment[^"]*"\s*:/;
-  const scrollInfo = editor.getScrollInfo();
-  editor.operation(() => {
-    clearGroupParamsCommentLineClasses();
-    for (let i = 0; i < editor.lineCount(); i += 1) {
-      const text = editor.getLine(i) || "";
-      if (!re.test(text)) continue;
-      const handle = editor.getLineHandle(i);
-      editor.addLineClass(handle, "text", "cm-comment-line");
-      state.groupParamsCommentLines.push(handle);
+function helpTextFromNode(node) {
+  if (!node) return "";
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map((item) => String(item)).join("\n");
+  if (typeof node === "object") {
+    const blocks = [];
+    if (typeof node._comment === "string" && node._comment.trim()) {
+      blocks.push(node._comment.trim());
     }
-    editor.scrollTo(scrollInfo.left, scrollInfo.top);
-  });
+    if (Array.isArray(node._overview) && node._overview.length) {
+      blocks.push(node._overview.map((item) => String(item)).join("\n"));
+    }
+    return blocks.join("\n\n");
+  }
+  return "";
 }
 
-function setGroupParamsText(value) {
-  const safeValue = typeof value === "string" ? value : "{}";
-  if (state.groupParamsEditor) {
-    state.groupParamsMuteChange = true;
-    state.groupParamsEditor.setValue(safeValue);
-    state.groupParamsMuteChange = false;
-    $("groupParams").value = safeValue;
-    refreshGroupParamsCommentLineHighlights();
-    return;
+function renderGroupDescription(group) {
+  if (!group) return "-";
+  const lines = [`说明：${group.description || "-"}`];
+  if (group.engine) {
+    lines.push(`执行引擎：${group.engine}`);
   }
-  $("groupParams").value = safeValue;
+  if (group.execution && typeof group.execution === "object") {
+    lines.push(
+      `执行特性：任务内并行=${group.execution.supports_intra_task_parallel ? "是" : "否"}，` +
+      `缓存=${group.execution.cache_scope || "none"}`
+    );
+  }
+  const overview = Array.isArray(group.param_help?._overview) ? group.param_help._overview : [];
+  if (overview.length) {
+    lines.push("参数说明：");
+    for (const paragraph of overview) {
+      lines.push(String(paragraph));
+    }
+  }
+  return lines.map(escapeHtml).join("<br>");
 }
 
-function initGroupParamsEditor() {
-  const textarea = $("groupParams");
-  if (!textarea || !window.CodeMirror) {
-    return;
-  }
-  const editor = window.CodeMirror.fromTextArea(textarea, {
-    mode: { name: "javascript", json: true },
-    theme: "material-darker",
-    lineNumbers: true,
-    indentUnit: 2,
-    tabSize: 2,
-    lineWrapping: false,
-    matchBrackets: true,
-  });
-  state.groupParamsEditor = editor;
-  editor.on("change", () => {
-    textarea.value = editor.getValue();
-    refreshGroupParamsCommentLineHighlights();
-    if (state.groupParamsMuteChange) return;
-    markSettingsDirty();
-  });
-  refreshGroupParamsCommentLineHighlights();
+function updateStrategyGroupDescription(groupId) {
+  const target = $("strategyGroupDesc");
+  if (!target) return;
+  target.innerHTML = renderGroupDescription(findGroup(groupId));
 }
 
 function normalizeSampleSize(rawValue) {
@@ -173,10 +146,18 @@ function normalizeSampleSize(rawValue) {
   return Math.max(1, Math.min(5000, Math.floor(parsed)));
 }
 
-function setSaveHint(text, cssClass) {
+function getCurrentSampleSize() {
+  const input = $("sampleSize");
+  if (!input) return 20;
+  const normalized = normalizeSampleSize(input.value);
+  input.value = String(normalized);
+  return normalized;
+}
+
+function setSaveHint(text, cssClass = "hint") {
   const hint = $("settingsSaveHint");
   if (!hint) return;
-  hint.className = cssClass || "hint";
+  hint.className = cssClass;
   hint.textContent = text;
 }
 
@@ -190,184 +171,184 @@ function markSettingsSaved() {
   setSaveHint(`已保存（${new Date().toLocaleTimeString()}）`, SAVE_HINT_CLASS_OK);
 }
 
-function collectMonitorSettings() {
-  return {
-    source_db: $("sourceDb").value || "",
-    stocks_input: $("stocksInput").value || "",
-    sample_size: getCurrentSampleSize(),
-    strategy_group_id: selectedGroupId() || "",
-    group_params_text: getGroupParamsText() || "{}",
-  };
+function findGroup(groupId) {
+  return state.strategyGroups.find((group) => group.id === groupId) || null;
 }
 
-function getCurrentSampleSize() {
-  const input = $("sampleSize");
-  if (!input) return 20;
-  const normalized = normalizeSampleSize(input.value);
-  input.value = String(normalized);
-  return normalized;
+function pathToString(path) {
+  return path.join(".");
 }
 
-function parseSharedTaskPayload(raw) {
-  if (!raw) return null;
-  try {
-    const payload = JSON.parse(raw);
-    const taskId = typeof payload?.task_id === "string" && payload.task_id ? payload.task_id : null;
-    const source = typeof payload?.source === "string" ? payload.source : "";
-    if (!taskId) return null;
-    return { taskId, source };
-  } catch {
-    return null;
+function getValueAtPath(root, path) {
+  let current = root;
+  for (const key of path) {
+    if (!current || typeof current !== "object") return undefined;
+    current = current[key];
   }
+  return current;
 }
 
-function publishTaskSelection(taskId) {
-  if (!taskId) return;
-  const payload = JSON.stringify({
-    task_id: taskId,
-    source: TAB_ID,
-    ts: Date.now(),
+function setValueAtPath(root, path, value) {
+  if (!path.length) return;
+  let current = root;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    const key = path[index];
+    if (!current[key] || typeof current[key] !== "object" || Array.isArray(current[key])) {
+      current[key] = {};
+    }
+    current = current[key];
+  }
+  current[path[path.length - 1]] = value;
+}
+
+function renderParamField(path, value, helpNode, labelText, depth = 0) {
+  const helpText = helpTextFromNode(helpNode);
+  const pathKey = pathToString(path);
+
+  if (Array.isArray(value)) {
+    const isStringArray = value.every((item) => typeof item === "string");
+    if (!isStringArray) {
+      return `
+        <div class="param-field unsupported">
+          <div class="param-label-row">
+            <div class="param-label">${escapeHtml(labelText)}</div>
+          </div>
+          ${helpText ? `<div class="param-help">${escapeHtml(helpText)}</div>` : ""}
+          <div class="param-readonly">暂不支持的数组类型</div>
+        </div>
+      `;
+    }
+    return `
+      <div class="param-field">
+        <div class="param-label-row">
+          <div class="param-label">${escapeHtml(labelText)}</div>
+        </div>
+        ${helpText ? `<div class="param-help">${escapeHtml(helpText)}</div>` : ""}
+        <div class="param-tags-editor" data-param-path="${escapeHtml(pathKey)}"></div>
+      </div>
+    `;
+  }
+
+  if (value && typeof value === "object") {
+    const childKeys = Object.keys(value);
+    const titleClass = depth === 0 ? "param-section-title root" : "param-section-title";
+    return `
+      <section class="param-section ${depth === 0 ? "is-root" : ""}">
+        ${labelText ? `<div class="${titleClass}">${escapeHtml(labelText)}</div>` : ""}
+        ${helpText ? `<div class="param-help">${escapeHtml(helpText)}</div>` : ""}
+        <div class="param-section-body">
+          ${childKeys.map((key) => renderParamField(path.concat(key), value[key], helpNode?.[key], key, depth + 1)).join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  if (typeof value === "boolean") {
+    return `
+      <label class="param-field checkbox-field">
+        <span class="param-label">${escapeHtml(labelText)}</span>
+        ${helpText ? `<span class="param-help">${escapeHtml(helpText)}</span>` : ""}
+        <span class="param-checkbox-row">
+          <input type="checkbox" data-param-path="${escapeHtml(pathKey)}" ${value ? "checked" : ""} />
+          <span class="param-checkbox-value">${value ? "开启" : "关闭"}</span>
+        </span>
+      </label>
+    `;
+  }
+
+  if (typeof value === "number") {
+    const step = Number.isInteger(value) ? "1" : "any";
+    return `
+      <label class="param-field">
+        <span class="param-label">${escapeHtml(labelText)}</span>
+        ${helpText ? `<span class="param-help">${escapeHtml(helpText)}</span>` : ""}
+        <input
+          type="number"
+          data-param-path="${escapeHtml(pathKey)}"
+          data-param-number-kind="${Number.isInteger(value) ? "int" : "float"}"
+          step="${step}"
+          value="${escapeHtml(String(value))}"
+        />
+      </label>
+    `;
+  }
+
+  return `
+    <label class="param-field">
+      <span class="param-label">${escapeHtml(labelText)}</span>
+      ${helpText ? `<span class="param-help">${escapeHtml(helpText)}</span>` : ""}
+      <input type="text" data-param-path="${escapeHtml(pathKey)}" value="${escapeHtml(String(value ?? ""))}" />
+    </label>
+  `;
+}
+
+function renderTagEditor(container, path, items) {
+  const safeItems = Array.isArray(items) ? items.filter((item) => typeof item === "string" && item.trim()) : [];
+  container.innerHTML = `
+    <div class="param-tags-shell">
+      ${safeItems.map((item) => `
+        <button
+          type="button"
+          class="param-tag-chip"
+          data-param-tag-remove="${escapeHtml(pathToString(path))}"
+          data-param-tag-value="${escapeHtml(item)}"
+        >
+          <span>${escapeHtml(item)}</span>
+          <span class="param-tag-chip-x">x</span>
+        </button>
+      `).join("")}
+      <input
+        type="text"
+        class="param-tag-input"
+        data-param-tag-input="${escapeHtml(pathToString(path))}"
+        placeholder="回车或逗号新增"
+      />
+    </div>
+  `;
+}
+
+function refreshTagEditors(root = $("groupParamsForm")) {
+  if (!root) return;
+  root.querySelectorAll(".param-tags-editor[data-param-path]").forEach((node) => {
+    const path = String(node.dataset.paramPath || "").split(".").filter(Boolean);
+    renderTagEditor(node, path, getValueAtPath(state.groupParams, path));
   });
-  try {
-    localStorage.setItem(SHARED_TASK_KEY, payload);
-  } catch {
-    // ignore storage errors
-  }
-  if (syncChannel) {
-    syncChannel.postMessage(payload);
-  }
 }
 
-async function applySharedTaskSelection(rawPayload) {
-  const parsed = parseSharedTaskPayload(rawPayload);
-  if (!parsed || parsed.source === TAB_ID || parsed.taskId === state.taskId) {
+function renderGroupParamsForm() {
+  const container = $("groupParamsForm");
+  if (!container) return;
+  const group = findGroup(selectedGroupId());
+  if (!group) {
+    container.innerHTML = '<div class="param-panel-empty">请选择策略组</div>';
     return;
   }
-  await refreshTaskList(parsed.taskId, false);
+  container.innerHTML = renderParamField([], state.groupParams, group.param_help || {}, "", 0);
+  refreshTagEditors(container);
 }
 
-function findGroup(groupId) {
-  return state.strategyGroups.find((g) => g.id === groupId) || null;
-}
-
-function cloneValue(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function helpTextFromNode(node) {
-  if (!node) return "";
-  if (typeof node === "string") return node;
-  if (Array.isArray(node)) return node.map((x) => String(x)).join("\n");
-  if (typeof node === "object") {
-    const blocks = [];
-    if (typeof node._comment === "string" && node._comment.trim()) {
-      blocks.push(node._comment.trim());
-    }
-    if (Array.isArray(node._overview) && node._overview.length) {
-      blocks.push(node._overview.map((x) => String(x)).join("\n"));
-    }
-    return blocks.join("\n\n");
-  }
-  return "";
-}
-
-function buildAnnotatedParams(params, helpNode) {
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return params;
-  }
-
-  const result = {};
-  const rootHelp = helpTextFromNode(helpNode);
-  if (rootHelp) {
-    result.__comment__ = rootHelp;
-  }
-
-  for (const key of Object.keys(params)) {
-    const childHelpNode = helpNode && typeof helpNode === "object" ? helpNode[key] : null;
-    const childHelpText = helpTextFromNode(childHelpNode);
-    if (childHelpText) {
-      result[`__comment_${key}`] = childHelpText;
-    }
-    result[key] = buildAnnotatedParams(params[key], childHelpNode);
-  }
-  return result;
-}
-
-function stripCommentKeys(value) {
-  if (Array.isArray(value)) {
-    return value.map(stripCommentKeys);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const result = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (key.startsWith("__comment")) continue;
-    result[key] = stripCommentKeys(child);
-  }
-  return result;
-}
-
-function parseGroupParamsTextOrThrow(rawText) {
-  let parsed;
-  try {
-    parsed = JSON.parse(rawText || "{}");
-  } catch (err) {
-    throw new Error(`组级参数 JSON 格式错误: ${err.message}`);
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("组级参数 JSON 顶层必须是对象");
-  }
-  return parsed;
-}
-
-function escapeHtml(text) {
-  return String(text)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function renderGroupDescription(group) {
-  if (!group) return "-";
-  const lines = [];
-  lines.push(`说明：${group.description || "-"}`);
-
-  if (group.engine) {
-    lines.push(`执行引擎：${group.engine}`);
-  }
-  if (group.execution && typeof group.execution === "object") {
-    lines.push(
-      `执行特性：任务内并行=${group.execution.supports_intra_task_parallel ? "是" : "否"}，` +
-      `缓存=${group.execution.cache_scope || "none"}`
-    );
-  }
-
-  const overview = group.param_help && Array.isArray(group.param_help._overview) ? group.param_help._overview : [];
-  if (overview.length) {
-    lines.push("参数示意：");
-    for (const paragraph of overview) {
-      lines.push(String(paragraph));
-    }
-  }
-  return lines.map(escapeHtml).join("<br>");
-}
-
-function updateStrategyGroupDescription(groupId) {
-  const group = findGroup(groupId);
-  $("strategyGroupDesc").innerHTML = renderGroupDescription(group);
-}
-
-function fillGroupParamsFromDefault(groupId) {
+function resetGroupParamsFromDefault(groupId) {
   const group = findGroup(groupId);
   if (!group) {
-    setGroupParamsText("{}");
-    $("strategyGroupDesc").textContent = "-";
+    state.groupParams = {};
+    renderGroupParamsForm();
+    const desc = $("strategyGroupDesc");
+    if (desc) desc.textContent = "-";
     return;
   }
-  const annotated = buildAnnotatedParams(cloneValue(group.default_params || {}), group.param_help || {});
-  setGroupParamsText(JSON.stringify(annotated, null, 2));
+  state.groupParams = cloneValue(group.default_params || {});
   updateStrategyGroupDescription(groupId);
+  renderGroupParamsForm();
+}
+
+function collectMonitorSettings() {
+  return {
+    source_db: $("sourceDb")?.value || "",
+    stocks_input: $("stocksInput")?.value || "",
+    sample_size: getCurrentSampleSize(),
+    strategy_group_id: selectedGroupId(),
+    group_params: cloneValue(state.groupParams),
+  };
 }
 
 async function getJSON(url) {
@@ -405,143 +386,23 @@ async function readErrorDetail(resp) {
         return JSON.stringify(payload.detail);
       }
     } catch {
-      // ignore JSON parsing error, fallback to raw text
+      // ignore invalid JSON
     }
   }
   return text || "未知错误";
 }
 
 function extractErrorDetail(message) {
-  if (!message) return "未知错误";
-  const match = /^请求失败\(\d+\)：([\s\S]*)$/.exec(String(message));
-  return (match ? match[1] : String(message)).trim() || "未知错误";
-}
-
-function findLineByKey(lines, key) {
-  const quoted = `"${key}"`;
-  for (let i = 0; i < lines.length; i += 1) {
-    if (lines[i].includes(quoted)) return i + 1;
-  }
-  return -1;
-}
-
-function focusGroupParamsLine(lineNumber, columnNumber = 1) {
-  const text = getGroupParamsText();
-  if (!text) return;
-  const lines = text.split("\n");
-  const clampedLine = Math.max(1, Math.min(lines.length, Number(lineNumber) || 1));
-  const currentLine = lines[clampedLine - 1] || "";
-  const clampedCol = Math.max(1, Math.min(currentLine.length + 1, Number(columnNumber) || 1));
-
-  if (state.groupParamsEditor) {
-    const editor = state.groupParamsEditor;
-    const lineIdx = clampedLine - 1;
-    editor.focus();
-    editor.setCursor({ line: lineIdx, ch: clampedCol - 1 });
-    editor.scrollIntoView({ line: lineIdx, ch: 0 }, 120);
-
-    if (state.groupParamsFlashLineHandle) {
-      editor.removeLineClass(state.groupParamsFlashLineHandle, "wrap", "cm-editor-error-line");
-      state.groupParamsFlashLineHandle = null;
-    }
-    const handle = editor.getLineHandle(lineIdx);
-    editor.addLineClass(handle, "wrap", "cm-editor-error-line");
-    state.groupParamsFlashLineHandle = handle;
-
-    if (groupParamsFlashTimer) {
-      clearTimeout(groupParamsFlashTimer);
-    }
-    groupParamsFlashTimer = window.setTimeout(() => {
-      if (state.groupParamsEditor && state.groupParamsFlashLineHandle) {
-        state.groupParamsEditor.removeLineClass(
-          state.groupParamsFlashLineHandle,
-          "wrap",
-          "cm-editor-error-line"
-        );
-      }
-      state.groupParamsFlashLineHandle = null;
-      groupParamsFlashTimer = null;
-    }, 2000);
-    return;
-  }
-
-  const textarea = $("groupParams");
-  if (!textarea) return;
-  let offset = 0;
-  for (let i = 0; i < clampedLine - 1; i += 1) {
-    offset += lines[i].length + 1;
-  }
-  offset += clampedCol - 1;
-  textarea.focus();
-  textarea.setSelectionRange(offset, offset + currentLine.length);
-  textarea.classList.remove("focus-error");
-  void textarea.offsetWidth;
-  textarea.classList.add("focus-error");
-  if (groupParamsFlashTimer) {
-    clearTimeout(groupParamsFlashTimer);
-  }
-  groupParamsFlashTimer = window.setTimeout(() => {
-    textarea.classList.remove("focus-error");
-    groupParamsFlashTimer = null;
-  }, 2000);
-
-  const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 20;
-  textarea.scrollTop = Math.max(0, (clampedLine - 3) * lineHeight);
-}
-
-function tryHighlightGroupParamsError(detail) {
-  const text = getGroupParamsText();
-  if (!text.trim()) return false;
-  const lines = text.split("\n");
-
-  const lineColMatch = /line\s+(\d+)\s*,\s*col\s+(\d+)/i.exec(detail);
-  if (lineColMatch) {
-    focusGroupParamsLine(Number(lineColMatch[1]), Number(lineColMatch[2]));
-    return true;
-  }
-
-  const firstError = String(detail).split("；")[0] || String(detail);
-
-  const pathMatch = /group_params(?:\.[A-Za-z0-9_]+)+/.exec(firstError);
-  if (pathMatch) {
-    const pathSegments = pathMatch[0].split(".");
-    const leafKey = pathSegments[pathSegments.length - 1];
-    const line = findLineByKey(lines, leafKey);
-    if (line > 0) {
-      focusGroupParamsLine(line, 1);
-      return true;
-    }
-  }
-
-  const commentKeyMatch = /(__comment[A-Za-z0-9_]*)/.exec(firstError);
-  if (commentKeyMatch) {
-    const line = findLineByKey(lines, commentKeyMatch[1]);
-    if (line > 0) {
-      focusGroupParamsLine(line, 1);
-      return true;
-    }
-  }
-
-  const missingFieldMatch = /缺少字段:\s*([A-Za-z0-9_]+)/.exec(firstError);
-  if (missingFieldMatch) {
-    const line = findLineByKey(lines, missingFieldMatch[1]);
-    if (line > 0) {
-      focusGroupParamsLine(line, 1);
-      return true;
-    }
-  }
-
-  focusGroupParamsLine(1, 1);
-  return false;
+  const match = /^请求失败\(\d+\)：([\s\S]*)$/.exec(String(message || ""));
+  return (match ? match[1] : String(message || "")).trim() || "未知错误";
 }
 
 function applyMonitorSettings(settings) {
   if (!settings || typeof settings !== "object") return;
-
-  if (typeof settings.source_db === "string") {
+  if (typeof settings.source_db === "string" && $("sourceDb")) {
     $("sourceDb").value = settings.source_db;
   }
-  if (typeof settings.stocks_input === "string") {
+  if (typeof settings.stocks_input === "string" && $("stocksInput")) {
     $("stocksInput").value = settings.stocks_input;
   }
   const sampleInput = $("sampleSize");
@@ -550,21 +411,21 @@ function applyMonitorSettings(settings) {
   }
 
   const savedGroupId = typeof settings.strategy_group_id === "string" ? settings.strategy_group_id : "";
-  if (savedGroupId && findGroup(savedGroupId)) {
+  const savedGroup = savedGroupId ? findGroup(savedGroupId) : null;
+  if (savedGroup) {
     $("strategyGroupSelect").value = savedGroupId;
     updateStrategyGroupDescription(savedGroupId);
-    if (typeof settings.group_params_text === "string" && settings.group_params_text.trim()) {
-      setGroupParamsText(settings.group_params_text);
-    } else {
-      fillGroupParamsFromDefault(savedGroupId);
-    }
+    state.groupParams = cloneValue(
+      settings.group_params && typeof settings.group_params === "object"
+        ? settings.group_params
+        : (savedGroup.default_params || {})
+    );
+    renderGroupParamsForm();
     return;
   }
 
-  if (typeof settings.group_params_text === "string" && settings.group_params_text.trim()) {
-    setGroupParamsText(settings.group_params_text);
-  }
   updateStrategyGroupDescription(selectedGroupId());
+  renderGroupParamsForm();
 }
 
 async function loadMonitorSettings() {
@@ -581,7 +442,6 @@ async function saveMonitorSettings() {
   if (sampleInput) {
     sampleInput.value = String(payload.sample_size);
   }
-  parseGroupParamsTextOrThrow(payload.group_params_text);
   await postJSON("/api/ui-settings/monitor", payload);
   markSettingsSaved();
 }
@@ -593,13 +453,12 @@ async function onSaveSettingsClick() {
     const detail = extractErrorDetail(err?.message || "");
     setSaveHint(`保存失败：${detail}`, SAVE_HINT_CLASS_ERROR);
     alert(`保存失败：${detail}`);
-    tryHighlightGroupParamsError(detail);
   }
 }
 
-function formatDateTime(v) {
-  if (!v) return "-";
-  return new Date(v).toLocaleString();
+function formatDateTime(value) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString();
 }
 
 function formatLogLine(item) {
@@ -607,8 +466,6 @@ function formatLogLine(item) {
   const detail = item.detail ? ` | ${JSON.stringify(item.detail)}` : "";
   return `${ts} [${LOG_LEVEL_TEXT[item.level] || item.level}] ${item.message}${detail}`;
 }
-
-const LOG_AUTO_SCROLL_THRESHOLD = 24;
 
 function isNearBottom(el) {
   return el.scrollHeight - (el.scrollTop + el.clientHeight) <= LOG_AUTO_SCROLL_THRESHOLD;
@@ -627,19 +484,19 @@ function syncLogBox(el, text, autoScroll) {
 }
 
 function renderControlButtons(task) {
-  const btn = $("pauseResumeBtn");
+  const pauseBtn = $("pauseResumeBtn");
   const stopBtn = $("stopTaskBtn");
   const status = task?.status;
 
   if (status === "paused") {
-    btn.disabled = false;
-    btn.textContent = "恢复任务";
+    pauseBtn.disabled = false;
+    pauseBtn.textContent = "恢复任务";
   } else if (status === "running" || status === "queued") {
-    btn.disabled = false;
-    btn.textContent = "暂停任务";
+    pauseBtn.disabled = false;
+    pauseBtn.textContent = "暂停任务";
   } else {
-    btn.disabled = true;
-    btn.textContent = "暂停任务";
+    pauseBtn.disabled = true;
+    pauseBtn.textContent = "暂停任务";
   }
 
   stopBtn.disabled = !(status === "running" || status === "queued" || status === "paused" || status === "stopping");
@@ -651,125 +508,16 @@ function renderStatus(task) {
   $("modeText").textContent = MODE_TEXT[task.run_mode] || task.run_mode || "-";
   $("strategyNameText").textContent = task.strategy_name || "-";
   $("strategyDescText").textContent = task.strategy_description || "-";
-  $("progressText").textContent = `${task.progress.toFixed(2)}%`;
+  $("progressText").textContent = `${Number(task.progress || 0).toFixed(2)}%`;
   $("stocksProgressText").textContent = `${task.processed_stocks} / ${task.total_stocks}`;
   $("resultCountText").textContent = `${task.result_count}`;
   $("logCountText").textContent = `信息 ${task.info_log_count} / 错误 ${task.error_log_count}`;
   $("currentCodeText").textContent = task.current_code || "-";
   $("unresolvedText").textContent = (task.unresolved_inputs || []).join(", ") || "-";
   $("fatalErrorText").textContent = task.error_message || "-";
-  $("progressBarInner").style.width = `${Math.max(0, Math.min(100, task.progress))}%`;
+  $("progressBarInner").style.width = `${Math.max(0, Math.min(100, Number(task.progress || 0)))}%`;
   renderControlButtons(task);
   syncErrorTabAlert();
-}
-
-function renderStockStates(items) {
-  state.stockStatesRaw = Array.isArray(items) ? items.slice() : [];
-  renderFilteredStockStates();
-}
-
-function getStockStateFieldValue(row, key) {
-  if (key === "status") {
-    return STATUS_TEXT[row.status] || row.status || "";
-  }
-  if (key === "processed_bars" || key === "signal_count") {
-    return String(row[key] ?? 0);
-  }
-  if (key === "last_dt") {
-    return formatDateTime(row.last_dt);
-  }
-  return String(row[key] || "");
-}
-
-function getStockStateComparableValue(row, key) {
-  if (key === "processed_bars" || key === "signal_count") {
-    return Number(row[key] ?? 0);
-  }
-  if (key === "last_dt") {
-    const ts = row.last_dt ? new Date(row.last_dt).getTime() : Number.NEGATIVE_INFINITY;
-    return Number.isFinite(ts) ? ts : Number.NEGATIVE_INFINITY;
-  }
-  return String(getStockStateFieldValue(row, key)).toLowerCase();
-}
-
-function getFilteredSortedStockStates() {
-  let rows = state.stockStatesRaw.slice();
-
-  rows = rows.filter((row) => {
-    return Object.entries(state.stockStateFilters).every(([key, rawFilter]) => {
-      const filterText = String(rawFilter || "").trim().toLowerCase();
-      if (!filterText) return true;
-      const valueText = String(getStockStateFieldValue(row, key)).toLowerCase();
-      return valueText.includes(filterText);
-    });
-  });
-
-  if (state.stockStateSortKey) {
-    const direction = state.stockStateSortDirection === "desc" ? -1 : 1;
-    const sortKey = state.stockStateSortKey;
-    rows.sort((left, right) => {
-      const a = getStockStateComparableValue(left, sortKey);
-      const b = getStockStateComparableValue(right, sortKey);
-      if (a < b) return -1 * direction;
-      if (a > b) return 1 * direction;
-      return String(left.code || "").localeCompare(String(right.code || ""), "zh-CN") * direction;
-    });
-  }
-
-  return rows;
-}
-
-function updateStockStateSortIndicators() {
-  document.querySelectorAll("[data-stock-sort]").forEach((button) => {
-    button.classList.remove("is-sort-asc", "is-sort-desc");
-    if (button.dataset.stockSort !== state.stockStateSortKey) return;
-    button.classList.add(state.stockStateSortDirection === "desc" ? "is-sort-desc" : "is-sort-asc");
-  });
-}
-
-function renderFilteredStockStates() {
-  const tbody = $("stockStatesTable").querySelector("tbody");
-  const rows = getFilteredSortedStockStates();
-  tbody.innerHTML = "";
-
-  if (!rows.length) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = '<td class="stock-states-empty" colspan="7">没有匹配的逐股状态记录</td>';
-    tbody.appendChild(tr);
-    updateStockStateSortIndicators();
-    return;
-  }
-
-  for (const row of rows) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${escapeHtml(row.code || "")}</td>
-      <td>${escapeHtml(row.name || "")}</td>
-      <td>${escapeHtml(STATUS_TEXT[row.status] || row.status || "")}</td>
-      <td>${row.processed_bars ?? 0}</td>
-      <td>${row.signal_count ?? 0}</td>
-      <td>${escapeHtml(formatDateTime(row.last_dt))}</td>
-      <td>${escapeHtml(row.error_message || "")}</td>
-    `;
-    tbody.appendChild(tr);
-  }
-
-  updateStockStateSortIndicators();
-}
-
-function setStockStateFilter(key, value) {
-  state.stockStateFilters[key] = String(value || "");
-  renderFilteredStockStates();
-}
-
-function toggleStockStateSort(key) {
-  if (state.stockStateSortKey === key) {
-    state.stockStateSortDirection = state.stockStateSortDirection === "asc" ? "desc" : "asc";
-  } else {
-    state.stockStateSortKey = key;
-    state.stockStateSortDirection = "asc";
-  }
-  renderFilteredStockStates();
 }
 
 async function loadLogs(taskId, infoTotalCount, errorTotalCount) {
@@ -779,36 +527,30 @@ async function loadLogs(taskId, infoTotalCount, errorTotalCount) {
   const errorBootstrapOffset = Math.max(0, safeErrorTotal - LOG_DISPLAY_LIMIT);
   const baseInfoUrl = `/api/tasks/${taskId}/logs?level=info&limit=${LOG_DISPLAY_LIMIT}`;
   const baseErrorUrl = `/api/tasks/${taskId}/logs?level=error&limit=${LOG_DISPLAY_LIMIT}`;
-  const infoUrl = state.lastInfoLogId === null || state.lastInfoLogId === undefined
+  const infoUrl = state.lastInfoLogId == null
     ? `${baseInfoUrl}&offset=${infoBootstrapOffset}`
     : `${baseInfoUrl}&after_log_id=${Math.max(0, Number(state.lastInfoLogId) || 0)}`;
-  const errorUrl = state.lastErrorLogId === null || state.lastErrorLogId === undefined
+  const errorUrl = state.lastErrorLogId == null
     ? `${baseErrorUrl}&offset=${errorBootstrapOffset}`
     : `${baseErrorUrl}&after_log_id=${Math.max(0, Number(state.lastErrorLogId) || 0)}`;
 
   const [info, error] = await Promise.all([getJSON(infoUrl), getJSON(errorUrl)]);
-
   const infoItems = Array.isArray(info.items) ? info.items : [];
   const errorItems = Array.isArray(error.items) ? error.items : [];
+
   state.infoLogs = state.infoLogs.concat(infoItems).slice(-LOG_DISPLAY_LIMIT);
   state.errorLogs = state.errorLogs.concat(errorItems).slice(-LOG_DISPLAY_LIMIT);
 
-  const infoNextRaw = info.next_after_log_id;
-  const errorNextRaw = error.next_after_log_id;
-  const infoFallback = infoItems.length > 0 ? Number(infoItems[infoItems.length - 1].log_id || 0) : 0;
-  const errorFallback = errorItems.length > 0 ? Number(errorItems[errorItems.length - 1].log_id || 0) : 0;
-  state.lastInfoLogId = Number.isFinite(Number(infoNextRaw))
-    ? Number(infoNextRaw)
+  const infoFallback = infoItems.length ? Number(infoItems[infoItems.length - 1].log_id || 0) : 0;
+  const errorFallback = errorItems.length ? Number(errorItems[errorItems.length - 1].log_id || 0) : 0;
+  state.lastInfoLogId = Number.isFinite(Number(info.next_after_log_id))
+    ? Number(info.next_after_log_id)
     : (state.lastInfoLogId ?? infoFallback);
-  state.lastErrorLogId = Number.isFinite(Number(errorNextRaw))
-    ? Number(errorNextRaw)
+  state.lastErrorLogId = Number.isFinite(Number(error.next_after_log_id))
+    ? Number(error.next_after_log_id)
     : (state.lastErrorLogId ?? errorFallback);
-  if (state.lastInfoLogId === null || state.lastInfoLogId === undefined) {
-    state.lastInfoLogId = infoFallback;
-  }
-  if (state.lastErrorLogId === null || state.lastErrorLogId === undefined) {
-    state.lastErrorLogId = errorFallback;
-  }
+  if (state.lastInfoLogId == null) state.lastInfoLogId = infoFallback;
+  if (state.lastErrorLogId == null) state.lastErrorLogId = errorFallback;
 
   syncLogBox($("infoLogs"), state.infoLogs.map(formatLogLine).join("\n"), state.infoLogAutoScroll);
   syncLogBox($("errorLogs"), state.errorLogs.map(formatLogLine).join("\n"), state.errorLogAutoScroll);
@@ -827,17 +569,10 @@ function resetTaskLogCursor() {
   syncErrorTabAlert();
 }
 
-async function loadStockStates(taskId) {
-  const data = await getJSON(`/api/tasks/${taskId}/stock-states?offset=0&limit=3000`);
-  renderStockStates(data.items || []);
-}
-
 async function loadTaskStatus(taskId) {
   const task = await getJSON(`/api/tasks/${taskId}`);
   renderStatus(task);
-
   await loadLogs(taskId, task.info_log_count, task.error_log_count);
-  await loadStockStates(taskId);
 }
 
 function stopPolling() {
@@ -859,14 +594,8 @@ function startHeartbeatStream() {
   const es = new EventSource("/api/stream/heartbeat");
   state.heartbeatSource = es;
   setStreamState("SSE: 连接中", "is-connecting");
-
-  es.onopen = () => {
-    setStreamState("SSE: 已连接", "is-connected");
-  };
-
-  es.onerror = () => {
-    setStreamState("SSE: 重连中", "is-connecting");
-  };
+  es.onopen = () => setStreamState("SSE: 已连接", "is-connected");
+  es.onerror = () => setStreamState("SSE: 重连中", "is-connecting");
 }
 
 function startPolling() {
@@ -877,48 +606,29 @@ function startPolling() {
   }
 
   stopHeartbeatStream();
-
   const es = new EventSource(`/api/tasks/${state.taskId}/stream`);
   state.eventSource = es;
   setStreamState("SSE: 连接中", "is-connecting");
 
-  es.onopen = () => {
-    setStreamState("SSE: 已连接", "is-connected");
-  };
+  es.onopen = () => setStreamState("SSE: 已连接", "is-connected");
+  es.onerror = () => setStreamState("SSE: 重连中", "is-connecting");
 
-  es.onerror = () => {
-    // EventSource 会自动重连，这里只更新界面状态。
-    setStreamState("SSE: 重连中", "is-connecting");
-  };
-
-  es.addEventListener("connected", () => {
-    state.infoLogs = [];
-    state.errorLogs = [];
-    $("infoLogs").textContent = "";
-    $("errorLogs").textContent = "";
-    syncErrorTabAlert();
+  es.addEventListener("task-status", (event) => {
+    renderStatus(JSON.parse(event.data));
   });
 
-  es.addEventListener("task-status", (e) => {
-    renderStatus(JSON.parse(e.data));
-  });
-
-  es.addEventListener("logs-info", (e) => {
-    const items = JSON.parse(e.data);
+  es.addEventListener("logs-info", (event) => {
+    const items = JSON.parse(event.data);
     state.infoLogs = state.infoLogs.concat(items).slice(-LOG_DISPLAY_LIMIT);
-    $("infoLogs").textContent = state.infoLogs.map(formatLogLine).join("\n");
+    syncLogBox($("infoLogs"), state.infoLogs.map(formatLogLine).join("\n"), state.infoLogAutoScroll);
     syncErrorTabAlert();
   });
 
-  es.addEventListener("logs-error", (e) => {
-    const items = JSON.parse(e.data);
+  es.addEventListener("logs-error", (event) => {
+    const items = JSON.parse(event.data);
     state.errorLogs = state.errorLogs.concat(items).slice(-LOG_DISPLAY_LIMIT);
-    $("errorLogs").textContent = state.errorLogs.map(formatLogLine).join("\n");
+    syncLogBox($("errorLogs"), state.errorLogs.map(formatLogLine).join("\n"), state.errorLogAutoScroll);
     syncErrorTabAlert();
-  });
-
-  es.addEventListener("stock-states", (e) => {
-    renderStockStates(JSON.parse(e.data));
   });
 
   es.addEventListener("done", () => {
@@ -939,6 +649,38 @@ function startPolling() {
   });
 }
 
+function parseSharedTaskPayload(raw) {
+  if (!raw) return null;
+  try {
+    const payload = JSON.parse(raw);
+    const taskId = typeof payload?.task_id === "string" && payload.task_id ? payload.task_id : null;
+    const source = typeof payload?.source === "string" ? payload.source : "";
+    if (!taskId) return null;
+    return { taskId, source };
+  } catch {
+    return null;
+  }
+}
+
+function publishTaskSelection(taskId) {
+  if (!taskId) return;
+  const payload = JSON.stringify({ task_id: taskId, source: TAB_ID, ts: Date.now() });
+  try {
+    localStorage.setItem(SHARED_TASK_KEY, payload);
+  } catch {
+    // ignore storage errors
+  }
+  if (syncChannel) {
+    syncChannel.postMessage(payload);
+  }
+}
+
+async function applySharedTaskSelection(rawPayload) {
+  const parsed = parseSharedTaskPayload(rawPayload);
+  if (!parsed || parsed.source === TAB_ID || parsed.taskId === state.taskId) return;
+  await refreshTaskList(parsed.taskId, false);
+}
+
 async function refreshTaskList(selectTaskId = null, shouldBroadcast = true) {
   if (state.pollInFlight) return;
   state.pollInFlight = true;
@@ -956,7 +698,7 @@ async function refreshTaskList(selectTaskId = null, shouldBroadcast = true) {
       select.appendChild(option);
     }
 
-    const targetTaskId = selectTaskId || state.taskId || (data.items && data.items[0] ? data.items[0].task_id : null);
+    const targetTaskId = selectTaskId || state.taskId || (data.items?.[0]?.task_id ?? null);
     if (!targetTaskId) {
       state.taskId = null;
       state.lastTask = null;
@@ -971,6 +713,8 @@ async function refreshTaskList(selectTaskId = null, shouldBroadcast = true) {
     if (shouldBroadcast) {
       publishTaskSelection(state.taskId);
     }
+    resetTaskLogCursor();
+    await loadTaskStatus(state.taskId);
     startPolling();
   } finally {
     state.pollInFlight = false;
@@ -983,26 +727,15 @@ async function createTask(runMode = "full") {
     alert("请选择策略组");
     return;
   }
-  const group = findGroup(groupId);
 
-  let groupParams;
-  try {
-    const parsed = parseGroupParamsTextOrThrow(getGroupParamsText() || "{}");
-    groupParams = stripCommentKeys(parsed);
-  } catch (err) {
-    alert(err.message);
-    return;
-  }
-
-  const sampleSize = getCurrentSampleSize();
   const payload = {
-    stocks: splitStocks($("stocksInput").value),
-    source_db: $("sourceDb").value.trim() || null,
+    stocks: splitStocks($("stocksInput")?.value || ""),
+    source_db: $("sourceDb")?.value.trim() || null,
     run_mode: runMode,
-    sample_size: sampleSize,
+    sample_size: getCurrentSampleSize(),
     strategy_group_id: groupId,
-    group_params: groupParams,
-    skip_coverage_filter: $("skipCoverageFilter").checked,
+    group_params: cloneValue(state.groupParams),
+    skip_coverage_filter: $("skipCoverageFilter")?.checked ?? true,
   };
 
   const resp = await postJSON("/api/tasks", payload);
@@ -1010,13 +743,12 @@ async function createTask(runMode = "full") {
 }
 
 async function pauseOrResumeTask() {
-  if (!state.taskId || !state.lastTask) return;
-  if (state.pollInFlight) return;
+  if (!state.taskId || !state.lastTask || state.pollInFlight) return;
   state.pollInFlight = true;
-  const url = state.lastTask.status === "paused"
-    ? `/api/tasks/${state.taskId}/resume`
-    : `/api/tasks/${state.taskId}/pause`;
   try {
+    const url = state.lastTask.status === "paused"
+      ? `/api/tasks/${state.taskId}/resume`
+      : `/api/tasks/${state.taskId}/pause`;
     await postJSON(url, {});
     const task = await getJSON(`/api/tasks/${state.taskId}`);
     renderStatus(task);
@@ -1026,8 +758,7 @@ async function pauseOrResumeTask() {
 }
 
 async function stopTask() {
-  if (!state.taskId) return;
-  if (state.pollInFlight) return;
+  if (!state.taskId || state.pollInFlight) return;
   state.pollInFlight = true;
   try {
     await postJSON(`/api/tasks/${state.taskId}/stop`, {});
@@ -1041,9 +772,9 @@ async function stopTask() {
 async function loadStrategyGroups() {
   const data = await getJSON("/api/strategy-groups");
   state.strategyGroups = (data.items || []).filter((group) => group && group.id !== "strategy_2");
-
   const select = $("strategyGroupSelect");
   select.innerHTML = "";
+
   for (const group of state.strategyGroups) {
     const option = document.createElement("option");
     option.value = group.id;
@@ -1052,14 +783,40 @@ async function loadStrategyGroups() {
   }
 
   if (!state.strategyGroups.length) {
-    setGroupParamsText("{}");
+    $("groupParamsForm").innerHTML = '<div class="param-panel-empty">未发现可用策略组</div>';
     $("strategyGroupDesc").innerHTML = "未发现可用策略组";
     return;
   }
 
   const first = state.strategyGroups[0];
   select.value = first.id;
-  fillGroupParamsFromDefault(first.id);
+  resetGroupParamsFromDefault(first.id);
+}
+
+function commitTagInput(inputEl) {
+  const path = String(inputEl.dataset.paramTagInput || "").split(".").filter(Boolean);
+  const rawText = String(inputEl.value || "");
+  const tokens = rawText
+    .split(/[,\n，]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (!tokens.length) {
+    inputEl.value = "";
+    return;
+  }
+
+  const currentRaw = getValueAtPath(state.groupParams, path);
+  const current = Array.isArray(currentRaw) ? [...currentRaw] : [];
+  for (const token of tokens) {
+    if (!current.includes(token)) current.push(token);
+  }
+  setValueAtPath(state.groupParams, path, current);
+
+  const editor = inputEl.closest(".param-tags-editor");
+  if (editor) {
+    renderTagEditor(editor, path, current);
+  }
+  markSettingsDirty();
 }
 
 function bindEvents() {
@@ -1078,70 +835,125 @@ function bindEvents() {
   $("stopTaskBtn").addEventListener("click", () => {
     stopTask().catch((err) => alert(err.message));
   });
-  $("taskSelect").addEventListener("change", (ev) => {
-    state.taskId = ev.target.value;
+
+  $("taskSelect").addEventListener("change", (event) => {
+    state.taskId = event.target.value;
     state.lastTask = null;
-    resetTaskLogCursor();
     publishTaskSelection(state.taskId);
-    startPolling();
+    refreshTaskList(state.taskId, false).catch((err) => alert(err.message));
   });
-  document.querySelectorAll("[data-stock-sort]").forEach((button) => {
-    button.addEventListener("click", () => {
-      toggleStockStateSort(button.dataset.stockSort || "");
-    });
-  });
-  const stockFilterBindings = [
-    ["stockFilterCode", "code"],
-    ["stockFilterName", "name"],
-    ["stockFilterStatus", "status"],
-    ["stockFilterProcessedBars", "processed_bars"],
-    ["stockFilterSignalCount", "signal_count"],
-    ["stockFilterLastDt", "last_dt"],
-    ["stockFilterError", "error_message"],
-  ];
-  for (const [id, key] of stockFilterBindings) {
-    const input = $(id);
-    if (!input) continue;
-    input.addEventListener("input", (ev) => setStockStateFilter(key, ev.target.value));
-    input.addEventListener("change", (ev) => setStockStateFilter(key, ev.target.value));
-  }
-  $("strategyGroupSelect").addEventListener("change", (ev) => {
-    fillGroupParamsFromDefault(ev.target.value);
+
+  $("strategyGroupSelect").addEventListener("change", (event) => {
+    resetGroupParamsFromDefault(event.target.value);
     markSettingsDirty();
   });
 
-  const dirtyInputIds = ["sourceDb", "stocksInput"];
-  for (const id of dirtyInputIds) {
+  ["sourceDb", "stocksInput", "skipCoverageFilter", "sampleSize"].forEach((id) => {
     const el = $(id);
-    if (!el) continue;
+    if (!el) return;
     el.addEventListener("input", markSettingsDirty);
     el.addEventListener("change", markSettingsDirty);
-  }
+  });
 
-  if (!state.groupParamsEditor) {
-    const groupParamsInput = $("groupParams");
-    if (groupParamsInput) {
-      groupParamsInput.addEventListener("input", markSettingsDirty);
-      groupParamsInput.addEventListener("change", markSettingsDirty);
+  const form = $("groupParamsForm");
+  form.addEventListener("input", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.dataset.paramPath) return;
+    const path = String(target.dataset.paramPath).split(".").filter(Boolean);
+
+    if (target.type === "checkbox") {
+      setValueAtPath(state.groupParams, path, target.checked);
+      const valueNode = target.closest(".checkbox-field")?.querySelector(".param-checkbox-value");
+      if (valueNode) valueNode.textContent = target.checked ? "开启" : "关闭";
+    } else if (target.type === "number") {
+      if (target.value === "") return;
+      const parsed = target.dataset.paramNumberKind === "int"
+        ? parseInt(target.value, 10)
+        : parseFloat(target.value);
+      if (!Number.isFinite(parsed)) return;
+      setValueAtPath(state.groupParams, path, parsed);
+    } else {
+      setValueAtPath(state.groupParams, path, target.value);
     }
-  }
+    markSettingsDirty();
+  });
+
+  form.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.dataset.paramPath || target.type !== "number") return;
+    const parsed = target.dataset.paramNumberKind === "int"
+      ? parseInt(target.value, 10)
+      : parseFloat(target.value);
+    if (!Number.isFinite(parsed)) return;
+    const path = String(target.dataset.paramPath).split(".").filter(Boolean);
+    setValueAtPath(state.groupParams, path, parsed);
+    target.value = String(parsed);
+    markSettingsDirty();
+  });
+
+  form.addEventListener("keydown", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.dataset.paramTagInput) return;
+
+    if (event.key === "Enter" || event.key === "," || event.key === "，") {
+      event.preventDefault();
+      commitTagInput(target);
+      return;
+    }
+
+    if (event.key === "Backspace" && !target.value.trim()) {
+      const path = String(target.dataset.paramTagInput).split(".").filter(Boolean);
+      const currentRaw = getValueAtPath(state.groupParams, path);
+      const current = Array.isArray(currentRaw) ? [...currentRaw] : [];
+      if (!current.length) return;
+      current.pop();
+      setValueAtPath(state.groupParams, path, current);
+      const editor = target.closest(".param-tags-editor");
+      if (editor) renderTagEditor(editor, path, current);
+      markSettingsDirty();
+    }
+  });
+
+  form.addEventListener("blur", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.dataset.paramTagInput) return;
+    commitTagInput(target);
+  }, true);
+
+  form.addEventListener("click", (event) => {
+    const button = event.target instanceof Element ? event.target.closest("[data-param-tag-remove]") : null;
+    if (!button) return;
+    const path = String(button.dataset.paramTagRemove || "").split(".").filter(Boolean);
+    const value = String(button.dataset.paramTagValue || "");
+    const currentRaw = getValueAtPath(state.groupParams, path);
+    const current = Array.isArray(currentRaw) ? [...currentRaw] : [];
+    const next = current.filter((item) => item !== value);
+    setValueAtPath(state.groupParams, path, next);
+    const editor = button.closest(".param-tags-editor");
+    if (editor) renderTagEditor(editor, path, next);
+    markSettingsDirty();
+  });
 }
 
 function bindCrossTabSync() {
-  window.addEventListener("storage", (ev) => {
-    if (ev.key !== SHARED_TASK_KEY || !ev.newValue) return;
-    applySharedTaskSelection(ev.newValue).catch((err) => {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== SHARED_TASK_KEY || !event.newValue) return;
+    applySharedTaskSelection(event.newValue).catch((err) => {
       console.error("跨标签任务同步失败(storage)", err);
     });
   });
-  if (syncChannel) {
-    syncChannel.addEventListener("message", (ev) => {
-      applySharedTaskSelection(typeof ev.data === "string" ? ev.data : "").catch((err) => {
-        console.error("跨标签任务同步失败(channel)", err);
-      });
+
+  if (!syncChannel) return;
+  syncChannel.addEventListener("message", (event) => {
+    applySharedTaskSelection(typeof event.data === "string" ? event.data : "").catch((err) => {
+      console.error("跨标签任务同步失败(channel)", err);
     });
-    window.addEventListener("beforeunload", () => syncChannel.close(), { once: true });
-  }
+  });
+  window.addEventListener("beforeunload", () => syncChannel.close(), { once: true });
 }
 
 function bindLogAutoScroll() {
@@ -1152,7 +964,6 @@ function bindLogAutoScroll() {
 }
 
 async function init() {
-  initGroupParamsEditor();
   bindEvents();
   bindLogAutoScroll();
   bindCrossTabSync();
@@ -1164,8 +975,7 @@ async function init() {
     console.warn("加载监控页参数设置失败，将使用页面默认值", err);
     setSaveHint("参数修改后请点“保存参数设置”。", "hint");
   }
-  const params = new URLSearchParams(window.location.search);
-  const taskIdFromUrl = params.get("task_id");
+  const taskIdFromUrl = new URLSearchParams(window.location.search).get("task_id");
   await refreshTaskList(taskIdFromUrl || null);
 }
 

@@ -90,7 +90,7 @@ py run.py
 2. `app/main.py`：装配 FastAPI、日志系统、状态库、任务管理器、维护管理器与概念管理器。
 3. `app/api/routes.py`：集中定义 API 路由、请求校验、结果拼装、流式接口和前端设置接口。
 4. `app/db/market_data.py`：读取源行情库与概念数据，负责图表数据和概念信息查询。
-5. `app/db/state_db.py`：持久化任务、日志、结果、维护状态、概念任务与前端配置，当前 schema 版本为 `4`。
+5. `app/db/state_db.py`：持久化任务、日志、结果、维护状态、概念任务与前端配置，当前 schema 版本为 `5`。
 6. `app/services/task_manager.py`：筛选任务创建、暂停、恢复、停止、引擎选择与结果写库。
 7. `app/services/maintenance_manager.py`：维护任务生命周期与停止控制。
 8. `app/services/kline_maintenance.py`：K 线维护执行引擎，支持最新更新与历史回填。
@@ -132,7 +132,7 @@ py run.py
 1. 前端通过 `POST /api/tasks` 创建任务。
 2. `TaskManager` 读取策略组 `manifest.json`，决定走 specialized 还是 backtrader 路径。
 3. 若配置了概念预筛选，TaskManager 会先调用概念公式过滤股票池，再把过滤后的 `codes` 传入引擎。
-4. 结果写入 `tasks`、`task_logs`、`task_results`、`task_stock_states`。
+4. 结果写入 `tasks`、`task_logs`、`task_results`，任务恢复依赖 `tasks.summary_json` 与 `task_results`。
 5. 前端通过状态、日志、结果、图表和流式接口展示任务执行情况。
 
 ### 6.2 K 线维护任务链路
@@ -157,7 +157,7 @@ py run.py
 2. `GET /api/maintenance/runtime-metadata`：维护运行时元数据。
 3. `GET /api/strategy-groups`：列出全部策略组。
 4. `GET /api/strategy-groups/{group_id}`：读取单个策略组 manifest 信息。
-5. `GET/POST /api/ui-settings/monitor`：读取/保存监控页表单配置。
+5. `GET/POST /api/ui-settings/monitor`：读取/保存监控页表单配置，正式字段为结构化 `group_params`。
 6. `GET/POST /api/ui-settings/maintenance`：读取/保存维护页配置。
 
 ### 7.2 筛选任务接口
@@ -171,12 +171,11 @@ py run.py
 7. `GET /api/tasks/{task_id}/logs`：任务日志。
 8. `GET /api/tasks/{task_id}/results`：结果列表。
 9. `GET /api/tasks/{task_id}/result-stocks`：结果股票汇总。
-10. `GET /api/tasks/{task_id}/result-stock-concepts`：结果股票概念信息。
+10. `GET /api/tasks/{task_id}/result-stock-concepts`：结果股票概念信息，包含概念集中度 Top3 摘要。
 11. `GET /api/tasks/{task_id}/candles`：K 线数据查询。
 12. `GET /api/tasks/{task_id}/stock-chart`：单股图表与窗口高亮。
-13. `GET /api/tasks/{task_id}/stock-states`：逐股进度与错误状态。
-14. `GET /api/tasks/{task_id}/stream`：任务日志流。
-15. `GET /api/tasks/{task_id}/status-stream`：任务状态流。
+13. `GET /api/tasks/{task_id}/stream`：任务日志流。
+14. `GET /api/tasks/{task_id}/status-stream`：任务状态流。
 
 ### 7.3 维护与概念任务接口
 
@@ -203,14 +202,13 @@ py run.py
 1. `tasks`：筛选任务主表。
 2. `task_logs`：筛选任务日志。
 3. `task_results`：命中结果。
-4. `task_stock_states`：逐股执行状态。
-5. `maintenance_jobs`：维护任务主表。
-6. `maintenance_logs`：维护任务日志。
-7. `maintenance_retry_tasks`：维护失败重试任务。
-8. `concept_jobs`：概念更新任务主表。
-9. `concept_logs`：概念更新任务日志。
-10. `_maintenance_meta`：维护过程内部元数据。
-11. `app_meta`：应用元数据，包含 `schema_version=4`。
+4. `maintenance_jobs`：维护任务主表。
+5. `maintenance_logs`：维护任务日志。
+6. `maintenance_retry_tasks`：维护失败重试任务。
+7. `concept_jobs`：概念更新任务主表。
+8. `concept_logs`：概念更新任务日志。
+9. `_maintenance_meta`：维护过程内部元数据。
+10. `app_meta`：应用元数据，包含 `schema_version=5`。
 
 ## 9. 策略开发约定
 

@@ -1,13 +1,3 @@
-"""
-概念任务 API 契约测试。
-
-职责：
-1. 验证概念任务创建、查询、日志接口的响应结构。
-2. 验证结果页概念明细接口返回任务公式与概念列表。
-边界：
-1. 使用最小 FastAPI 测试应用，不依赖真实 app.main 启动副作用。
-"""
-
 from __future__ import annotations
 
 import unittest
@@ -36,7 +26,7 @@ class _FakeConceptManager:
         return "concept-job-1"
 
     def stop_job(self, job_id: str) -> dict[str, str]:
-        return {"job_id": job_id, "status": "stopping", "message": "停止请求已记录"}
+        return {"job_id": job_id, "status": "stopping", "message": "stopping"}
 
 
 class _FakeMaintenanceManager:
@@ -64,15 +54,15 @@ class _FakeStateDB:
             "info_log_count": 0,
             "error_log_count": 0,
             "strategy_group_id": "g1",
-            "strategy_name": "策略A",
+            "strategy_name": "strategy-a",
             "strategy_description": "desc",
             "source_db": "fake-source.duckdb",
             "summary": {
                 "concept_formula": {
                     "enabled": True,
                     "active": True,
-                    "concept_terms": ["机器人", "液冷"],
-                    "reason_terms": ["订单", "中标"],
+                    "concept_terms": ["robot", "liquid cooling"],
+                    "reason_terms": ["order", "win bid"],
                 }
             },
             "params": {"run_mode": "full"},
@@ -80,11 +70,18 @@ class _FakeStateDB:
         self.result_stocks = [
             {
                 "code": "sh.600000",
-                "name": "浦发银行",
+                "name": "stock-a",
                 "signal_count": 2,
                 "first_signal_dt": None,
                 "last_signal_dt": None,
-            }
+            },
+            {
+                "code": "sz.000001",
+                "name": "stock-b",
+                "signal_count": 1,
+                "first_signal_dt": None,
+                "last_signal_dt": None,
+            },
         ]
         self.concept_job = {
             "job_id": "concept-job-1",
@@ -148,8 +145,6 @@ class _FakeDuckDBRowsConnection:
 
 
 class TestApiConceptContract(unittest.TestCase):
-    """概念任务 API 契约测试。"""
-
     def setUp(self) -> None:
         self.request = SimpleNamespace(
             app=SimpleNamespace(
@@ -193,26 +188,31 @@ class TestApiConceptContract(unittest.TestCase):
         self.assertEqual(len(payload["items"]), 2)
         self.assertEqual(payload["next_after_log_id"], 12)
 
-    def test_result_stock_concepts_response_contains_formula_and_items(self) -> None:
+    def test_result_stock_concepts_response_contains_formula_items_and_top_concepts(self) -> None:
         concept_entries = {
             "sh.600000": [
-                {
-                    "board_name": "机器人",
-                    "selected_reason": "订单持续兑现",
-                    "updated_at": None,
-                }
-            ]
+                {"board_name": "robot", "selected_reason": "order keeps growing", "updated_at": None},
+                {"board_name": "liquid cooling", "selected_reason": "chip cooling", "updated_at": None},
+            ],
+            "sz.000001": [
+                {"board_name": "robot", "selected_reason": "new robotics line", "updated_at": None},
+            ],
         }
         with mock.patch("app.api.routes.MarketDataDB.get_stock_concepts_by_codes", return_value=concept_entries):
             payload = get_result_stock_concepts("task-1", self.request).model_dump()
+
         self.assertEqual(payload["task_id"], "task-1")
         self.assertTrue(payload["formula"]["enabled"])
-        self.assertEqual(payload["formula"]["concept_terms"], ["机器人", "液冷"])
+        self.assertEqual(payload["formula"]["concept_terms"], ["robot", "liquid cooling"])
+        self.assertEqual(payload["top_concepts"][0]["board_name"], "robot")
+        self.assertEqual(payload["top_concepts"][0]["hit_stock_count"], 2)
+        self.assertEqual(payload["top_concepts"][0]["total_hit_stocks"], 2)
+        self.assertEqual(payload["top_concepts"][1]["board_name"], "liquid cooling")
         self.assertIn("sh.600000", payload["items"])
-        self.assertEqual(payload["items"]["sh.600000"][0]["board_name"], "机器人")
+        self.assertEqual(payload["items"]["sh.600000"][0]["board_name"], "robot")
 
     def test_result_stock_concepts_tolerates_duckdb_config_conflict(self) -> None:
-        rows = [("sh.600000", "机器人", "订单持续兑现", None)]
+        rows = [("sh.600000", "robot", "order keeps growing", None)]
         writable_conn = _FakeDuckDBRowsConnection(rows)
 
         with mock.patch(
@@ -227,7 +227,7 @@ class TestApiConceptContract(unittest.TestCase):
             payload = get_result_stock_concepts("task-1", self.request).model_dump()
 
         self.assertIn("sh.600000", payload["items"])
-        self.assertEqual(payload["items"]["sh.600000"][0]["board_name"], "机器人")
+        self.assertEqual(payload["items"]["sh.600000"][0]["board_name"], "robot")
 
 
 if __name__ == "__main__":

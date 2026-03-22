@@ -22,7 +22,7 @@
    5. `bigbro_buy`（specialized 主路径，保留 backtrader 回退）
    6. `strategy_2`（specialized 模板）
 3. 服务监听固定 `0.0.0.0:8000`。
-4. 状态库 schema 版本：`app_meta.schema_version = "4"`。
+4. 状态库 schema 版本：`app_meta.schema_version = "5"`。
 5. K 线维护模式仅支持：`latest_update` / `historical_backfill`，默认 `latest_update`。
 6. 前端第三方依赖全部本地静态资源，不依赖 CDN。
 7. 概念更新任务已并入主系统，运行中会阻止新筛选任务创建。
@@ -75,7 +75,7 @@
    1. specialized：调用 `manifest.execution.specialized_entry`
    2. backtrader：走 `app/services/screener.py`
 3. 若策略启用了概念预筛选，TaskManager 会先调用概念公式过滤股票池。
-4. 结果落库：`tasks`、`task_logs`、`task_results`、`task_stock_states`。
+4. 结果落库：`tasks`、`task_logs`、`task_results`。
 5. 前端通过结果、图表、日志、状态流接口展示任务执行情况。
 
 ### 4.2 K 线维护任务链路
@@ -153,9 +153,9 @@
 6. `GET /api/tasks/{task_id}/result-stock-concepts`
 7. `GET /api/tasks/{task_id}/candles`
 8. `GET /api/tasks/{task_id}/stock-chart`
-9. `GET /api/tasks/{task_id}/stock-states`
 10. `GET /api/tasks/{task_id}/stream`
-11. `GET /api/tasks/{task_id}/status-stream`
+9. `GET /api/tasks/{task_id}/stream`
+10. `GET /api/tasks/{task_id}/status-stream`
 
 维护与概念任务相关：
 

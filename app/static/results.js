@@ -26,7 +26,7 @@
   hasMoreBefore: true,
   hasMoreAfter: true,
   conceptCacheByTask: {},
-  conceptFetchPromise: null,
+  conceptFetchPromiseByTask: {},
   tooltipAnchorCode: null,
   tooltipAnchorEl: null,
   tooltipHideTimer: null,
@@ -185,6 +185,7 @@ function renderMeta(task, totalStocks) {
     `策略组: ${task.strategy_name || "-"} | 命中总条数: ${task.result_count} | ` +
     `命中股票数(去重): ${totalStocks} | 进度: ${task.processed_stocks}/${task.total_stocks} (${task.progress.toFixed(2)}%)`;
   $("resultStrategyDesc").textContent = `策略说明: ${task.strategy_description || "-"}${conceptSummary}`;
+  renderTopConceptSummary();
 }
 
 function getConceptTooltipElement() {
@@ -212,7 +213,7 @@ function escapeRegExp(value) {
 }
 
 function getCurrentConceptPayload() {
-  return state.conceptCacheByTask[state.taskId] || { formula: {}, items: {} };
+  return state.conceptCacheByTask[state.taskId] || { formula: {}, topConcepts: [], items: {} };
 }
 
 function getCurrentConceptFormula() {
@@ -229,6 +230,30 @@ function isConceptFormulaActive(formula) {
 function formatFormulaTerms(terms, separator) {
   const items = Array.isArray(terms) ? terms.filter(Boolean) : [];
   return items.length ? items.join(separator) : "-";
+}
+
+function renderTopConceptSummary() {
+  const el = $("resultConceptTop3");
+  if (!el) return;
+  if (!state.taskId) {
+    el.textContent = "概念集中度 Top3: -";
+    return;
+  }
+  const payload = getCurrentConceptPayload();
+  const topConcepts = Array.isArray(payload.topConcepts) ? payload.topConcepts : [];
+  if (!topConcepts.length) {
+    el.textContent = "概念集中度 Top3: -";
+    return;
+  }
+  const text = topConcepts
+    .map((item) => {
+      const hitCount = Number(item.hit_stock_count || 0);
+      const totalHitStocks = Number(item.total_hit_stocks || 0);
+      const ratio = totalHitStocks > 0 ? Math.round(hitCount / totalHitStocks * 100) : 0;
+      return `${item.board_name || "-"} ${hitCount}/${totalHitStocks} (${ratio}%)`;
+    })
+    .join(" · ");
+  el.textContent = `概念集中度 Top3: ${text}`;
 }
 
 function highlightTerms(text, terms) {
@@ -330,24 +355,29 @@ function hideConceptTooltip() {
 }
 
 async function ensureResultConceptsLoaded() {
-  if (!state.taskId) return getCurrentConceptPayload();
-  if (state.conceptCacheByTask[state.taskId]) {
-    return state.conceptCacheByTask[state.taskId];
+  const taskId = state.taskId;
+  if (!taskId) return getCurrentConceptPayload();
+  if (state.conceptCacheByTask[taskId]) {
+    return state.conceptCacheByTask[taskId];
   }
-  if (!state.conceptFetchPromise) {
-    state.conceptFetchPromise = getJSON(`/api/tasks/${state.taskId}/result-stock-concepts`)
+  if (!state.conceptFetchPromiseByTask[taskId]) {
+    state.conceptFetchPromiseByTask[taskId] = getJSON(`/api/tasks/${taskId}/result-stock-concepts`)
       .then((data) => {
-        state.conceptCacheByTask[state.taskId] = {
+        state.conceptCacheByTask[taskId] = {
           formula: data.formula || {},
+          topConcepts: data.top_concepts || [],
           items: data.items || {},
         };
-        return state.conceptCacheByTask[state.taskId];
+        if (state.taskId === taskId) {
+          renderTopConceptSummary();
+        }
+        return state.conceptCacheByTask[taskId];
       })
       .finally(() => {
-        state.conceptFetchPromise = null;
+        delete state.conceptFetchPromiseByTask[taskId];
       });
   }
-  return state.conceptFetchPromise;
+  return state.conceptFetchPromiseByTask[taskId];
 }
 
 async function showConceptTooltip(code, anchorEl) {
@@ -1401,6 +1431,11 @@ async function loadResultStocksAndMaybeChart() {
   if (!state.taskId) return 0;
   const data = await getJSON(`/api/tasks/${state.taskId}/result-stocks`);
   const items = data.items || [];
+  const conceptLoadPromise = ensureResultConceptsLoaded().catch((err) => {
+    console.error("加载概念摘要失败", err);
+    renderTopConceptSummary();
+    return null;
+  });
 
   const stillExists = items.some((x) => x.code === state.selectedCode);
   if (!stillExists) {
@@ -1416,6 +1451,7 @@ async function loadResultStocksAndMaybeChart() {
     $("intervalSummary").textContent = "当前任务暂无命中股票。";
     renderChart({ candles: [], intervals: [], signals: [] });
   }
+  await conceptLoadPromise;
   return items.length;
 }
 
@@ -1537,6 +1573,7 @@ async function refreshTaskList(selectTaskId = null, shouldBroadcast = true) {
     const fromUrl = parseTaskIdFromUrl();
     const taskId = selectTaskId || fromUrl || state.taskId || (data.items && data.items[0] ? data.items[0].task_id : null);
     if (!taskId) {
+      renderTopConceptSummary();
       startPolling();
       return;
     }
@@ -1548,6 +1585,7 @@ async function refreshTaskList(selectTaskId = null, shouldBroadcast = true) {
     writeTaskIdToUrl(taskId);
     select.value = taskId;
     state.lastResultCount = -1;
+    renderTopConceptSummary();
     await syncTask(true);
     startPolling();
   } finally {
@@ -1567,6 +1605,7 @@ function bindEvents() {
     state.selectedCode = null;
     state.lastResultCount = -1;
     writeTaskIdToUrl(state.taskId);
+    renderTopConceptSummary();
     try {
       await syncTask(true);
       startPolling();
