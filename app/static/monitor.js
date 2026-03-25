@@ -373,20 +373,29 @@ function renderInlineTemplateSection(path, sectionValue, helpNode) {
   const sectionKey = pathToString(path);
   const label = helpNode._label || sectionKey;
   const templates = Array.isArray(helpNode._templates) ? helpNode._templates : [];
-  const enabledVal = sectionValue.enabled;
-  const enabledPath = path.concat("enabled");
-  const enabledKey = pathToString(enabledPath);
-  const isEnabled = enabledVal === true;
+  const hasEnabled = "enabled" in sectionValue;
+  const isEnabled = hasEnabled && sectionValue.enabled === true;
 
-  const headerHtml = `
-    <div class="param-inline-section-header">
-      <span class="param-inline-section-title">${escapeHtml(label)}</span>
-      <span class="param-checkbox-row" style="cursor:default">
-        <input type="checkbox" data-param-path="${escapeHtml(enabledKey)}" ${isEnabled ? "checked" : ""} style="cursor:pointer" />
-        <span class="param-checkbox-value">${isEnabled ? "开启" : "关闭"}</span>
-      </span>
-    </div>
-  `;
+  let headerHtml;
+  if (hasEnabled) {
+    const enabledPath = path.concat("enabled");
+    const enabledKey = pathToString(enabledPath);
+    headerHtml = `
+      <div class="param-inline-section-header">
+        <span class="param-inline-section-title">${escapeHtml(label)}</span>
+        <span class="param-checkbox-row" style="cursor:default">
+          <input type="checkbox" data-param-path="${escapeHtml(enabledKey)}" ${isEnabled ? "checked" : ""} style="cursor:pointer" />
+          <span class="param-checkbox-value">${isEnabled ? "开启" : "关闭"}</span>
+        </span>
+      </div>
+    `;
+  } else {
+    headerHtml = `
+      <div class="param-inline-section-header">
+        <span class="param-inline-section-title">${escapeHtml(label)}</span>
+      </div>
+    `;
+  }
 
   let rowsHtml = "";
   for (const tpl of templates) {
@@ -452,14 +461,24 @@ function renderInlineTemplateSection(path, sectionValue, helpNode) {
     }
   }
 
-  const bodyDrawerClass = isEnabled ? "" : "param-drawer-closed";
-  return `
-    <section class="param-inline-section param-drawer" data-param-section="${escapeHtml(sectionKey)}">
-      ${headerHtml}
-      <div class="param-drawer-body ${bodyDrawerClass}" data-drawer-section="${escapeHtml(sectionKey)}">
-        <div class="param-inline-section-body">
-          ${rowsHtml}
+  if (hasEnabled) {
+    const bodyDrawerClass = isEnabled ? "" : "param-drawer-closed";
+    return `
+      <section class="param-inline-section param-drawer" data-param-section="${escapeHtml(sectionKey)}">
+        ${headerHtml}
+        <div class="param-drawer-body ${bodyDrawerClass}" data-drawer-section="${escapeHtml(sectionKey)}">
+          <div class="param-inline-section-body">
+            ${rowsHtml}
+          </div>
         </div>
+      </section>
+    `;
+  }
+  return `
+    <section class="param-inline-section" data-param-section="${escapeHtml(sectionKey)}">
+      ${headerHtml}
+      <div class="param-inline-section-body">
+        ${rowsHtml}
       </div>
     </section>
   `;
@@ -894,9 +913,11 @@ async function refreshTaskList(selectTaskId = null, shouldBroadcast = true) {
     for (const item of data.items || []) {
       const option = document.createElement("option");
       option.value = item.task_id;
+      const d = item.created_at ? new Date(item.created_at) : null;
+      const ts = d ? ` | ${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}` : "";
       option.textContent =
         `${item.task_id.slice(0, 8)} | ${item.strategy_name || "-"} | ${STATUS_TEXT[item.status] || item.status} | ` +
-        `${item.processed_stocks}/${item.total_stocks} | 命中${item.result_count}`;
+        `${item.processed_stocks}/${item.total_stocks} | 命中${item.result_count}${ts}`;
       select.appendChild(option);
     }
 

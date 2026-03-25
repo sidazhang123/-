@@ -376,7 +376,9 @@ async function refreshMaintenanceJobs(selectJobId = null) {
       const option = document.createElement("option");
       option.value = item.job_id;
       option.dataset.type = item.type || "maintenance";
-      option.textContent = `${item.job_id.slice(0, 8)} | ${jobTypeLabel(item.type, item.mode)} | ${JOB_STATUS_TEXT[item.status] || item.status}`;
+      const d = item.created_at ? new Date(item.created_at) : null;
+      const ts = d ? ` | ${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}` : "";
+      option.textContent = `${item.job_id.slice(0, 8)} | ${jobTypeLabel(item.type, item.mode)} | ${JOB_STATUS_TEXT[item.status] || item.status}${ts}`;
       select.appendChild(option);
     }
 

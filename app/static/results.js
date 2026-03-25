@@ -572,18 +572,17 @@ function syncChartFullscreenState() {
 function bindFullscreenEvents() {
   document.addEventListener("fullscreenchange", syncChartFullscreenState);
   document.addEventListener("keydown", (event) => {
-    if (!state.isChartFullscreen) return;
-    if (event.key === "ArrowUp") {
+    if (event.key === "ArrowUp" && state.resultStocks.length) {
       event.preventDefault();
       switchSelectedStock(-1).catch((err) => alert(err.message));
       return;
     }
-    if (event.key === "ArrowDown") {
+    if (event.key === "ArrowDown" && state.resultStocks.length) {
       event.preventDefault();
       switchSelectedStock(1).catch((err) => alert(err.message));
       return;
     }
-    if (event.key === "Escape") {
+    if (event.key === "Escape" && state.isChartFullscreen) {
       event.preventDefault();
       exitChartFullscreen().catch((err) => console.error("退出全屏失败", err));
     }
@@ -689,6 +688,20 @@ function initChart() {
         const low = Number(candle.low);
         const close = Number(candle.close);
         if (![open, high, low, close].every(Number.isFinite)) return '';
+        let dtLabel = '';
+        if (candle.datetime) {
+          const d = new Date(candle.datetime);
+          const yy = String(d.getFullYear()).slice(2);
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          if (['15', '30', '60'].includes(state.chartTf)) {
+            const HH = String(d.getHours()).padStart(2, '0');
+            const MM = String(d.getMinutes()).padStart(2, '0');
+            dtLabel = `${yy}/${mm}/${dd} ${HH}:${MM}`;
+          } else {
+            dtLabel = `${yy}/${mm}/${dd}`;
+          }
+        }
         const prevCandle = dataIndex > 0 ? state.loadedCandles[dataIndex - 1] : null;
         const preClose = prevCandle ? Number(prevCandle.close) : Number.NaN;
         let changePct = '';
@@ -698,16 +711,12 @@ function initChart() {
           const color = pctValue >= 0 ? '#ef4444' : '#10b981';
           changePct = `<br/>涨幅: <span style="color:${color}">${pct}%</span>`;
         }
-        let maInfo = '';
-        const ma10p = params.find(p => p.seriesName === 'MA10');
-        const ma20p = params.find(p => p.seriesName === 'MA20');
-        if (ma10p && ma10p.data != null) maInfo += `<br/><span style="color:#ffffff">MA10: ${Number(ma10p.data).toFixed(2)}</span>`;
-        if (ma20p && ma20p.data != null) maInfo += `<br/><span style="color:#fbbf24">MA20: ${Number(ma20p.data).toFixed(2)}</span>`;
         return `<div style="font-size:12px;line-height:1.5;">
+          ${dtLabel ? dtLabel + '<br/>' : ''}
           开盘: ${open.toFixed(2)}<br/>
           收盘: ${close.toFixed(2)}<br/>
           最低: ${low.toFixed(2)}<br/>
-          最高: ${high.toFixed(2)}${changePct}${maInfo}
+          最高: ${high.toFixed(2)}${changePct}
         </div>`;
       },
     },
@@ -1684,9 +1693,11 @@ async function refreshTaskList(selectTaskId = null, shouldBroadcast = true) {
     for (const item of data.items || []) {
       const option = document.createElement("option");
       option.value = item.task_id;
+      const d = item.created_at ? new Date(item.created_at) : null;
+      const ts = d ? ` | ${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}` : "";
       option.textContent =
         `${item.task_id.slice(0, 8)} | ${item.strategy_name || "-"} | ${STATUS_TEXT[item.status] || item.status} | ` +
-        `${item.processed_stocks}/${item.total_stocks} | 命中${item.result_count}`;
+        `${item.processed_stocks}/${item.total_stocks} | 命中${item.result_count}${ts}`;
       select.appendChild(option);
     }
 
