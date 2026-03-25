@@ -16,8 +16,11 @@
 4. 如需概念预筛选，只读取 `group_params["universe_filters"]["concepts"]` 用于记录参数；
    实际过滤由 TaskManager 在进入 engine 前执行，engine 不要重复裁剪 `codes`。
 5. 每个信号 payload 都必须正确填写 `chart_interval_start_ts` 和 `chart_interval_end_ts`，
-   且这两个字段必须表示“单次信号”的实际展示窗口，而不是全任务跨度或多段历史总跨度。
-"""
+   且这两个字段必须表示“单次信号”的实际展示窗口，而不是全任务跨度或多段历史总跨度。6. 如果策略检测到可视化辅助线（趋势线、边界线、支撑/阻力线等），应通过 payload
+   的 `overlay_lines` 字段传递给前端，前端会自动在 K 线图上用 ECharts markLine 渲染。
+   每条线是一个 dict，必须包含 start_ts/end_ts/start_price/end_price，
+   可选 color（默认 #fbbf24）、dash（默认 True）、label（默认空）。
+   此机制已在 routes.py 和 results.js 中内置支持，无需额外前端改动。"""
 
 from __future__ import annotations
 
@@ -203,6 +206,22 @@ def _scan_one_code(
     #     if your_condition(row, daily_params):
     #         stats["candidate_count"] += 1
     #
+    #         # 可选：构建 overlay_lines，用于在 K 线图上绘制辅助线
+    #         # 前端会自动识别 payload 中的 overlay_lines 字段，
+    #         # 通过 ECharts markLine 在蜡烛图上渲染斜线/水平线。
+    #         # 典型用途：趋势线、支撑/阻力线、通道上下沿、三角形边界线等。
+    #         # overlay_lines = [
+    #         #     {
+    #         #         "label": "上沿",          # 线条标签，显示在起点
+    #         #         "start_ts": ...,          # 起点时间戳（datetime）
+    #         #         "start_price": ...,       # 起点价格（float）
+    #         #         "end_ts": ...,            # 终点时间戳（datetime）
+    #         #         "end_price": ...,         # 终点价格（float）
+    #         #         "color": "#ef4444",       # 可选，默认 #fbbf24
+    #         #         "dash": True,             # 可选，是否虚线，默认 True
+    #         #     },
+    #         # ]
+    #
     #         signal = build_signal_dict(
     #             code=code,
     #             name=name,
@@ -217,6 +236,7 @@ def _scan_one_code(
     #                 "chart_interval_start_ts": ...,
     #                 "chart_interval_end_ts": ...,
     #                 "anchor_day_ts": ...,          # 可选：红点锚点时间
+    #                 "overlay_lines": [],           # 可选：K 线图辅助线列表
     #                 "your_custom_field": ...,
     #             },
     #         )

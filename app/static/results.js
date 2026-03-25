@@ -46,6 +46,7 @@ const STATUS_TEXT = {
 
 const SHARED_TASK_KEY = "screening:selected_task_id";
 const CHART_ZOOM_LOCKS_KEY = "screening:results:chart_zoom_locks";
+const CHART_LEGEND_KEY = "screening:results:chart_legend_selected";
 const SYNC_CHANNEL_NAME = "screening-task-sync";
 const TAB_ID = `results-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const syncChannel = "BroadcastChannel" in window ? new BroadcastChannel(SYNC_CHANNEL_NAME) : null;
@@ -172,6 +173,21 @@ function persistZoomLocks() {
   } catch {
     // ignore storage errors
   }
+}
+
+function loadLegendSelected() {
+  try {
+    const raw = localStorage.getItem(CHART_LEGEND_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    return (obj && typeof obj === 'object') ? obj : null;
+  } catch { return null; }
+}
+
+function persistLegendSelected(selected) {
+  try {
+    localStorage.setItem(CHART_LEGEND_KEY, JSON.stringify(selected));
+  } catch {}
 }
 
 function renderMeta(task, totalStocks) {
@@ -490,6 +506,13 @@ async function selectStock(code, name, options = {}) {
   updateSelectedStockRow(Boolean(options.scrollIntoView));
   updateChartTitles();
   if (options.loadChart === false) return;
+
+  // 自动切换到信号的主周期，避免周线信号显示日线 K 线图
+  const stockItem = state.resultStocks.find((s) => s.code === code);
+  if (stockItem && stockItem.clock_tf && stockItem.clock_tf !== state.chartTf) {
+    setChartTf(stockItem.clock_tf, false);
+  }
+
   await loadChart();
 }
 
@@ -675,16 +698,38 @@ function initChart() {
           const color = pctValue >= 0 ? '#ef4444' : '#10b981';
           changePct = `<br/>涨幅: <span style="color:${color}">${pct}%</span>`;
         }
+        let maInfo = '';
+        const ma10p = params.find(p => p.seriesName === 'MA10');
+        const ma20p = params.find(p => p.seriesName === 'MA20');
+        if (ma10p && ma10p.data != null) maInfo += `<br/><span style="color:#ffffff">MA10: ${Number(ma10p.data).toFixed(2)}</span>`;
+        if (ma20p && ma20p.data != null) maInfo += `<br/><span style="color:#fbbf24">MA20: ${Number(ma20p.data).toFixed(2)}</span>`;
         return `<div style="font-size:12px;line-height:1.5;">
           开盘: ${open.toFixed(2)}<br/>
           收盘: ${close.toFixed(2)}<br/>
           最低: ${low.toFixed(2)}<br/>
-          最高: ${high.toFixed(2)}${changePct}
+          最高: ${high.toFixed(2)}${changePct}${maInfo}
         </div>`;
       },
     },
     axisPointer: { link: [{ xAxisIndex: 'all' }] },
-    legend: { show: false },
+    legend: {
+      show: true,
+      left: 10,
+      bottom: '12%',
+      orient: 'vertical',
+      padding: [4, 8],
+      backgroundColor: 'rgba(13,17,23,0.7)',
+      borderRadius: 4,
+      textStyle: { color: '#ccc', fontSize: 11 },
+      itemWidth: 18,
+      itemHeight: 2,
+      selectedMode: true,
+      selected: loadLegendSelected() || { 'MA10': true, 'MA20': true },
+      data: [
+        { name: 'MA10', icon: 'roundRect', textStyle: { color: '#ffffff' } },
+        { name: 'MA20', icon: 'roundRect', textStyle: { color: '#fbbf24' } },
+      ],
+    },
     grid: [
       { left: '8%', right: '4%', top: 48, height: '56%' },
       { left: '8%', right: '4%', top: '70%', height: '18%' },
@@ -711,10 +756,23 @@ function initChart() {
         itemStyle: { color: '#ef4444', color0: '#10b981', borderColor: '#ef4444', borderColor0: '#10b981' },
       },
       { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: [] },
+      { name: 'MA10', type: 'line', data: [], smooth: false, symbol: 'none',
+        lineStyle: { width: 1, color: '#ffffff' },
+        itemStyle: { color: '#ffffff' },
+      },
+      { name: 'MA20', type: 'line', data: [], smooth: false, symbol: 'none',
+        lineStyle: { width: 2, color: '#fbbf24' },
+        itemStyle: { color: '#fbbf24' },
+      },
     ],
   });
 
   window.addEventListener("resize", () => state.chart.resize());
+
+  // Persist legend visibility on toggle
+  state.chart.on('legendselectchanged', function (params) {
+    persistLegendSelected(params.selected);
+  });
 
   // Lazy-load trigger on zoom/drag
   state.chart.on("dataZoom", () => {
@@ -1164,6 +1222,21 @@ function renderChart(chartData, skipAutoZoom = false) {
     },
   }));
 
+  // ── 前端计算 MA 均线 ──
+  const closes = candles.map(c => Number(c.close));
+  function calcMA(period) {
+    const result = [];
+    for (let i = 0; i < closes.length; i++) {
+      if (i < period - 1) { result.push(null); continue; }
+      let sum = 0;
+      for (let j = i - period + 1; j <= i; j++) sum += closes[j];
+      result.push(+(sum / period).toFixed(2));
+    }
+    return result;
+  }
+  const ma10Data = calcMA(10);
+  const ma20Data = calcMA(20);
+
   const markAreaData = [];
   for (const interval of intervals) {
     if (!timeMs.length) continue;
@@ -1242,6 +1315,50 @@ function renderChart(chartData, skipAutoZoom = false) {
     });
   }
 
+  // ── overlay_lines: 策略提供的斜线覆盖层（如三角形上下沿） ──
+  const markLineData = [];
+  for (const sig of signals) {
+    const overlayLines = sig.overlay_lines || (sig.payload && sig.payload.overlay_lines) || [];
+    for (const line of overlayLines) {
+      if (!line.start_ts || !line.end_ts) continue;
+      const sIdx = nearestIndex(timeMs, new Date(line.start_ts).getTime());
+      const eIdx = nearestIndex(timeMs, new Date(line.end_ts).getTime());
+      if (sIdx < 0 || eIdx < 0) continue;
+      markLineData.push([
+        {
+          coord: [xData[sIdx], line.start_price],
+          name: line.label || "",
+          label: {
+            show: true,
+            formatter: line.label || "",
+            color: line.color || "#fbbf24",
+            fontSize: 11,
+            fontWeight: 600,
+            position: "start",
+          },
+        },
+        {
+          coord: [xData[eIdx], line.end_price],
+        },
+      ]);
+    }
+  }
+  const markLineOpt = markLineData.length
+    ? {
+        silent: true,
+        symbol: "none",
+        lineStyle: { type: "dashed", width: 2, color: "#fbbf24" },
+        label: { show: false },
+        data: markLineData.map((pair) => {
+          const lineColor = pair[0].label?.color || "#fbbf24";
+          return [
+            { ...pair[0], lineStyle: { type: "dashed", width: 2, color: lineColor } },
+            pair[1],
+          ];
+        }),
+      }
+    : { silent: true, data: [] };
+
   state.chart.setOption({
     title: { text: "" },
     xAxis: [{ data: xData }, { data: xData }],
@@ -1255,8 +1372,11 @@ function renderChart(chartData, skipAutoZoom = false) {
           symbolSize: 40,
           data: markPointData,
         },
+        markLine: markLineOpt,
       },
       { name: "成交量", data: vData },
+      { name: "MA10", data: ma10Data },
+      { name: "MA20", data: ma20Data },
     ],
   });
   if (!skipAutoZoom) {

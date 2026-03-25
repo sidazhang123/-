@@ -2195,7 +2195,8 @@ class StateDB:
                     max(name) as name,
                     count(*) as signal_count,
                     min(signal_dt) as first_signal_dt,
-                    max(signal_dt) as last_signal_dt
+                    max(signal_dt) as last_signal_dt,
+                    mode(clock_tf) as dominant_clock_tf
                 from task_results
                 where task_id = ?
                 group by code
@@ -2212,6 +2213,7 @@ class StateDB:
                 "signal_count": int(row[2] or 0),
                 "first_signal_dt": row[3],
                 "last_signal_dt": row[4],
+                "clock_tf": row[5],
             }
             for row in rows
         ]

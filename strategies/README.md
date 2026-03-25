@@ -12,6 +12,7 @@ strategies/
 └── groups/
     ├── strategy_2/              # 唯一推荐的新策略模板
     ├── consecutive_uptrends_v1/
+    ├── converging_triangle_v1/
     ├── flag_pattern_v1/
     ├── multi_tf_ma_uptrend_v1/
     ├── weekly_oversold_rsi_v1/
@@ -34,6 +35,7 @@ strategies/
 6. 如需概念预筛选，只能使用 `default_params.universe_filters.concepts`，推荐字段固定为 `concept_terms` 与 `reason_terms`。
 7. 概念预筛选由 TaskManager 在 engine 之前执行，engine 不得重复做相同裁剪。
 8. **所有新策略的 `param_help` 中每个周期参数组必须采用 `_render: "inline_template"` 渲染模式**（配合 `_label`、`_tf_key`、`_templates`），不允许使用纯 `_comment` 文本方式。即使是单周期策略也必须遵守此规范。
+9. 如果策略检测到可视化辅助线（趋势线、支撑/阻力线、三角形边沿等），应通过 payload 的 `overlay_lines` 字段传递，前端会自动在 K 线图上渲染。详见 `strategy_2/README.md` 第十一节。
 
 ## 三、为什么新策略应优先走 specialized
 

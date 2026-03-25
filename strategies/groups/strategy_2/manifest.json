@@ -35,7 +35,8 @@
       "如需概念预筛选，统一写在 default_params.universe_filters.concepts 下，并固定使用 concept_terms / reason_terms；实际过滤由 TaskManager 在进入 engine 前执行，engine 不要重复做同一轮裁剪。",
       "【强制要求：inline_template】所有新策略的 param_help 中每个周期参数组必须采用 inline_template 渲染模式（_render: inline_template + _label + _tf_key + _templates），不允许使用纯 _comment 文本方式。即使是单周期策略也必须遵守此规范。参考示例：multi_tf_ma_uptrend_v1（AND 多周期）、consecutive_uptrends_v1（OR 多周期）、xianren_zhilu_v1（OR 双周期）。",
       "【多周期策略】如果策略需要多个周期（如 w/d/60/15），将 default_params 按 weekly/daily/min60/min15 分段，每段含 enabled 开关。多周期 AND 逻辑参考 multi_tf_ma_uptrend_v1，多周期 OR 逻辑参考 consecutive_uptrends_v1、flag_pattern_v1、xianren_zhilu_v1。",
-      "【通用工具】执行参数规范化 normalize_execution_params()、概念过滤参数 read_universe_filter_params()、周期粗细排序 coarsest_tf() 已提取到 engine_commons.py，新策略直接 import 即可，无需重复定义。"
+      "【通用工具】执行参数规范化 normalize_execution_params()、概念过滤参数 read_universe_filter_params()、周期粗细排序 coarsest_tf() 已提取到 engine_commons.py，新策略直接 import 即可，无需重复定义。",
+      "【K线图辅助线 overlay_lines】如果策略检测到可视化辅助线（趋势线、支撑/阻力线、通道边界、三角形边沿等），可在信号 payload 中添加 overlay_lines 列表。前端会自动在 K 线蜡烛图上用 ECharts markLine 渲染这些斜线/水平线。每条线是一个 dict，必填字段：start_ts、end_ts、start_price、end_price；可选字段：color（默认 #fbbf24）、dash（默认 true）、label（默认空）。此机制已在 routes.py 和 results.js 中内置支持，策略只需在 payload 中填入数据即可。参考实现：converging_triangle_v1（三角形上下沿拟合线）。"
     ],
     "daily": {
       "_render": "inline_template",

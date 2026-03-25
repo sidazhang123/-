@@ -1044,6 +1044,25 @@ def get_stock_chart(
             if isinstance(fallback_audit, dict):
                 daily_audit = fallback_audit
 
+        # overlay_lines: 策略可选的斜线覆盖层（如三角形上下沿拟合线）
+        overlay_lines_raw = payload.get("overlay_lines") if isinstance(payload.get("overlay_lines"), list) else []
+        overlay_lines_out: list[dict[str, Any]] = []
+        for ol in overlay_lines_raw:
+            if not isinstance(ol, dict):
+                continue
+            ol_start = _coerce_datetime(ol.get("start_ts"))
+            ol_end = _coerce_datetime(ol.get("end_ts"))
+            if ol_start and ol_end:
+                overlay_lines_out.append({
+                    "start_ts": ol_start,
+                    "end_ts": ol_end,
+                    "start_price": ol.get("start_price"),
+                    "end_price": ol.get("end_price"),
+                    "color": ol.get("color", "#fbbf24"),
+                    "dash": ol.get("dash", True),
+                    "label": ol.get("label", ""),
+                })
+
         signal_items.append(
             {
                 "signal_dt": signal_dt,
@@ -1060,6 +1079,7 @@ def get_stock_chart(
                 "marker_ts": marker_ts_dt or marker_ts_raw,
                 "daily_metrics": payload.get("daily_metrics") if isinstance(payload.get("daily_metrics"), dict) else {},
                 "daily_audit": daily_audit,
+                "overlay_lines": overlay_lines_out,
             }
         )
 

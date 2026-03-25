@@ -140,6 +140,7 @@ strategies.groups.<strategy_id>.engine:run_<strategy_id>_specialized
 3. 这两个字段表示单次信号实际展示窗口，不能偷懒写成全任务时间范围。
 4. 推荐同时写 `window_start_ts`、`window_end_ts`。
 5. 如果要在结果页显示锚点，写 `anchor_day_ts`。
+6. 如果策略检测到可视化辅助线，写 `overlay_lines`（详见第十一节）。
 
 ## 七、概念预筛选约定
 
@@ -194,10 +195,52 @@ default_params.universe_filters.concepts
 2. `consecutive_uptrends_v1`：w/d/60 三周期 OR 逻辑 + 可选急跌段。
 3. `flag_pattern_v1`：w/d/15 三周期 OR 逻辑 + HV 收敛检测。
 4. `xianren_zhilu_v1`：w/d 双周期 OR 逻辑 + K线形态检测。
+5. `converging_triangle_v1`：w/d 双周期 OR 逻辑 + 几何三角形检测 + overlay_lines 辅助线。
 
 ## 十、通用工具（engine_commons.py）
 
 以下函数已提取到 `strategies/engine_commons.py`，新策略直接 import 即可：
+
+## 十一、K 线图辅助线（overlay_lines）
+
+如果策略检测到可视化的几何线条（趋势线、支撑/阻力线、通道边界、三角形边沿等），可以通过信号 payload 的 `overlay_lines` 字段传递给前端。前端会自动在 K 线蜡烛图上用 ECharts markLine 渲染，支持缩放平移跟随。
+
+### 数据格式
+
+```python
+"overlay_lines": [
+    {
+        "label": "上沿",              # 可选，线条标签，显示在起点
+        "start_ts": datetime(...),    # 必填，起点时间戳
+        "start_price": 18.5,          # 必填，起点价格
+        "end_ts": datetime(...),      # 必填，终点时间戳
+        "end_price": 15.2,            # 必填，终点价格
+        "color": "#ef4444",           # 可选，默认 #fbbf24（琥珀色）
+        "dash": True,                 # 可选，是否虚线，默认 True
+    },
+]
+```
+
+### 工作原理
+
+1. **engine.py**：策略在 payload 中填入 `overlay_lines` 列表。
+2. **routes.py**：`_extract_signal_window` 自动提取并转换时间戳，传递给前端。
+3. **results.js**：`renderChart` 读取 `overlay_lines`，将时间戳映射到图表 X 轴索引，用 ECharts markLine 在蜡烛图上绘制。
+
+### 使用场景
+
+- 收敛三角形上下沿（参考 `converging_triangle_v1`）
+- 旗形模式的旗杆顶底 + 旗面上下沿
+- 均线趋势线
+- 通道线 / 楚岳带
+- 任何价格空间中的旜线或水平线
+
+### 注意事项
+
+1. `start_ts` / `end_ts` 必须为 datetime 对象，routes.py 会自动通过 `_coerce_datetime()` 处理。
+2. 线条时间范围应在 `chart_interval_start_ts ~ chart_interval_end_ts` 内，否则超出图表可见区域会被截断。
+3. 每条线的颜色独立控制，建议上沿/下沿用不同颜色以增强可读性。
+4. `overlay_lines` 为空列表或缺失时，前端不会绘制任何线条，无副作用。
 
 1. `normalize_execution_params(group_params)` —— 标准执行参数规范化（仅 fallback_to_backtrader）。
 2. `read_universe_filter_params(group_params)` —— 概念预筛选参数读取（仅 metrics 用途）。
