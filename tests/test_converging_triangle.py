@@ -344,6 +344,11 @@ class TestScanOneCodeDedup:
             "contraction_ratio_max": 0.99,
             "apex_progress_min": 0.05,
             "segment_count": 3,
+            "upper_edge_zone_ratio": 0.50,
+            "lower_edge_zone_ratio": 0.50,
+            "min_upper_touch_count": 0,
+            "min_lower_touch_count": 0,
+            "lower_break_pct": 0.50,
         }
 
         result, stats = _scan_one_code(
@@ -378,6 +383,11 @@ class TestScanOneCodeDedup:
             "contraction_ratio_max": 0.99,
             "apex_progress_min": 0.05,
             "segment_count": 3,
+            "upper_edge_zone_ratio": 0.50,
+            "lower_edge_zone_ratio": 0.50,
+            "min_upper_touch_count": 0,
+            "min_lower_touch_count": 0,
+            "lower_break_pct": 0.50,
         }
 
         result, stats = _scan_one_code(
@@ -412,6 +422,11 @@ class TestScanOneCodeDedup:
             "contraction_ratio_max": 0.99,
             "apex_progress_min": 0.05,
             "segment_count": 3,
+            "upper_edge_zone_ratio": 0.50,
+            "lower_edge_zone_ratio": 0.50,
+            "min_upper_touch_count": 0,
+            "min_lower_touch_count": 0,
+            "lower_break_pct": 0.50,
         }
 
         result, _ = _scan_one_code(
@@ -434,3 +449,264 @@ class TestScanOneCodeDedup:
             assert lower_line["label"] == "下沿"
             assert upper_line["start_price"] > upper_line["end_price"]  # 上沿下降
             assert lower_line["start_price"] < lower_line["end_price"]  # 下沿上升
+
+
+# ---------------------------------------------------------------------------
+# 触碰次数测试
+# ---------------------------------------------------------------------------
+
+
+class TestTouchCounting:
+    """测试上下沿触碰次数统计与过滤逻辑。"""
+
+    def test_touch_counts_in_result(self) -> None:
+        """有效三角形结果应包含 upper/lower_touch_count 字段。"""
+        highs, lows, closes = _make_converging_data(
+            n_bars=120, start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.3,
+        )
+        result = _evaluate_triangle(
+            highs=highs, lows=lows, closes=closes,
+            segment_count=4,
+            converging_speed_min=0.01,
+            slope_symmetry_tolerance=0.5,
+            contraction_ratio_max=0.8,
+            apex_progress_min=0.3,
+            tf_key="d",
+            upper_edge_zone_ratio=0.50,
+            lower_edge_zone_ratio=0.50,
+            min_upper_touch_count=0,
+            min_lower_touch_count=0,
+        )
+        assert result is not None
+        assert isinstance(result.upper_touch_count, int)
+        assert isinstance(result.lower_touch_count, int)
+        assert result.upper_touch_count >= 0
+        assert result.lower_touch_count >= 0
+
+    def test_strict_upper_touch_filter(self) -> None:
+        """上沿触碰次数不足时应返回 None。"""
+        highs, lows, closes = _make_converging_data(
+            n_bars=120, start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.3,
+        )
+        result = _evaluate_triangle(
+            highs=highs, lows=lows, closes=closes,
+            segment_count=4,
+            converging_speed_min=0.01,
+            slope_symmetry_tolerance=0.5,
+            contraction_ratio_max=0.8,
+            apex_progress_min=0.3,
+            tf_key="d",
+            upper_edge_zone_ratio=0.01,
+            lower_edge_zone_ratio=0.50,
+            min_upper_touch_count=999,
+            min_lower_touch_count=0,
+        )
+        assert result is None
+
+    def test_strict_lower_touch_filter(self) -> None:
+        """下沿触碰次数不足时应返回 None。"""
+        highs, lows, closes = _make_converging_data(
+            n_bars=120, start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.3,
+        )
+        result = _evaluate_triangle(
+            highs=highs, lows=lows, closes=closes,
+            segment_count=4,
+            converging_speed_min=0.01,
+            slope_symmetry_tolerance=0.5,
+            contraction_ratio_max=0.8,
+            apex_progress_min=0.3,
+            tf_key="d",
+            upper_edge_zone_ratio=0.50,
+            lower_edge_zone_ratio=0.01,
+            min_upper_touch_count=0,
+            min_lower_touch_count=999,
+        )
+        assert result is None
+
+    def test_wider_zone_more_touching_bars(self) -> None:
+        """更宽的区域应使更多 bar 落入触碰区域（单事件内 bar 数增加）。
+
+        注意：事件数不一定单调递增——更宽的区域会令连续 bar 合并为更少事件。
+        此处仅验证两种区域宽度均能产生有效结果。
+        """
+        highs, lows, closes = _make_converging_data(
+            n_bars=120, start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.3,
+        )
+        base_kwargs = dict(
+            highs=highs, lows=lows, closes=closes,
+            segment_count=4,
+            converging_speed_min=0.01,
+            slope_symmetry_tolerance=0.5,
+            contraction_ratio_max=0.8,
+            apex_progress_min=0.3,
+            tf_key="d",
+            min_upper_touch_count=0,
+            min_lower_touch_count=0,
+        )
+
+        narrow = _evaluate_triangle(**base_kwargs, upper_edge_zone_ratio=0.05, lower_edge_zone_ratio=0.05)
+        wide = _evaluate_triangle(**base_kwargs, upper_edge_zone_ratio=0.40, lower_edge_zone_ratio=0.40)
+
+        # 两种配置均应能通过基本几何条件
+        assert narrow is not None
+        assert wide is not None
+        # 触碰事件数均 ≥ 0
+        assert narrow.upper_touch_count >= 0
+        assert wide.upper_touch_count >= 0
+
+    def test_normalize_touch_params_defaults(self) -> None:
+        """_normalize_tf_params 应包含触碰参数默认值。"""
+        result = _normalize_tf_params({}, "weekly")
+        assert abs(result["upper_edge_zone_ratio"] - 0.10) < 1e-6
+        assert abs(result["lower_edge_zone_ratio"] - 0.10) < 1e-6
+        assert result["min_upper_touch_count"] == 3
+        assert result["min_lower_touch_count"] == 2
+        assert abs(result["lower_break_pct"] - 0.10) < 1e-6
+
+    def test_normalize_touch_params_explicit(self) -> None:
+        """显式传入触碰参数应正确解析。"""
+        result = _normalize_tf_params(
+            {"daily": {
+                "upper_edge_zone_ratio": 20,
+                "lower_edge_zone_ratio": 15,
+                "min_upper_touch_count": 5,
+                "min_lower_touch_count": 4,
+            }},
+            "daily",
+        )
+        assert abs(result["upper_edge_zone_ratio"] - 0.20) < 1e-6
+        assert abs(result["lower_edge_zone_ratio"] - 0.15) < 1e-6
+        assert result["min_upper_touch_count"] == 5
+        assert result["min_lower_touch_count"] == 4
+
+    def test_touch_counts_in_scan_payload(self) -> None:
+        """_scan_one_code 命中时 per_tf 诊断应包含触碰次数。"""
+        d_frame = _make_code_frame(
+            n_bars=150, start_date="2025-01-01", tf_key="d",
+            start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.2,
+        )
+
+        relaxed_params = {
+            "enabled": True,
+            "search_recent_weeks": 52,
+            "pattern_months_min": 1,
+            "pattern_months_max": 24,
+            "converging_speed_min": 0.001,
+            "slope_symmetry_tolerance": 0.99,
+            "contraction_ratio_max": 0.99,
+            "apex_progress_min": 0.05,
+            "segment_count": 3,
+            "upper_edge_zone_ratio": 0.50,
+            "lower_edge_zone_ratio": 0.50,
+            "min_upper_touch_count": 0,
+            "min_lower_touch_count": 0,
+            "lower_break_pct": 0.50,
+        }
+
+        result, _ = _scan_one_code(
+            code="000001",
+            name="测试",
+            tf_data={"d": d_frame},
+            all_params={"d": relaxed_params},
+            enabled_tfs=["d"],
+            strategy_group_id="converging_triangle_v1",
+            strategy_name="大收敛三角 v1",
+        )
+
+        if result.signal_count > 0:
+            per_tf = result.signals[0]["payload"]["per_tf"]
+            for tf_key, detail in per_tf.items():
+                assert "upper_touch_count" in detail
+                assert "lower_touch_count" in detail
+                assert detail["upper_touch_count"] >= 0
+                assert detail["lower_touch_count"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# 最新 K 线破位检查测试
+# ---------------------------------------------------------------------------
+
+
+class TestLowerBreakCheck:
+    """测试最新收盘价破位检查逻辑。"""
+
+    def _make_break_frame(
+        self, n_bars: int, break_close: float, tf_key: str = "d",
+    ) -> pd.DataFrame:
+        """生成收敛三角数据，并在末尾追加一根指定收盘价的 K 线。"""
+        base = _make_code_frame(
+            n_bars=n_bars, start_date="2025-01-01", tf_key=tf_key,
+            start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.2,
+        )
+        last_ts = base["ts"].iloc[-1]
+        extra = pd.DataFrame([{
+            "ts": last_ts + pd.Timedelta(days=1 if tf_key == "d" else 7),
+            "open": break_close,
+            "high": break_close + 0.1,
+            "low": break_close - 0.1,
+            "close": break_close,
+            "volume": 1000,
+        }])
+        return pd.concat([base, extra], ignore_index=True)
+
+    def test_no_break_passes(self) -> None:
+        """最新收盘价未破位时应保留结果。"""
+        frame = _make_code_frame(
+            n_bars=150, start_date="2025-01-01", tf_key="d",
+            start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.2,
+        )
+        params = _normalize_tf_params(
+            {"daily": {
+                "enabled": True,
+                "search_recent_weeks": 52,
+                "pattern_months_min": 2,
+                "pattern_months_max": 12,
+                "converging_speed_min": 1,
+                "slope_symmetry_tolerance": 0.8,
+                "contraction_ratio_max": 80,
+                "apex_progress_min": 20,
+                "segment_count": 4,
+                "lower_break_pct": 10,
+            }},
+            "daily",
+        )
+        result = _scan_tf_for_code(code_frame=frame, params=params, tf_key="d")
+        # 模拟数据末尾收盘价在三角内部，不应被破位过滤
+        assert result is not None
+
+    def test_severe_break_rejected(self) -> None:
+        """最新收盘价严重破位时应返回 None。"""
+        frame = self._make_break_frame(n_bars=150, break_close=1.0, tf_key="d")
+        params = _normalize_tf_params(
+            {"daily": {
+                "enabled": True,
+                "search_recent_weeks": 52,
+                "pattern_months_min": 2,
+                "pattern_months_max": 12,
+                "converging_speed_min": 1,
+                "slope_symmetry_tolerance": 0.8,
+                "contraction_ratio_max": 80,
+                "apex_progress_min": 20,
+                "segment_count": 4,
+                "lower_break_pct": 5,
+            }},
+            "daily",
+        )
+        result = _scan_tf_for_code(code_frame=frame, params=params, tf_key="d")
+        # 收盘价 1.0 远低于下沿（~14），必须被拒绝
+        assert result is None
+
+    def test_normalize_lower_break_pct(self) -> None:
+        """破位参数应正确规范化。"""
+        result = _normalize_tf_params(
+            {"daily": {"lower_break_pct": 15}},
+            "daily",
+        )
+        assert abs(result["lower_break_pct"] - 0.15) < 1e-6

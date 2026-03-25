@@ -320,16 +320,19 @@ def _build_signal_label(hit_tfs: list[str], per_tf_detail: dict[str, dict[str, A
     1. hit_tfs: 命中的周期 key 列表。
     2. per_tf_detail: 各周期检测结果 dict。
     输出：
-    1. 如 "日线连阳5根(涨幅3.2%)" 或含急跌信息。
+    1. 如 "日线连阳5根(涨5.2%)" 或含急跌信息，涨幅为相对起始收盘价的百分比。
     边界条件：
     1. 命中周期为空时返回策略默认标签。
+    2. streak_start_close 为 0 时跳过百分比，仅显示连阳根数。
     """
     parts: list[str] = []
     for tf in hit_tfs:
         detail = per_tf_detail.get(tf, {})
         streak_len = detail.get("streak_len", 0)
         total_gain = detail.get("streak_total_gain", 0)
-        label = f"{_TF_LABEL.get(tf, tf)}连阳{streak_len}根(涨{total_gain*100:.1f}%)" if detail.get("streak_start_close", 0) > 0 else f"{_TF_LABEL.get(tf, tf)}连阳{streak_len}根"
+        start_close = detail.get("streak_start_close", 0)
+        gain_pct = (total_gain / start_close * 100) if start_close > 0 else 0
+        label = f"{_TF_LABEL.get(tf, tf)}连阳{streak_len}根(涨{gain_pct:.1f}%)" if start_close > 0 else f"{_TF_LABEL.get(tf, tf)}连阳{streak_len}根"
         if detail.get("selloff_drawdown_ratio") is not None:
             label += f"+急跌{detail.get('selloff_drawdown_ratio', 0)*100:.0f}%"
         parts.append(label)

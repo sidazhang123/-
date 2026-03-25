@@ -223,13 +223,13 @@ class TaskManager:
     def _submit_task(self, task_id: str) -> bool:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务唯一标识。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 提交成功返回 True；任务已在运行中返回 False。
         用途：
-        1. 执行 `_submit_task` 对应的业务或工具逻辑。
+        1. 将任务提交至线程池执行，并记录 Future。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 已有同 ID 任务未完成时直接返回 False。
         """
         with self._lock:
             existing = self._futures.get(task_id)
@@ -244,11 +244,11 @@ class TaskManager:
         输入：
         1. 无显式输入参数。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `_recover_interrupted_tasks` 对应的业务或工具逻辑。
+        1. 服务启动时检查所有处于 running/queued/stopping 状态的任务，将其统一设为 paused。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 无中断任务时不执行任何操作。
         """
         interrupted = self.state_db.list_tasks_by_status(["running", "queued", "stopping"])
         for task in interrupted:
@@ -268,14 +268,15 @@ class TaskManager:
     def _wait_if_paused_or_stopping(self, task_id: str, task_logger: TaskLogger) -> None:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. task_logger: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 当前任务 ID。
+        2. task_logger: 任务日志记录器，用于写入暂停/恢复日志。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `_wait_if_paused_or_stopping` 对应的业务或工具逻辑。
+        1. 在任务处理循环中检查是否被暂停或停止；若处于 paused 则阻塞等待恢复。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 状态为 stopping/stopped 时抛出 TaskStopRequested。
+        2. 任务不存在时抛出 TaskStopRequested。
         """
         announced = False
         while True:
@@ -306,14 +307,15 @@ class TaskManager:
     def _parse_bool(value: Any, default: bool) -> bool:
         """
         输入：
-        1. value: 输入参数，具体约束以调用方和实现为准。
-        2. default: 输入参数，具体约束以调用方和实现为准。
+        1. value: 待解析的布尔值（支持 bool / str / None）。
+        2. default: 无法解析时的默认值。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 解析后的布尔值。
         用途：
-        1. 执行 `_parse_bool` 对应的业务或工具逻辑。
+        1. 将配置参数中的字符串布尔值（"true"/"false" 等）转为 Python bool。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. value 为 None 时返回 default。
+        2. 无法识别的字符串回退到 bool(value)。
         """
         if isinstance(value, bool):
             return value
@@ -498,13 +500,14 @@ class TaskManager:
     def _run_task(self, task_id: str) -> None:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务唯一标识。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `_run_task` 对应的业务或工具逻辑。
+        1. 线程池入口——读取任务、执行策略扫描、写入结果并更新状态。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 任务已完成/已停止/已失败时直接跳过。
+        2. 执行过程中遇到 TaskStopRequested 时将状态设为 stopped。
         """
         task = self.state_db.get_task(task_id)
         if not task:
@@ -783,16 +786,7 @@ class TaskManager:
                         try:
 
                             def on_signal(signal: dict[str, Any]) -> None:
-                                """
-                                输入：
-                                1. signal: 输入参数，具体约束以调用方和实现为准。
-                                输出：
-                                1. 返回值语义由函数实现定义；无返回时为 `None`。
-                                用途：
-                                1. 执行 `on_signal` 对应的业务或工具逻辑。
-                                边界条件：
-                                1. 关键边界与异常分支按函数体内判断与调用约定处理。
-                                """
+                                """闭包回调：收到信号后立即将结果写入状态库。"""
                                 self.state_db.add_result(
                                     task_id=task_id,
                                     code=signal["code"],
@@ -984,13 +978,13 @@ class TaskManager:
     def get_task_future(self, task_id: str) -> Future | None:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务 ID。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 对应的 Future 对象；任务不在运行中时返回 None。
         用途：
-        1. 执行 `get_task_future` 对应的业务或工具逻辑。
+        1. 供外部查询任务线程池 Future，用于等待或取消。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 加锁访问 _futures 字典。
         """
         with self._lock:
             return self._futures.get(task_id)

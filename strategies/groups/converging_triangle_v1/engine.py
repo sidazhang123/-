@@ -123,6 +123,9 @@ class TriangleResult:
     upper_end: float
     lower_start: float
     lower_end: float
+    # 上下沿触碰次数
+    upper_touch_count: int
+    lower_touch_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +164,11 @@ def _normalize_tf_params(group_params: dict[str, Any], section_key: str) -> dict
         "contraction_ratio_max": as_float(raw.get("contraction_ratio_max"), 45.0, minimum=1.0, maximum=99.0) / 100.0,
         "apex_progress_min": as_float(raw.get("apex_progress_min"), 75.0, minimum=10.0, maximum=99.0) / 100.0,
         "segment_count": as_int(raw.get("segment_count"), 4, minimum=2, maximum=20),
+        "upper_edge_zone_ratio": as_float(raw.get("upper_edge_zone_ratio"), 10.0, minimum=1.0, maximum=50.0) / 100.0,
+        "lower_edge_zone_ratio": as_float(raw.get("lower_edge_zone_ratio"), 10.0, minimum=1.0, maximum=50.0) / 100.0,
+        "min_upper_touch_count": as_int(raw.get("min_upper_touch_count"), 3, minimum=0, maximum=20),
+        "min_lower_touch_count": as_int(raw.get("min_lower_touch_count"), 2, minimum=0, maximum=20),
+        "lower_break_pct": as_float(raw.get("lower_break_pct"), 10.0, minimum=0.0, maximum=50.0) / 100.0,
     }
 
 
@@ -255,6 +263,10 @@ def _evaluate_triangle(
     contraction_ratio_max: float,
     apex_progress_min: float,
     tf_key: str,
+    upper_edge_zone_ratio: float = 0.10,
+    lower_edge_zone_ratio: float = 0.10,
+    min_upper_touch_count: int = 3,
+    min_lower_touch_count: int = 2,
 ) -> TriangleResult | None:
     """对单个候选窗口执行三角形检测。
 
@@ -266,13 +278,19 @@ def _evaluate_triangle(
     5. contraction_ratio_max: 最大收缩比例。
     6. apex_progress_min: 最小 apex 进度（比例）。
     7. tf_key: 周期标识，用于确定单位斜率换算的 B_unit。
+    8. upper_edge_zone_ratio: 上沿触碰区域比例（相对三角宽度）。
+    9. lower_edge_zone_ratio: 下沿触碰区域比例（相对三角宽度）。
+    10. min_upper_touch_count: 上沿最少触碰次数。
+    11. min_lower_touch_count: 下沿最少触碰次数。
     输出：
     1. 通过则返回 TriangleResult，否则返回 None。
     用途：
     1. 按 spec §9-§17 逐条检查三角形条件，含早期淘汰机制。
+    2. 通过几何条件后，统计上下沿触碰次数作为额外过滤条件。
     边界条件：
     1. 窗口 bar 数不足 segment_count 时返回 None。
     2. 上下沿斜率方向不满足时立即短路返回。
+    3. 触碰次数不足时返回 None。
     """
     n = len(highs)
     if n < segment_count:
@@ -375,6 +393,35 @@ def _evaluate_triangle(
     if c_now < lower_end or c_now > upper_end:
         return None
 
+    # §16b 上下沿触碰次数统计
+    # 对窗口内每根 bar 计算归一化位置，判断是否进入触碰区域。
+    # 连续满足条件的 bar 合并为一次独立触碰事件。
+    x_range = np.arange(n, dtype=np.float64)
+    u_line = a_u + b_u * x_range  # 上沿拟合值
+    l_line = a_l + b_l * x_range  # 下沿拟合值
+    w_line = u_line - l_line       # 各 bar 处的三角宽度
+
+    # 防止宽度为零导致除零
+    w_safe = np.where(w_line > 0, w_line, 1.0)
+    pos_u = (highs - l_line) / w_safe   # 上沿归一化位置
+    pos_l = (lows - l_line) / w_safe    # 下沿归一化位置
+
+    upper_touching = pos_u >= (1.0 - upper_edge_zone_ratio)
+    lower_touching = pos_l <= lower_edge_zone_ratio
+
+    # 统计独立触碰事件：连续 True 合并为一次
+    upper_touch_count = int(np.sum(np.diff(upper_touching.astype(np.int8)) == 1))
+    if upper_touching[0]:
+        upper_touch_count += 1
+    lower_touch_count = int(np.sum(np.diff(lower_touching.astype(np.int8)) == 1))
+    if lower_touching[0]:
+        lower_touch_count += 1
+
+    if upper_touch_count < min_upper_touch_count:
+        return None
+    if lower_touch_count < min_lower_touch_count:
+        return None
+
     # 全部通过，计算评分 §18
     score_contraction = 1.0 - contraction_ratio
     score_apex = apex_progress
@@ -415,6 +462,8 @@ def _evaluate_triangle(
         upper_end=round(float(upper_end), 4),
         lower_start=round(float(lower_start), 4),
         lower_end=round(float(lower_end), 4),
+        upper_touch_count=upper_touch_count,
+        lower_touch_count=lower_touch_count,
     )
 
 
@@ -516,6 +565,10 @@ def _scan_tf_for_code(
                 contraction_ratio_max=contraction_ratio_max,
                 apex_progress_min=apex_progress_min,
                 tf_key=tf_key,
+                upper_edge_zone_ratio=params["upper_edge_zone_ratio"],
+                lower_edge_zone_ratio=params["lower_edge_zone_ratio"],
+                min_upper_touch_count=params["min_upper_touch_count"],
+                min_lower_touch_count=params["min_lower_touch_count"],
             )
 
             if result is not None:
@@ -524,6 +577,13 @@ def _scan_tf_for_code(
                 result.end_idx = e_idx
                 if best is None or result.score > best.score:
                     best = result
+
+    # 最新 K 线破位检查：若最新收盘价低于三角下沿的容忍度则放弃
+    if best is not None:
+        latest_close = float(closes_all[-1])
+        lower_threshold = best.lower_end * (1.0 - params["lower_break_pct"])
+        if latest_close < lower_threshold:
+            best = None
 
     return best
 
@@ -646,6 +706,8 @@ def _scan_one_code(
             "apex_progress": result.apex_progress,
             "fit_error": result.fit_error,
             "window_bars": result.window_bars,
+            "upper_touch_count": result.upper_touch_count,
+            "lower_touch_count": result.lower_touch_count,
         }
 
     payload: dict[str, Any] = {

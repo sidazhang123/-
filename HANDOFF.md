@@ -14,13 +14,15 @@
 ## 2. 当前基线
 
 1. 策略目录统一为 `strategies/groups/*`。
-2. 当前策略组共 6 个：
+2. 当前策略组共 8 个：
    1. `consecutive_uptrends_v1`（specialized，w/d/60）
-   2. `flag_pattern_v1`（specialized，w/d/15）
-   3. `multi_tf_ma_uptrend_v1`（specialized，w/d/60/15）
-   4. `weekly_oversold_rsi_v1`（specialized，w）
-   5. `xianren_zhilu_v1`（specialized，w/d）
-   6. `strategy_2`（specialized 模板）
+   2. `converging_triangle_v1`（specialized，w/d）
+   3. `flag_pattern_v1`（specialized，w/d/15）
+   4. `multi_tf_ma_uptrend_v1`（specialized，w/d/60/15）
+   5. `weekly_oversold_rsi_v1`（specialized，w）
+   6. `weekly_sideways_v1`（specialized，w）
+   7. `xianren_zhilu_v1`（specialized，w/d）
+   8. `strategy_2`（specialized 模板）
 3. 服务监听固定 `0.0.0.0:8000`。
 4. 状态库 schema 版本：`app_meta.schema_version = "5"`。
 5. K 线维护模式仅支持：`latest_update` / `historical_backfill`，默认 `latest_update`。
@@ -153,7 +155,6 @@
 6. `GET /api/tasks/{task_id}/result-stock-concepts`
 7. `GET /api/tasks/{task_id}/candles`
 8. `GET /api/tasks/{task_id}/stock-chart`
-10. `GET /api/tasks/{task_id}/stream`
 9. `GET /api/tasks/{task_id}/stream`
 10. `GET /api/tasks/{task_id}/status-stream`
 

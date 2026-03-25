@@ -1,0 +1,119 @@
+{
+  "id": "weekly_sideways_v1",
+  "name": "周线长期震荡 v1",
+  "description": "在周线级别上搜索长期水平震荡区间。识别上下沿近似水平的箱体结构，要求价格在区间内完成指定次数的往返轮动，且每次轮动时长在合理范围内。上下沿通过分段分位数边界 + 线性回归拟合确定，要求斜率接近零以确认水平性。可选增加参考月份最低收盘价的涨幅过滤。",
+  "module": "strategies.groups.weekly_sideways_v1",
+  "engine": "specialized",
+  "execution": {
+    "requires_time_window": false,
+    "supports_intra_task_parallel": false,
+    "cache_scope": "none",
+    "required_timeframes": ["w"],
+    "specialized_entry": "strategies.groups.weekly_sideways_v1.engine:run_weekly_sideways_v1_specialized"
+  },
+  "default_params": {
+    "weekly": {
+      "min_duration_months": 12,
+      "rotation_months_min": 1,
+      "rotation_months_max": 4,
+      "range_pct_min": 20,
+      "range_pct_max": 40,
+      "min_rotations": 2,
+      "touch_tolerance_pct": 10,
+      "segment_count": 4,
+      "max_slope_pct": 3
+    },
+    "reference": {
+      "enabled": false,
+      "ref_year": 2025,
+      "ref_month": 4,
+      "ref_gain_min_pct": -5,
+      "ref_gain_max_pct": 30
+    },
+    "universe_filters": {
+      "concepts": {
+        "enabled": false,
+        "concept_terms": [],
+        "reason_terms": []
+      }
+    },
+    "execution": {
+      "fallback_to_backtrader": false
+    }
+  },
+  "param_help": {
+    "_overview": [
+      "该策略在周线级别上搜索长期水平震荡区间（箱体结构）。",
+      "上下沿通过分段分位数边界 + 线性回归拟合确定：将窗口均分为 N 段，每段取 high 的 90% 分位数为上沿代表值、low 的 10% 分位数为下沿代表值，再验证回归斜率接近零以确认水平性。",
+      "在确定上下沿后，检测价格在区间内的往返轮动次数和节奏，确保震荡行为真实存在。",
+      "可选启用参考月份最低收盘价比较，过滤下沿相对历史低点的涨幅范围。",
+      "高低点的计算包括上下影线（使用 high/low 而非 close）。",
+      "命中结果在 K 线图上显示周线周期，并画出识别的上下沿两条水平线。"
+    ],
+    "weekly": {
+      "_render": "inline_template",
+      "_label": "周线",
+      "_tf_key": "w",
+      "_templates": [
+        {
+          "text": "横盘区间时长不得低于 {min_duration_months} 个月",
+          "required": true,
+          "help": "横盘区间的最短持续时间，越大越严格"
+        },
+        {
+          "text": "每次轮动（半程，从一个边界到另一个边界）时长处于 [{rotation_months_min}, {rotation_months_max}] 个月之内",
+          "required": true,
+          "help": "单次从上沿到下沿或从下沿到上沿的耗时范围"
+        },
+        {
+          "text": "区间上下沿的幅度处于 [{range_pct_min}%, {range_pct_max}%] 内",
+          "required": true,
+          "help": "上沿相对下沿的涨幅百分比，控制箱体宽窄"
+        },
+        {
+          "text": "最少完成 {min_rotations} 次完整轮动（往返）",
+          "required": true,
+          "help": "一次完整轮动 = 从触摸上沿到触碰下沿再回到触摸上沿（或反向）"
+        },
+        {
+          "text": "触摸容差为区间幅度的 {touch_tolerance_pct}%",
+          "required": true,
+          "help": "距离上/下沿多近算触摸，以区间总幅度的百分比计算"
+        },
+        {
+          "text": "计算上下沿时分 {segment_count} 段",
+          "required": true,
+          "help": "用于构造上下沿分位数边界；越大越贴近局部波动，越小越平滑"
+        },
+        {
+          "text": "上下沿每月最大允许斜率 {max_slope_pct}%",
+          "required": true,
+          "help": "越小越要求严格水平，每 4 根周线涨跌幅不超过此值"
+        }
+      ]
+    },
+    "reference": {
+      "_render": "inline_template",
+      "_label": "参考月",
+      "_tf_key": "w",
+      "_templates": [
+        {
+          "text": "区间下沿相对于 {ref_year} 年 {ref_month} 月最低周线收盘价涨幅处于 [{ref_gain_min_pct}%, {ref_gain_max_pct}%] 内",
+          "required": false,
+          "toggle": "enabled",
+          "help": "计算股票在指定年月的周线最低收盘价，如果数据不存在则跳过该过滤不报错"
+        }
+      ]
+    },
+    "universe_filters": {
+      "concepts": {
+        "enabled": "是否启用概念预筛选。",
+        "concept_terms": "概念名称关键字列表，语义为 AND（全部命中才保留）。",
+        "reason_terms": "选股理由关键字列表，语义为 OR（任一命中即保留）。"
+      }
+    },
+    "execution": {
+      "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader，默认 false。"
+    }
+  }
+}

@@ -21,7 +21,12 @@
       "slope_symmetry_tolerance": 0.35,
       "contraction_ratio_max": 45,
       "apex_progress_min": 75,
-      "segment_count": 4
+      "segment_count": 4,
+      "upper_edge_zone_ratio": 10,
+      "lower_edge_zone_ratio": 10,
+      "min_upper_touch_count": 3,
+      "min_lower_touch_count": 2,
+      "lower_break_pct": 10
     },
     "daily": {
       "enabled": true,
@@ -32,7 +37,12 @@
       "slope_symmetry_tolerance": 0.35,
       "contraction_ratio_max": 45,
       "apex_progress_min": 75,
-      "segment_count": 4
+      "segment_count": 4,
+      "upper_edge_zone_ratio": 10,
+      "lower_edge_zone_ratio": 10,
+      "min_upper_touch_count": 3,
+      "min_lower_touch_count": 2,
+      "lower_break_pct": 10
     },
     "universe_filters": {
       "concepts": {
@@ -89,6 +99,29 @@
           "text": "计算上下沿时分 {segment_count} 段",
           "required": true,
           "help": "用于构造上下沿分位数边界；越大越贴近局部波动，越小越平滑"
+        },
+        {
+          "text": "高于三角宽度（纵向）的前 {upper_edge_zone_ratio}% 则认为触碰上沿",
+          "required": true
+        },
+        {
+          "text": "低于三角宽度（纵向）的后 {lower_edge_zone_ratio}% 则认为触碰下沿",
+          "required": true
+        },
+        {
+          "text": "合格的收敛三角要求至少触碰上沿 {min_upper_touch_count} 次",
+          "required": true,
+          "help": "用于确保价格对上沿存在足够次数的有效接触，避免不是控盘结构而是多次无规律炒作"
+        },
+        {
+          "text": "合格的收敛三角要求至少触碰下沿 {min_lower_touch_count} 次",
+          "required": true,
+          "help": "用于确保价格对下沿存在足够次数的有效接触，这个意义不大一般都会多次触碰下沿"
+        },
+        {
+          "text": "当最新收盘价低于下沿 {lower_break_pct}% 则视为破位放弃",
+          "required": true,
+          "help": "下沿取三角结构末端的拟合值，最新收盘价取该周期最后一根 K 线"
         }
       ]
     },
@@ -129,6 +162,29 @@
           "text": "计算上下沿时分 {segment_count} 段",
           "required": true,
           "help": "用于构造上下沿分位数边界；越大越贴近局部波动，越小越平滑"
+        },
+        {
+          "text": "高于三角宽度（纵向）的前 {upper_edge_zone_ratio}% 则认为触碰上沿",
+          "required": true
+        },
+        {
+          "text": "低于三角宽度（纵向）的后 {lower_edge_zone_ratio}% 则认为触碰下沿",
+          "required": true
+        },
+        {
+          "text": "合格的收敛三角要求至少触碰上沿 {min_upper_touch_count} 次",
+          "required": true,
+          "help": "用于确保价格对上沿存在足够次数的有效接触，避免不是控盘结构而是多次无规律炒作"
+        },
+        {
+          "text": "合格的收敛三角要求至少触碰下沿 {min_lower_touch_count} 次",
+          "required": true,
+          "help": "用于确保价格对下沿存在足够次数的有效接触，这个意义不大一般都会多次触碰下沿"
+        },
+        {
+          "text": "当最新收盘价低于下沿 {lower_break_pct}% 则视为破位放弃",
+          "required": true,
+          "help": "下沿取三角结构末端的拟合值，最新收盘价取该周期最后一根 K 线"
         }
       ]
     },

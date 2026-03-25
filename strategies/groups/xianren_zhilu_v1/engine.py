@@ -315,7 +315,7 @@ def _scan_one_code(
         "window_end_ts": window_end_ts,
         "chart_interval_start_ts": window_start_ts,
         "chart_interval_end_ts": window_end_ts,
-        "anchor_ts": latest_ts,
+        "anchor_day_ts": latest_ts,
         "hit_timeframes": hit_tfs,
         "per_tf": per_tf_detail,
         "signal_summary": signal_label,

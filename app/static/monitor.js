@@ -86,6 +86,24 @@ function cloneValue(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function deepMerge(target, source) {
+  for (const key of Object.keys(source)) {
+    if (
+      source[key] !== null &&
+      typeof source[key] === "object" &&
+      !Array.isArray(source[key]) &&
+      target[key] !== null &&
+      typeof target[key] === "object" &&
+      !Array.isArray(target[key])
+    ) {
+      deepMerge(target[key], source[key]);
+    } else {
+      target[key] = cloneValue(source[key]);
+    }
+  }
+  return target;
+}
+
 function escapeHtml(text) {
   return String(text || "")
     .replaceAll("&", "&amp;")
@@ -599,11 +617,11 @@ function applyMonitorSettings(settings) {
   if (savedGroup) {
     $("strategyGroupSelect").value = savedGroupId;
     updateStrategyGroupDescription(savedGroupId);
-    state.groupParams = cloneValue(
-      settings.group_params && typeof settings.group_params === "object"
-        ? settings.group_params
-        : (savedGroup.default_params || {})
-    );
+    const base = cloneValue(savedGroup.default_params || {});
+    if (settings.group_params && typeof settings.group_params === "object") {
+      deepMerge(base, settings.group_params);
+    }
+    state.groupParams = base;
     renderGroupParamsForm();
     return;
   }

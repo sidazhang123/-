@@ -93,9 +93,9 @@ class StateDB:
     def _with_write_connection(self, fn: Callable[[duckdb.DuckDBPyConnection], T]) -> T:
         """
         输入：
-        1. fn: 输入参数，具体约束以调用方和实现为准。
+        1. fn: 接受写连接的回调函数。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 返回回调函数执行结果。
         用途：
         1. 使用写连接执行数据库操作。
         边界条件：
@@ -405,25 +405,16 @@ class StateDB:
     def get_meta_value(self, meta_key: str) -> str | None:
         """
         输入：
-        1. meta_key: 输入参数，具体约束以调用方和实现为准。
+        1. meta_key: app_meta 表中的元数据键名。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 命中时返回对应字符串值；不存在返回 None。
         用途：
-        1. 执行 `get_meta_value` 对应的业务或工具逻辑。
+        1. 从 app_meta 表读取单条元数据。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. key 不存在时返回 None。
         """
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """从 app_meta 查询 meta_key 对应的 meta_value。"""
             row = con.execute(
                 "select meta_value from app_meta where meta_key = ?",
                 [meta_key],
@@ -435,26 +426,17 @@ class StateDB:
     def set_meta_value(self, meta_key: str, meta_value: str) -> None:
         """
         输入：
-        1. meta_key: 输入参数，具体约束以调用方和实现为准。
-        2. meta_value: 输入参数，具体约束以调用方和实现为准。
+        1. meta_key: app_meta 表中的元数据键名。
+        2. meta_value: 要写入的字符串值。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `set_meta_value` 对应的业务或工具逻辑。
+        1. 向 app_meta 表写入或更新元数据。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 同键已存在时覆盖更新。
         """
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """执行 INSERT ... ON CONFLICT UPDATE 写入 app_meta。"""
             con.execute(
                 """
                 insert into app_meta (meta_key, meta_value)
@@ -469,14 +451,14 @@ class StateDB:
     def get_meta_json(self, meta_key: str, default: Any = None) -> Any:
         """
         输入：
-        1. meta_key: 输入参数，具体约束以调用方和实现为准。
-        2. default: 输入参数，具体约束以调用方和实现为准。
+        1. meta_key: app_meta 表中的元数据键名。
+        2. default: key 不存在或 JSON 解析失败时的回退值。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 解析后的 JSON 对象；不存在或解析失败返回 default。
         用途：
-        1. 执行 `get_meta_json` 对应的业务或工具逻辑。
+        1. 从 app_meta 读取 JSON 格式的元数据。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. meta_value 不是合法 JSON 时返回 default，不抛异常。
         """
         raw = self.get_meta_value(meta_key)
         if raw is None:
@@ -489,14 +471,14 @@ class StateDB:
     def set_meta_json(self, meta_key: str, value: Any) -> None:
         """
         输入：
-        1. meta_key: 输入参数，具体约束以调用方和实现为准。
-        2. value: 输入参数，具体约束以调用方和实现为准。
+        1. meta_key: app_meta 表中的元数据键名。
+        2. value: 可 JSON 序列化的对象。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `set_meta_json` 对应的业务或工具逻辑。
+        1. 将对象序列化为 JSON 后写入 app_meta。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 同键已存在时覆盖更新（委托 set_meta_value）。
         """
         self.set_meta_value(meta_key, _json_dumps(value))
 
@@ -505,11 +487,12 @@ class StateDB:
         输入：
         1. 无显式输入参数。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 监控页表单设置 dict；无记录时返回空 dict。
         用途：
-        1. 执行 `get_monitor_form_settings` 对应的业务或工具逻辑。
+        1. 读取前端监控页上次保存的表单状态。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 优先读取新键，不存在时回退到旧键（LEGACY_MONITOR_FORM_SETTINGS_KEY）。
+        2. 值不是 dict 时返回空 dict。
         """
         value = self.get_meta_json(self.MONITOR_FORM_SETTINGS_KEY, default=None)
         if value is None:
@@ -521,13 +504,13 @@ class StateDB:
     def set_monitor_form_settings(self, settings: dict[str, Any]) -> None:
         """
         输入：
-        1. settings: 输入参数，具体约束以调用方和实现为准。
+        1. settings: 监控页表单设置 dict。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `set_monitor_form_settings` 对应的业务或工具逻辑。
+        1. 持久化前端监控页表单状态。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 同键已存在时覆盖更新。
         """
         self.set_meta_json(self.MONITOR_FORM_SETTINGS_KEY, settings)
 
@@ -536,11 +519,11 @@ class StateDB:
         输入：
         1. 无显式输入参数。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 维护页表单设置 dict；无记录时返回空 dict。
         用途：
-        1. 执行 `get_maintenance_form_settings` 对应的业务或工具逻辑。
+        1. 读取前端维护页上次保存的表单状态。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 值不是 dict 时返回空 dict。
         """
         value = self.get_meta_json(self.MAINTENANCE_FORM_SETTINGS_KEY, default={})
         if isinstance(value, dict):
@@ -550,13 +533,13 @@ class StateDB:
     def set_maintenance_form_settings(self, settings: dict[str, Any]) -> None:
         """
         输入：
-        1. settings: 输入参数，具体约束以调用方和实现为准。
+        1. settings: 维护页表单设置 dict。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `set_maintenance_form_settings` 对应的业务或工具逻辑。
+        1. 持久化前端维护页表单状态。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 同键已存在时覆盖更新。
         """
         self.set_meta_json(self.MAINTENANCE_FORM_SETTINGS_KEY, settings)
 
@@ -960,16 +943,7 @@ class StateDB:
         """
 
         def _op(con: duckdb.DuckDBPyConnection) -> str | None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             row = con.execute(
                 "select value from _maintenance_meta where key = ?",
                 [str(key)],
@@ -994,16 +968,7 @@ class StateDB:
         now = datetime.now()
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             con.execute(
                 """
                 insert into _maintenance_meta(key, value, updated_at)
@@ -1031,34 +996,25 @@ class StateDB:
     ) -> None:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. source_db: 输入参数，具体约束以调用方和实现为准。
-        3. start_ts: 输入参数，具体约束以调用方和实现为准。
-        4. end_ts: 输入参数，具体约束以调用方和实现为准。
-        5. strategy_group_id: 输入参数，具体约束以调用方和实现为准。
-        6. strategy_name: 输入参数，具体约束以调用方和实现为准。
-        7. strategy_description: 输入参数，具体约束以调用方和实现为准。
-        8. params: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务唯一标识。
+        2. source_db: 源行情库路径。
+        3. start_ts: 筛选时间窗口起始；可为 None。
+        4. end_ts: 筛选时间窗口截止；可为 None。
+        5. strategy_group_id: 策略组 ID。
+        6. strategy_name: 策略名称。
+        7. strategy_description: 策略描述。
+        8. params: 任务参数 dict，序列化为 JSON 后存储。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `create_task` 对应的业务或工具逻辑。
+        1. 在 tasks 表中创建一条 queued 状态的筛选任务记录。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. task_id 重复时 DuckDB 会抛出主键冲突异常。
         """
         now = datetime.now()
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """向 tasks 表插入一条新任务记录。"""
             con.execute(
                 """
                 insert into tasks (
@@ -1087,14 +1043,14 @@ class StateDB:
     def update_task_fields(self, task_id: str, **fields: Any) -> None:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. **fields: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务唯一标识。
+        2. **fields: 要更新的字段键值对，键名对应 tasks 表列名。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `update_task_fields` 对应的业务或工具逻辑。
+        1. 动态更新 tasks 表中指定任务的一个或多个字段，自动刷新 updated_at。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. fields 为空时直接返回，不执行 SQL。
         """
         if not fields:
             return
@@ -1103,16 +1059,7 @@ class StateDB:
         values = list(fields.values()) + [task_id]
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """执行动态 UPDATE 语句更新 tasks 行。"""
             con.execute(f"update tasks set {set_clause} where task_id = ?", values)
 
         self._with_write_connection(_op)
@@ -1131,16 +1078,7 @@ class StateDB:
         params_json = _json_dumps(params or {})
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             con.execute(
                 """
                 insert into maintenance_jobs (
@@ -1190,16 +1128,7 @@ class StateDB:
         values = list(fields.values()) + [job_id]
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             con.execute(f"update maintenance_jobs set {set_clause} where job_id = ?", values)
 
         self._with_write_connection(_op)
@@ -1222,16 +1151,7 @@ class StateDB:
         detail_json = _json_dumps(detail) if detail else None
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             con.execute(
                 """
                 insert into maintenance_logs (job_id, ts, level, message, detail_json)
@@ -1263,31 +1183,22 @@ class StateDB:
     ) -> None:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. level: 输入参数，具体约束以调用方和实现为准。
-        3. message: 输入参数，具体约束以调用方和实现为准。
-        4. detail: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务 ID。
+        2. level: 日志级别，"info" 或 "error"。
+        3. message: 日志文本。
+        4. detail: 可选 JSON 详情；为 None 时不存储。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `append_log` 对应的业务或工具逻辑。
+        1. 向 task_logs 表写入一条筛选任务日志，并同步更新 tasks 表的 info/error 计数。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 写入后会触发 _trim_task_logs 裁剪，保持单任务日志不超过配置上限。
         """
         now = datetime.now()
         detail_json = _json_dumps(detail) if detail else None
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             con.execute(
                 """
                 insert into task_logs (task_id, ts, level, message, detail_json)
@@ -1466,36 +1377,27 @@ class StateDB:
     ) -> None:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. code: 输入参数，具体约束以调用方和实现为准。
-        3. name: 输入参数，具体约束以调用方和实现为准。
-        4. signal_dt: 输入参数，具体约束以调用方和实现为准。
-        5. clock_tf: 输入参数，具体约束以调用方和实现为准。
-        6. strategy_group_id: 输入参数，具体约束以调用方和实现为准。
-        7. strategy_name: 输入参数，具体约束以调用方和实现为准。
-        8. signal_label: 输入参数，具体约束以调用方和实现为准。
-        9. payload: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务 ID。
+        2. code: 股票代码。
+        3. name: 股票名称。
+        4. signal_dt: 信号时间。
+        5. clock_tf: 信号主时钟周期。
+        6. strategy_group_id: 策略组 ID。
+        7. strategy_name: 策略名称。
+        8. signal_label: 信号标签文本。
+        9. payload: 信号详情 dict，序列化为 JSON 存储；可为 None。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `add_result` 对应的业务或工具逻辑。
+        1. 向 task_results 表写入一条筛选结果，并自增 tasks.result_count。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 同一任务+股票可以有多条不同信号结果。
         """
         now = datetime.now()
         payload_json = _json_dumps(payload) if payload is not None else None
 
         def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             con.execute(
                 """
                 insert into task_results (
@@ -1527,25 +1429,16 @@ class StateDB:
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务唯一标识。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 命中时返回任务详情 dict（含解析后的 params、summary）；不存在返回 None。
         用途：
-        1. 执行 `get_task` 对应的业务或工具逻辑。
+        1. 按任务 ID 读取单条筛选任务全字段详情。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. params_json、summary_json 会解析为 dict，解析失败时回退为空 dict。
         """
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 """
                 select
@@ -1600,16 +1493,7 @@ class StateDB:
         """按任务 ID 读取维护任务详情。"""
 
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 """
                 select
@@ -1663,16 +1547,16 @@ class StateDB:
     ) -> list[dict[str, Any]]:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. level: 输入参数，具体约束以调用方和实现为准。
-        3. offset: 输入参数，具体约束以调用方和实现为准。
-        4. limit: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务 ID。
+        2. level: 日志级别过滤，"info"/"error"/"all"。
+        3. offset: 分页偏移（after_log_id 为 None 时生效）。
+        4. limit: 分页条数上限。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 日志 dict 列表，每条含 log_id/ts/level/message/detail。
         用途：
-        1. 执行 `get_logs` 对应的业务或工具逻辑。
+        1. 分页读取筛选任务日志，支持按 log_id 追加拉取。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. after_log_id 不为 None 时忽略 offset，仅返回 id > after_log_id 的条目。
         """
         params: list[Any] = [task_id]
         where = "where task_id = ?"
@@ -1689,16 +1573,7 @@ class StateDB:
             params.extend([limit, offset])
 
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 f"""
                 select log_id, ts, level, message, detail_json
@@ -1750,16 +1625,7 @@ class StateDB:
             params.extend([limit, offset])
 
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 f"""
                 select log_id, ts, level, message, detail_json
@@ -1801,27 +1667,18 @@ class StateDB:
     def get_results(self, task_id: str, offset: int, limit: int) -> list[dict[str, Any]]:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. offset: 输入参数，具体约束以调用方和实现为准。
-        3. limit: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务 ID。
+        2. offset: 分页偏移。
+        3. limit: 分页条数上限。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 结果 dict 列表，每条含 code/name/signal_dt/clock_tf/payload 等。
         用途：
-        1. 执行 `get_results` 对应的业务或工具逻辑。
+        1. 分页读取筛选任务命中结果。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. payload 为空时回退为空 dict。
         """
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 """
                 select
@@ -1856,26 +1713,17 @@ class StateDB:
     def list_tasks(self, offset: int, limit: int) -> list[dict[str, Any]]:
         """
         输入：
-        1. offset: 输入参数，具体约束以调用方和实现为准。
-        2. limit: 输入参数，具体约束以调用方和实现为准。
+        1. offset: 分页偏移。
+        2. limit: 分页条数上限。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 任务摘要 dict 列表，按创建时间倒序。
         用途：
-        1. 执行 `list_tasks` 对应的业务或工具逻辑。
+        1. 分页读取筛选任务列表。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 无任务时返回空列表。
         """
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 """
                 select
@@ -2039,14 +1887,14 @@ class StateDB:
     def list_tasks_by_status(self, statuses: Iterable[str], limit: int = 2000) -> list[dict[str, Any]]:
         """
         输入：
-        1. statuses: 输入参数，具体约束以调用方和实现为准。
-        2. limit: 输入参数，具体约束以调用方和实现为准。
+        1. statuses: 要查询的任务状态集合。
+        2. limit: 返回条数上限，默认 2000。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 符合状态条件的任务 dict 列表。
         用途：
-        1. 执行 `list_tasks_by_status` 对应的业务或工具逻辑。
+        1. 按状态过滤查询筛选任务，用于服务启动恢复中断任务等场景。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. statuses 为空时返回空列表。
         """
         status_list = [s for s in statuses if s]
         if not status_list:
@@ -2055,16 +1903,7 @@ class StateDB:
         placeholders = ",".join(["?"] * len(status_list))
 
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 f"""
                 select
@@ -2155,13 +1994,13 @@ class StateDB:
     def get_result_code_set(self, task_id: str) -> set[str]:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务 ID。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 该任务已产生信号的股票代码集合。
         用途：
-        1. 执行 `get_result_code_set` 对应的业务或工具逻辑。
+        1. 快捷获取任务已命中股票集合（委托 get_task_recovery_snapshot）。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 任务不存在时返回空集合。
         """
         _, signal_code_set = self.get_task_recovery_snapshot(task_id)
         return signal_code_set
@@ -2169,25 +2008,16 @@ class StateDB:
     def get_result_stock_summaries(self, task_id: str) -> list[dict[str, Any]]:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务 ID。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 按股票聚合的信号摘要列表，含 signal_count/first_signal_dt/last_signal_dt/clock_tf。
         用途：
-        1. 执行 `get_result_stock_summaries` 对应的业务或工具逻辑。
+        1. 为结果页提供每只股票的信号汇总视图。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 无结果时返回空列表。
         """
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 """
                 select
@@ -2221,26 +2051,17 @@ class StateDB:
     def get_results_by_code(self, task_id: str, code: str) -> list[dict[str, Any]]:
         """
         输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. code: 输入参数，具体约束以调用方和实现为准。
+        1. task_id: 筛选任务 ID。
+        2. code: 股票代码。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 该股票在此任务中的所有信号结果列表，按 signal_dt 升序。
         用途：
-        1. 执行 `get_results_by_code` 对应的业务或工具逻辑。
+        1. 为结果页股票详情提供单股全部信号。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 无结果时返回空列表。
         """
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            """闭包内部操作：通过外层传入的写/读连接执行具体 SQL。"""
             return con.execute(
                 """
                 select

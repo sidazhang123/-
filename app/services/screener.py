@@ -114,13 +114,13 @@ class RuleScreenStrategy(bt.Strategy):
     def __init__(self) -> None:
         """
         输入：
-        1. 无显式输入参数。
+        1. 无显式输入参数（由 Backtrader params 属性注入）。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `__init__` 对应的业务或工具逻辑。
+        1. 初始化多周期数据源映射、时钟周期、活跃周期列表与非活跃规则结果。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 无可用周期数据时 _pick_clock_tf 会抛出 RuntimeError。
         """
         self.data_by_tf: dict[str, Any] = {}
         for data in self.datas:
@@ -143,30 +143,16 @@ class RuleScreenStrategy(bt.Strategy):
         输入：
         1. 无显式输入参数。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 返回最细粒度可用周期键（如 "15", "d"）。
         用途：
-        1. 执行 `_pick_clock_tf` 对应的业务或工具逻辑。
+        1. 从 15/30/60/d/w 中选取最细粒度周期作为 Backtrader 时钟驱动源。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 无任何可用周期时抛出 RuntimeError。
         """
         for tf in ["15", "30", "60", "d", "w"]:
             if tf in self.data_by_tf:
                 return tf
         raise RuntimeError("没有可用的周期数据源")
-
-    @staticmethod
-    def _parse_bool(value: Any, default: bool) -> bool:
-        if isinstance(value, bool):
-            return value
-        if value is None:
-            return default
-        if isinstance(value, str):
-            token = value.strip().lower()
-            if token in {"1", "true", "yes", "y", "on"}:
-                return True
-            if token in {"0", "false", "no", "n", "off"}:
-                return False
-        return bool(value)
 
     def _pick_active_timeframes(self) -> tuple[str, ...]:
         required = tuple(self.runtime.meta.execution.required_timeframes or ())
@@ -194,27 +180,27 @@ class RuleScreenStrategy(bt.Strategy):
         # 源库中的各周期时间戳统一为周期结束时间（d/w 为当日 15:00），可直接读取当前索引。
         """
         输入：
-        1. tf: 输入参数，具体约束以调用方和实现为准。
+        1. tf: 周期键（如 "d", "w"）。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 返回 0（无偏移）。
         用途：
-        1. 执行 `tf_base_shift` 对应的业务或工具逻辑。
+        1. 获取周期数据的基准偏移（当前库时间戳规则下始终为 0）。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 无。
         """
         return 0
 
     def tf_has_bars(self, tf: str, bars: int) -> bool:
         """
         输入：
-        1. tf: 输入参数，具体约束以调用方和实现为准。
-        2. bars: 输入参数，具体约束以调用方和实现为准。
+        1. tf: 周期键。
+        2. bars: 所需最少 K 线数量。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 数据源是否已具备足够的 K 线数。
         用途：
-        1. 执行 `tf_has_bars` 对应的业务或工具逻辑。
+        1. 在规则评估前检查周期数据是否就绪。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 周期不存在时返回 False。
         """
         data = self.data_by_tf.get(tf)
         if data is None:
@@ -226,15 +212,16 @@ class RuleScreenStrategy(bt.Strategy):
     def tf_line(self, tf: str, line_name: str, ago: int = 0) -> float | None:
         """
         输入：
-        1. tf: 输入参数，具体约束以调用方和实现为准。
-        2. line_name: 输入参数，具体约束以调用方和实现为准。
-        3. ago: 输入参数，具体约束以调用方和实现为准。
+        1. tf: 周期键。
+        2. line_name: Backtrader 数据线名（open/high/low/close/volume/amount）。
+        3. ago: 向前偏移量（0 = 当前 K 线）。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 指定周期、线名、偏移对应的 float 值；数据不足时返回 None。
         用途：
-        1. 执行 `tf_line` 对应的业务或工具逻辑。
+        1. 供策略规则处理器读取任意周期的价量数据。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. ago < 0 时抛出 ValueError。
+        2. 数据不足或属性不存在时返回 None。
         """
         if ago < 0:
             raise ValueError("ago 必须大于等于 0")
@@ -250,14 +237,14 @@ class RuleScreenStrategy(bt.Strategy):
     def tf_datetime(self, tf: str, ago: int = 0) -> datetime | None:
         """
         输入：
-        1. tf: 输入参数，具体约束以调用方和实现为准。
-        2. ago: 输入参数，具体约束以调用方和实现为准。
+        1. tf: 周期键。
+        2. ago: 向前偏移量（0 = 当前 K 线）。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 对应 K 线的 datetime；数据不足时返回 None。
         用途：
-        1. 执行 `tf_datetime` 对应的业务或工具逻辑。
+        1. 获取指定周期某根 K 线的时间戳。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 数据不足时返回 None。
         """
         if not self.tf_has_bars(tf, ago + 1):
             return None
@@ -271,13 +258,14 @@ class RuleScreenStrategy(bt.Strategy):
     def _evaluate_rule(self, tf: str) -> dict[str, Any]:
         """
         输入：
-        1. tf: 输入参数，具体约束以调用方和实现为准。
+        1. tf: 周期键（如 "d", "w", "60" 等）。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 返回规则结果 dict，含 passed/enabled/ready/message/values 等键。
         用途：
-        1. 执行 `_evaluate_rule` 对应的业务或工具逻辑。
+        1. 调用对应周期的规则处理器并返回评估结果。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 处理器返回非 dict 时视为未通过。
+        2. 处理器抛异常时捕获并记入 error_collector，返回失败结果。
         """
         handler = self.runtime.per_tf_handlers[tf]
         try:
@@ -306,11 +294,12 @@ class RuleScreenStrategy(bt.Strategy):
         输入：
         1. 无显式输入参数。
         输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
+        1. 无返回值。
         用途：
-        1. 执行 `next` 对应的业务或工具逻辑。
+        1. Backtrader 每根 K 线回调：执行各周期规则、组合判断，通过则生成信号。
         边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
+        1. 周期数据缺失时记为未通过。
+        2. 规则/组合异常时捕获并记入 error_collector。
         """
         clock_data = self.data_by_tf[self.clock_tf]
         clock_dt = bt.num2date(clock_data.datetime[0]).replace(tzinfo=None)
@@ -400,20 +389,20 @@ def run_single_stock_backtrader(
 ) -> tuple[StockRunSummary, list[str]]:
     """
     输入：
-    1. code: 输入参数，具体约束以调用方和实现为准。
-    2. name: 输入参数，具体约束以调用方和实现为准。
-    3. timeframe_dfs: 输入参数，具体约束以调用方和实现为准。
-    4. strategy_group_id: 输入参数，具体约束以调用方和实现为准。
-    5. strategy_name: 输入参数，具体约束以调用方和实现为准。
-    6. strategy_group_runtime: 输入参数，具体约束以调用方和实现为准。
-    7. group_params: 输入参数，具体约束以调用方和实现为准。
-    8. on_signal: 输入参数，具体约束以调用方和实现为准。
+    1. code: 股票代码。
+    2. name: 股票名称。
+    3. timeframe_dfs: 周期键 -> DataFrame 映射。
+    4. strategy_group_id: 策略组标识。
+    5. strategy_name: 策略名称。
+    6. strategy_group_runtime: 策略组运行时对象（含 handlers/combo/signal_label_builder）。
+    7. group_params: 策略参数 dict。
+    8. on_signal: 可选信号回调（传入时实时推送，否则累积到 summary.signals）。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. (StockRunSummary, errors) 元组。
     用途：
-    1. 执行 `run_single_stock_backtrader` 对应的业务或工具逻辑。
+    1. 对单只股票执行 Backtrader 多周期规则扫描并收集信号。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 所有周期 DataFrame 均为空时返回空结果与错误提示。
     """
     summary = StockRunSummary(code=code, name=name)
     errors: list[str] = []
