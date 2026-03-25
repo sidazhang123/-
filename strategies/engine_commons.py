@@ -203,6 +203,22 @@ def read_universe_filter_params(group_params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def read_filter_st_params(group_params: dict[str, Any]) -> bool:
+    """读取 ST 股票过滤开关。
+
+    输入：
+    1. group_params: TaskManager 合并后的策略参数。
+    输出：
+    1. 返回是否启用 ST 过滤（True 表示排除 ST 股票）。
+    用途：
+    1. 由 TaskManager 在进入 engine 前调用，engine 不需要处理。
+    边界条件：
+    1. 缺省时默认启用（True）。
+    """
+    raw = as_dict(group_params.get("filter_st"))
+    return as_bool(raw.get("enabled"), True)
+
+
 def coarsest_tf(tfs: list[str]) -> str:
     """返回给定周期列表中最粗粒度的周期。
 

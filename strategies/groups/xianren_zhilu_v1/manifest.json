@@ -35,6 +35,9 @@
         "reason_terms": []
       }
     },
+    "filter_st": {
+      "enabled": true
+    },
     "execution": {
       "fallback_to_backtrader": false
     }
@@ -103,6 +106,9 @@
         "concept_terms": "概念名称关键字列表，语义为 AND（全部命中才保留）。",
         "reason_terms": "选股理由关键字列表，语义为 OR（任一命中即保留）。"
       }
+    },
+    "filter_st": {
+      "enabled": "是否在筛选时排除名称包含 ST（不分大小写）的股票。默认开启。"
     },
     "execution": {
       "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader，默认 false。"

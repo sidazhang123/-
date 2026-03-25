@@ -15,8 +15,11 @@
 3. `result_map` 只包含命中或异常股票，不要把所有未命中股票都塞进去。
 4. 如需概念预筛选，只读取 `group_params["universe_filters"]["concepts"]` 用于记录参数；
    实际过滤由 TaskManager 在进入 engine 前执行，engine 不要重复裁剪 `codes`。
-5. 每个信号 payload 都必须正确填写 `chart_interval_start_ts` 和 `chart_interval_end_ts`，
-   且这两个字段必须表示“单次信号”的实际展示窗口，而不是全任务跨度或多段历史总跨度。6. 如果策略检测到可视化辅助线（趋势线、边界线、支撑/阻力线等），应通过 payload
+5. ST 股票过滤由 `group_params["filter_st"]["enabled"]` 控制，默认开启；
+   过滤同样由 TaskManager 在进入 engine 前执行，engine 不需要处理。
+6. 每个信号 payload 都必须正确填写 `chart_interval_start_ts` 和 `chart_interval_end_ts`，
+   且这两个字段必须表示"单次信号"的实际展示窗口，而不是全任务跨度或多段历史总跨度。
+7. 如果策略检测到可视化辅助线（趋势线、边界线、支撑/阻力线等），应通过 payload
    的 `overlay_lines` 字段传递给前端，前端会自动在 K 线图上用 ECharts markLine 渲染。
    每条线是一个 dict，必须包含 start_ts/end_ts/start_price/end_price，
    可选 color（默认 #fbbf24）、dash（默认 True）、label（默认空）。

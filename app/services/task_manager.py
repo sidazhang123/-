@@ -670,6 +670,25 @@ class TaskManager:
                                 },
                             )
 
+                    # ---- ST 股票名称过滤 ----
+                    filter_st_raw = group_params.get("filter_st")
+                    filter_st_enabled = (filter_st_raw.get("enabled", True) is True) if isinstance(filter_st_raw, dict) else True
+                    if filter_st_enabled and codes:
+                        raw_count = len(codes)
+                        st_excluded = [c for c in codes if "st" in code_to_name.get(c, "").lower()]
+                        if st_excluded:
+                            st_set = set(st_excluded)
+                            codes = [c for c in codes if c not in st_set]
+                            task_logger.info(
+                                "已过滤 ST 股票",
+                                {
+                                    "raw_code_count": raw_count,
+                                    "eligible_code_count": len(codes),
+                                    "excluded_code_count": len(st_excluded),
+                                    "excluded_code_preview": st_excluded[:30],
+                                },
+                            )
+
                     summary["unresolved_inputs"] = unresolved_inputs
                     summary["resolved_codes"] = codes
                     summary["run_mode"] = run_mode

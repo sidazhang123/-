@@ -126,6 +126,7 @@
 1. 新策略优先复制 `strategies/groups/strategy_2`。
 2. `strategy_2` 是 specialized 模板，不是 backtrader 模板。
 3. `strategy.py` 在 specialized 策略中通常仅保留 backtrader 协议占位与降级兜底，不应承载主逻辑。
+4. 所有策略默认包含 `filter_st.enabled = true`，TaskManager 在进入 engine 前按名称排除 ST 股票。
 
 ## 7. 图表与结果接口契约
 

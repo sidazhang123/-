@@ -224,6 +224,7 @@ const _LABEL_MAP = {
   "concepts": "概念预筛选",
   "concept_terms": "概念名称",
   "reason_terms": "入选理由",
+  "filter_st": "ST股票过滤",
 };
 // 需要在 UI 级别展平（不渲染 section 外壳，直接渲染子节点）的 key 集合
 const _UNWRAP_SECTIONS = new Set(["universe_filters"]);
