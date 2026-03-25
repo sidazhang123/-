@@ -255,6 +255,51 @@ function renderParamField(path, value, helpNode, labelText, depth = 0) {
       return childKeys.map((key) => renderParamField(path.concat(key), value[key], helpNode?.[key], key, depth)).join("");
     }
     const childKeys = Object.keys(value);
+    const hasEnabled = childKeys.includes("enabled") && depth > 0;
+    // 单布尔字段 section：唯一子字段为 boolean 时，渲染为紧凑 header-only 卡片
+    const singleBoolKey = (!hasEnabled && depth > 0 && childKeys.length === 1 && typeof value[childKeys[0]] === "boolean") ? childKeys[0] : null;
+    if (singleBoolKey) {
+      const boolPath = path.concat(singleBoolKey);
+      const boolKey = pathToString(boolPath);
+      const boolVal = value[singleBoolKey] === true;
+      const childHelp = helpTextFromNode(helpNode?.[singleBoolKey]);
+      return `
+        <section class="param-section param-drawer" data-param-section="${escapeHtml(pathKey)}">
+          <div class="param-drawer-header">
+            <div class="param-section-title">${escapeHtml(labelText)}</div>
+            <span class="param-checkbox-row">
+              <input type="checkbox" data-param-path="${escapeHtml(boolKey)}" ${boolVal ? "checked" : ""} />
+              <span class="param-checkbox-value">${boolVal ? "开启" : "关闭"}</span>
+            </span>
+          </div>
+          ${(helpText || childHelp) ? `<div class="param-help">${escapeHtml(helpText || childHelp)}</div>` : ""}
+        </section>
+      `;
+    }
+    if (hasEnabled) {
+      // 抽屉式 section：enabled checkbox 移到标题右侧，body 根据 enabled 控制显隐
+      const isEnabled = value.enabled === true;
+      const enabledPath = path.concat("enabled");
+      const enabledKey = pathToString(enabledPath);
+      const bodyKeys = childKeys.filter((k) => k !== "enabled");
+      return `
+        <section class="param-section param-drawer" data-param-section="${escapeHtml(pathKey)}">
+          <div class="param-drawer-header">
+            <div class="param-section-title">${escapeHtml(labelText)}</div>
+            <span class="param-checkbox-row">
+              <input type="checkbox" data-param-path="${escapeHtml(enabledKey)}" ${isEnabled ? "checked" : ""} />
+              <span class="param-checkbox-value">${isEnabled ? "开启" : "关闭"}</span>
+            </span>
+          </div>
+          ${helpText ? `<div class="param-help">${escapeHtml(helpText)}</div>` : ""}
+          <div class="param-drawer-body ${isEnabled ? "" : "param-drawer-closed"}" data-drawer-section="${escapeHtml(pathKey)}">
+            <div class="param-section-body">
+              ${bodyKeys.map((key) => renderParamField(path.concat(key), value[key], helpNode?.[key], key, depth + 1)).join("")}
+            </div>
+          </div>
+        </section>
+      `;
+    }
     const titleClass = depth === 0 ? "param-section-title root" : "param-section-title";
     return `
       <section class="param-section ${depth === 0 ? "is-root" : ""}" data-param-section="${escapeHtml(pathKey)}">
@@ -389,12 +434,14 @@ function renderInlineTemplateSection(path, sectionValue, helpNode) {
     }
   }
 
-  const bodyDisabledClass = isEnabled ? "" : "param-section-disabled";
+  const bodyDrawerClass = isEnabled ? "" : "param-drawer-closed";
   return `
-    <section class="param-inline-section" data-param-section="${escapeHtml(sectionKey)}">
+    <section class="param-inline-section param-drawer" data-param-section="${escapeHtml(sectionKey)}">
       ${headerHtml}
-      <div class="param-inline-section-body ${bodyDisabledClass}" data-section-body="${escapeHtml(sectionKey)}">
-        ${rowsHtml}
+      <div class="param-drawer-body ${bodyDrawerClass}" data-drawer-section="${escapeHtml(sectionKey)}">
+        <div class="param-inline-section-body">
+          ${rowsHtml}
+        </div>
       </div>
     </section>
   `;
@@ -402,32 +449,12 @@ function renderInlineTemplateSection(path, sectionValue, helpNode) {
 
 function refreshSectionDisableStates(root) {
   if (!root) return;
-  // 处理 param-inline-section 的 enabled 开关（内嵌模板 section）
-  root.querySelectorAll("[data-section-body]").forEach((body) => {
-    const sectionKey = body.dataset.sectionBody;
+  // 处理所有抽屉式 section 的开关（标准 + 内嵌模板共用 data-drawer-section）
+  root.querySelectorAll("[data-drawer-section]").forEach((body) => {
+    const sectionKey = body.dataset.drawerSection;
     const enabledPath = sectionKey.split(".").concat("enabled").filter(Boolean);
     const enabled = getValueAtPath(state.groupParams, enabledPath);
-    body.classList.toggle("param-section-disabled", enabled !== true);
-  });
-  // 处理标准 param-section 的 enabled 开关（如 universe_filters.concepts）
-  root.querySelectorAll("[data-param-section]").forEach((section) => {
-    const sectionKey = section.dataset.paramSection;
-    const sectionPath = sectionKey.split(".").filter(Boolean);
-    const sectionVal = getValueAtPath(state.groupParams, sectionPath);
-    if (!sectionVal || typeof sectionVal !== "object" || !("enabled" in sectionVal)) return;
-    // 跳过内嵌模板 section（已在上面处理）
-    if (section.classList.contains("param-inline-section")) return;
-    const body = section.querySelector(".param-section-body");
-    if (!body) return;
-    // 灰化 section-body 内除 enabled checkbox 之外的所有 field
-    const enabledKey = pathToString(sectionPath.concat("enabled"));
-    body.querySelectorAll(".param-field, .param-tags-editor").forEach((field) => {
-      const input = field.querySelector(`[data-param-path]`);
-      const tagEditor = field.closest(".param-tags-editor") || field.querySelector(".param-tags-editor");
-      if (input && input.dataset.paramPath === enabledKey) return;
-      if (tagEditor && tagEditor.dataset.paramPath === enabledKey) return;
-      field.classList.toggle("param-section-disabled", sectionVal.enabled !== true);
-    });
+    body.classList.toggle("param-drawer-closed", enabled !== true);
   });
   // 处理内嵌模板的 toggle 行
   root.querySelectorAll("[data-inline-toggle-body]").forEach((body) => {

@@ -1753,7 +1753,38 @@ button.secondary:hover {
   padding: 4px 0;
 }
 
-/* ── 级联禁用：section.enabled=false 时子字段灰化 ── */
+/* ── 抽屉式 section：header + 可折叠 body ── */
+
+.param-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.param-drawer-header .param-section-title {
+  display: block;
+}
+
+.param-drawer-body {
+  transition: grid-template-rows 0.25s ease, opacity 0.2s ease;
+  display: grid;
+  grid-template-rows: 1fr;
+  min-width: 0;
+}
+
+.param-drawer-body > * {
+  overflow: hidden;
+  min-width: 0;
+}
+
+.param-drawer-closed {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ── 级联禁用：toggle 行内部灰化 ── */
 
 .param-section-disabled {
   opacity: 0.4;
