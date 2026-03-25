@@ -1306,15 +1306,27 @@ function renderChart(chartData, skipAutoZoom = false) {
     }
     const labelText = sig.signal_label || sig.strategy_name || chartData.strategy_name || "策略信号";
     const pointTitle = markerMode === "anchor" ? `${labelText}（该日锚点）` : `${labelText}（窗口中心）`;
+    // 根据标记点在图表中的相对位置，自动将标签推向画布中央
+    const xRatio = xData.length > 1 ? idx / (xData.length - 1) : 0.5;
+    let yMin = Infinity, yMax = -Infinity;
+    for (let i = 0; i < kData.length; i++) {
+      yMin = Math.min(yMin, kData[i][2]);
+      yMax = Math.max(yMax, kData[i][3]);
+    }
+    const yRatio = yMax > yMin ? (markerY - yMin) / (yMax - yMin) : 0.5;
+    const hAlign = xRatio > 0.75 ? "right" : xRatio < 0.25 ? "left" : "center";
+    const vPos = yRatio > 0.7 ? "bottom" : "top";
     markPointData.push({
       coord: [xData[idx], markerY],
       value: pointTitle,
       label: {
         show: true,
+        position: vPos,
+        align: hAlign,
         formatter: `{a|${pointTitle}}\n{b|${new Date(markerTsRaw).toLocaleString()}}`,
         rich: {
-          a: { color: "#f87171", fontSize: 10, fontWeight: 700 },
-          b: { color: "#94a3b8", fontSize: 10 },
+          a: { color: "#39cc57", fontSize: 13, fontWeight: 600, align: hAlign },
+          b: { color: "#94a3b8", fontSize: 13, align: hAlign },
         },
       },
       itemStyle: { color: "#ef4444" },
