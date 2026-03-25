@@ -2,7 +2,7 @@
 将 screening_state.duckdb 中历史 debug 日志迁移到 logs/debug/*.jsonl。
 
 说明：
-1. 仅处理 maintenance_logs / concept_logs 中 level='debug' 的记录。
+1. 仅处理 maintenance_logs 中 level='debug' 的记录。
 2. 不删除整张日志表，因为 info/error 仍由前端 API 使用。
 3. 删除阶段按精确 log_id 执行，避免误删非 debug 日志。
 4. 默认 dry-run；必须显式传入 --apply 才会写文件。
@@ -23,7 +23,6 @@ import duckdb
 
 TABLE_TO_PREFIX = {
     "maintenance_logs": "maintenance",
-    "concept_logs": "concept",
 }
 
 

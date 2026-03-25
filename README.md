@@ -18,11 +18,11 @@
 
 当前策略组目录位于 `strategies/groups/*`，现有策略组包括：
 
-1. `burst_pullback_box_v1`：specialized，放量冲高回落箱体策略。
-2. `bu_zhi_dao_v1`：specialized，日线 + 15 分钟组合策略。
-3. `flag_rally_v1`：specialized，旗形上涨策略。
-4. `xianren_zhilu_v1`：specialized，仙人指路形态策略。
-5. `bigbro_buy`：specialized 主路径，保留 backtrader 回退。
+1. `consecutive_uptrends_v1`：specialized，w/d/60 K线连续小阳策略。
+2. `flag_pattern_v1`：specialized，w/d/15 多周期旗形上涨策略。
+3. `multi_tf_ma_uptrend_v1`：specialized，w/d/60/15 多周期均线向上策略。
+4. `weekly_oversold_rsi_v1`：specialized，w 周线超跌 RSI 策略。
+5. `xianren_zhilu_v1`：specialized，w/d 仙人指路形态策略。
 6. `strategy_2`：specialized 模板策略，作为后续 AI 和开发者创建新策略的首选参考模板。
 
 ## 2. 启动方式
@@ -65,11 +65,11 @@ py run.py
 │  ├─ __init__.py
 │  ├─ engine_commons.py
 │  └─ groups/
-│     ├─ bigbro_buy/
-│     ├─ burst_pullback_box_v1/
-│     ├─ bu_zhi_dao_v1/
-│     ├─ flag_rally_v1/
+│     ├─ consecutive_uptrends_v1/
+│     ├─ flag_pattern_v1/
+│     ├─ multi_tf_ma_uptrend_v1/
 │     ├─ strategy_2/
+│     ├─ weekly_oversold_rsi_v1/
 │     └─ xianren_zhilu_v1/
 └─ app/
    ├─ main.py

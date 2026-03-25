@@ -121,11 +121,9 @@ class TestStateDBConceptLogs(unittest.TestCase):
         old_job_id = "concept-old"
         keep_job_id = "concept-keep"
         latest_job_id = "concept-latest"
-        self._create_job(old_job_id)
-        self._create_job(keep_job_id)
-        self._create_job(latest_job_id)
 
         with mock.patch("app.db.state_db.LOG_KEEP_CONCEPT_JOBS", 2):
+            self._create_job(old_job_id)
             for idx in range(2):
                 self.state_db.append_concept_log(
                     job_id=old_job_id,
@@ -133,6 +131,7 @@ class TestStateDBConceptLogs(unittest.TestCase):
                     message=f"old-{idx}",
                     detail={"idx": idx},
                 )
+            self._create_job(keep_job_id)
             for idx in range(3):
                 self.state_db.append_concept_log(
                     job_id=keep_job_id,
@@ -140,6 +139,7 @@ class TestStateDBConceptLogs(unittest.TestCase):
                     message=f"keep-{idx}",
                     detail={"idx": idx},
                 )
+            self._create_job(latest_job_id)
             for idx in range(4):
                 self.state_db.append_concept_log(
                     job_id=latest_job_id,

@@ -65,10 +65,32 @@ class TestStateDBRetryTasks(unittest.TestCase):
                 )
             )
 
+        def _has_primary_key(table_name: str, column_name: str) -> bool:
+            return bool(
+                self.state_db._with_read_connection(
+                    lambda con: con.execute(
+                        """
+                        select 1
+                        from information_schema.table_constraints tc
+                        join information_schema.key_column_usage kcu
+                          on tc.constraint_name = kcu.constraint_name
+                         and tc.table_name = kcu.table_name
+                        where lower(tc.table_name) = ?
+                          and tc.constraint_type = 'PRIMARY KEY'
+                          and lower(kcu.column_name) = ?
+                        limit 1
+                        """,
+                        [table_name.lower(), column_name.lower()],
+                    ).fetchone()
+                )
+            )
+
         retry_count = _query_table_count("maintenance_retry_tasks")
         no_source_count = _query_table_count("maintenance_no_source_days")
+        maintenance_logs_pk = _has_primary_key("maintenance_logs", "log_id")
         self.assertEqual(retry_count, 1)
         self.assertEqual(no_source_count, 0)
+        self.assertTrue(maintenance_logs_pk)
 
     def test_retry_task_crud_flow(self) -> None:
         """

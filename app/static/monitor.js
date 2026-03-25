@@ -201,9 +201,23 @@ function setValueAtPath(root, path, value) {
   current[path[path.length - 1]] = value;
 }
 
+// 前端显示名映射：key → 显示标签（null = 隐藏标签）
+const _LABEL_MAP = {
+  "concepts": "概念预筛选",
+  "concept_terms": "概念名称",
+  "reason_terms": "入选理由",
+};
+// 需要在 UI 级别展平（不渲染 section 外壳，直接渲染子节点）的 key 集合
+const _UNWRAP_SECTIONS = new Set(["universe_filters"]);
+// 当 path 匹配时隐藏标签与帮助文本的 key（仅保留控件本身）
+const _HIDE_LABEL_KEYS = new Set(["universe_filters.concepts.enabled"]);
+
 function renderParamField(path, value, helpNode, labelText, depth = 0) {
-  const helpText = helpTextFromNode(helpNode);
   const pathKey = pathToString(path);
+  // 应用显示名映射
+  if (labelText in _LABEL_MAP) labelText = _LABEL_MAP[labelText];
+  const hideLabelAndHelp = _HIDE_LABEL_KEYS.has(pathKey);
+  const helpText = hideLabelAndHelp ? "" : helpTextFromNode(helpNode);
 
   if (Array.isArray(value)) {
     const isStringArray = value.every((item) => typeof item === "string");
@@ -230,10 +244,20 @@ function renderParamField(path, value, helpNode, labelText, depth = 0) {
   }
 
   if (value && typeof value === "object") {
+    // 内嵌模板渲染：当 param_help 声明 _render: "inline_template" 时使用专用渲染器
+    if (helpNode && helpNode._render === "inline_template") {
+      return renderInlineTemplateSection(path, value, helpNode);
+    }
+    // 展平 section：不渲染外壳，直接输出子节点
+    const lastKey = path.length ? path[path.length - 1] : "";
+    if (_UNWRAP_SECTIONS.has(lastKey)) {
+      const childKeys = Object.keys(value);
+      return childKeys.map((key) => renderParamField(path.concat(key), value[key], helpNode?.[key], key, depth)).join("");
+    }
     const childKeys = Object.keys(value);
     const titleClass = depth === 0 ? "param-section-title root" : "param-section-title";
     return `
-      <section class="param-section ${depth === 0 ? "is-root" : ""}">
+      <section class="param-section ${depth === 0 ? "is-root" : ""}" data-param-section="${escapeHtml(pathKey)}">
         ${labelText ? `<div class="${titleClass}">${escapeHtml(labelText)}</div>` : ""}
         ${helpText ? `<div class="param-help">${escapeHtml(helpText)}</div>` : ""}
         <div class="param-section-body">
@@ -245,14 +269,14 @@ function renderParamField(path, value, helpNode, labelText, depth = 0) {
 
   if (typeof value === "boolean") {
     return `
-      <label class="param-field checkbox-field">
-        <span class="param-label">${escapeHtml(labelText)}</span>
+      <div class="param-field checkbox-field">
+        ${hideLabelAndHelp ? "" : `<span class="param-label">${escapeHtml(labelText)}</span>`}
         ${helpText ? `<span class="param-help">${escapeHtml(helpText)}</span>` : ""}
         <span class="param-checkbox-row">
           <input type="checkbox" data-param-path="${escapeHtml(pathKey)}" ${value ? "checked" : ""} />
           <span class="param-checkbox-value">${value ? "开启" : "关闭"}</span>
         </span>
-      </label>
+      </div>
     `;
   }
 
@@ -280,6 +304,138 @@ function renderParamField(path, value, helpNode, labelText, depth = 0) {
       <input type="text" data-param-path="${escapeHtml(pathKey)}" value="${escapeHtml(String(value ?? ""))}" />
     </label>
   `;
+}
+
+function renderInlineTemplateSection(path, sectionValue, helpNode) {
+  const sectionKey = pathToString(path);
+  const label = helpNode._label || sectionKey;
+  const templates = Array.isArray(helpNode._templates) ? helpNode._templates : [];
+  const enabledVal = sectionValue.enabled;
+  const enabledPath = path.concat("enabled");
+  const enabledKey = pathToString(enabledPath);
+  const isEnabled = enabledVal === true;
+
+  const headerHtml = `
+    <div class="param-inline-section-header">
+      <span class="param-inline-section-title">${escapeHtml(label)}</span>
+      <span class="param-checkbox-row" style="cursor:default">
+        <input type="checkbox" data-param-path="${escapeHtml(enabledKey)}" ${isEnabled ? "checked" : ""} style="cursor:pointer" />
+        <span class="param-checkbox-value">${isEnabled ? "开启" : "关闭"}</span>
+      </span>
+    </div>
+  `;
+
+  let rowsHtml = "";
+  for (const tpl of templates) {
+    const text = tpl.text || "";
+    const isRequired = tpl.required === true;
+    const toggleField = tpl.toggle || null;
+    const helpTip = tpl.help || "";
+
+    // 解析 {field_name} 占位符，替换为内联 input
+    const segments = text.split(/\{(\w+)\}/g);
+    let lineHtml = "";
+    for (let i = 0; i < segments.length; i += 1) {
+      if (i % 2 === 0) {
+        if (segments[i]) {
+          lineHtml += `<span class="param-inline-text">${escapeHtml(segments[i])}</span>`;
+        }
+      } else {
+        const fieldName = segments[i];
+        const fieldPath = path.concat(fieldName);
+        const fieldKey = pathToString(fieldPath);
+        const fieldVal = sectionValue[fieldName];
+        if (typeof fieldVal === "number") {
+          const step = Number.isInteger(fieldVal) ? "1" : "any";
+          const kind = Number.isInteger(fieldVal) ? "int" : "float";
+          lineHtml += `<input type="number" class="param-inline-field"
+            data-param-path="${escapeHtml(fieldKey)}"
+            data-param-number-kind="${kind}"
+            step="${step}"
+            value="${escapeHtml(String(fieldVal))}" />`;
+        } else {
+          lineHtml += `<input type="text" class="param-inline-field"
+            data-param-path="${escapeHtml(fieldKey)}"
+            value="${escapeHtml(String(fieldVal ?? ""))}" />`;
+        }
+      }
+    }
+
+    const badge = isRequired
+      ? '<span class="param-inline-badge required">必选</span>'
+      : '<span class="param-inline-badge optional">可选</span>';
+
+    if (toggleField) {
+      // 可选条件行：带行首勾选框
+      const togglePath = path.concat(toggleField);
+      const toggleKey = pathToString(togglePath);
+      const toggleVal = sectionValue[toggleField] === true;
+      const disabledClass = toggleVal ? "" : "param-inline-toggle-disabled";
+      rowsHtml += `
+        <div class="param-inline-toggle-row" data-inline-toggle="${escapeHtml(toggleKey)}">
+          <input type="checkbox" data-param-path="${escapeHtml(toggleKey)}" ${toggleVal ? "checked" : ""} />
+          <div class="param-inline-toggle-content ${disabledClass}" data-inline-toggle-body="${escapeHtml(toggleKey)}">
+            ${badge} ${lineHtml}
+            ${helpTip ? `<span class="param-inline-help">${escapeHtml(helpTip)}</span>` : ""}
+          </div>
+        </div>
+      `;
+    } else {
+      // 必选/无 toggle 行
+      rowsHtml += `<div class="param-inline-row">${badge} ${lineHtml}</div>`;
+      if (helpTip) {
+        rowsHtml += `<div class="param-inline-help">${escapeHtml(helpTip)}</div>`;
+      }
+    }
+  }
+
+  const bodyDisabledClass = isEnabled ? "" : "param-section-disabled";
+  return `
+    <section class="param-inline-section" data-param-section="${escapeHtml(sectionKey)}">
+      ${headerHtml}
+      <div class="param-inline-section-body ${bodyDisabledClass}" data-section-body="${escapeHtml(sectionKey)}">
+        ${rowsHtml}
+      </div>
+    </section>
+  `;
+}
+
+function refreshSectionDisableStates(root) {
+  if (!root) return;
+  // 处理 param-inline-section 的 enabled 开关（内嵌模板 section）
+  root.querySelectorAll("[data-section-body]").forEach((body) => {
+    const sectionKey = body.dataset.sectionBody;
+    const enabledPath = sectionKey.split(".").concat("enabled").filter(Boolean);
+    const enabled = getValueAtPath(state.groupParams, enabledPath);
+    body.classList.toggle("param-section-disabled", enabled !== true);
+  });
+  // 处理标准 param-section 的 enabled 开关（如 universe_filters.concepts）
+  root.querySelectorAll("[data-param-section]").forEach((section) => {
+    const sectionKey = section.dataset.paramSection;
+    const sectionPath = sectionKey.split(".").filter(Boolean);
+    const sectionVal = getValueAtPath(state.groupParams, sectionPath);
+    if (!sectionVal || typeof sectionVal !== "object" || !("enabled" in sectionVal)) return;
+    // 跳过内嵌模板 section（已在上面处理）
+    if (section.classList.contains("param-inline-section")) return;
+    const body = section.querySelector(".param-section-body");
+    if (!body) return;
+    // 灰化 section-body 内除 enabled checkbox 之外的所有 field
+    const enabledKey = pathToString(sectionPath.concat("enabled"));
+    body.querySelectorAll(".param-field, .param-tags-editor").forEach((field) => {
+      const input = field.querySelector(`[data-param-path]`);
+      const tagEditor = field.closest(".param-tags-editor") || field.querySelector(".param-tags-editor");
+      if (input && input.dataset.paramPath === enabledKey) return;
+      if (tagEditor && tagEditor.dataset.paramPath === enabledKey) return;
+      field.classList.toggle("param-section-disabled", sectionVal.enabled !== true);
+    });
+  });
+  // 处理内嵌模板的 toggle 行
+  root.querySelectorAll("[data-inline-toggle-body]").forEach((body) => {
+    const toggleKey = body.dataset.inlineToggleBody;
+    const togglePath = toggleKey.split(".").filter(Boolean);
+    const toggleVal = getValueAtPath(state.groupParams, togglePath);
+    body.classList.toggle("param-inline-toggle-disabled", toggleVal !== true);
+  });
 }
 
 function renderTagEditor(container, path, items) {
@@ -325,6 +481,7 @@ function renderGroupParamsForm() {
   }
   container.innerHTML = renderParamField([], state.groupParams, group.param_help || {}, "", 0);
   refreshTagEditors(container);
+  refreshSectionDisableStates(container);
 }
 
 function resetGroupParamsFromDefault(groupId) {
@@ -864,8 +1021,11 @@ function bindEvents() {
 
     if (target.type === "checkbox") {
       setValueAtPath(state.groupParams, path, target.checked);
-      const valueNode = target.closest(".checkbox-field")?.querySelector(".param-checkbox-value");
+      const valueNode = target.closest(".checkbox-field")?.querySelector(".param-checkbox-value")
+        || target.closest(".param-checkbox-row")?.querySelector(".param-checkbox-value");
       if (valueNode) valueNode.textContent = target.checked ? "开启" : "关闭";
+      // 级联禁用：checkbox 变化时刷新 section / toggle 的灰化状态
+      refreshSectionDisableStates(form);
     } else if (target.type === "number") {
       if (target.value === "") return;
       const parsed = target.dataset.paramNumberKind === "int"

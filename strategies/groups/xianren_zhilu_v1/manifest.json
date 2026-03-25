@@ -1,22 +1,39 @@
 {
   "id": "xianren_zhilu_v1",
   "name": "仙人指路 v1",
-  "description": "K线形态：上影线 + 放量 + 前n天股价下降",
+  "description": "多周期仙人指路形态：在日线/周线中检测上影线放量 + 前期均线下降形态，各周期独立检测，结果取并集（OR）。",
   "module": "strategies.groups.xianren_zhilu_v1",
   "engine": "specialized",
   "execution": {
     "requires_time_window": false,
     "supports_intra_task_parallel": false,
     "cache_scope": "none",
-    "required_timeframes": ["d"],
+    "required_timeframes": ["w", "d"],
     "specialized_entry": "strategies.groups.xianren_zhilu_v1.engine:run_xianren_zhilu_v1_specialized"
   },
   "default_params": {
-    "daily": {
+    "weekly": {
+      "enabled": false,
+      "ma_period": 5,
       "shadow_ratio": 0.6,
       "volume_multiplier": 1.3,
-      "lookback_days": 5,
+      "lookback_bars": 5,
       "price_decline_ratio": 1.2
+    },
+    "daily": {
+      "enabled": true,
+      "ma_period": 5,
+      "shadow_ratio": 0.6,
+      "volume_multiplier": 1.3,
+      "lookback_bars": 5,
+      "price_decline_ratio": 1.2
+    },
+    "universe_filters": {
+      "concepts": {
+        "enabled": false,
+        "concept_terms": [],
+        "reason_terms": []
+      }
     },
     "execution": {
       "fallback_to_backtrader": false
@@ -24,21 +41,71 @@
   },
   "param_help": {
     "_overview": [
-      "仙人指路形态策略：",
-      "1. 最新日线收上影线：close > open 且 (high - close) / (high - open) > 3/5",
-      "2. 指路当日放量：该日成交量 > 之前3天平均成交量 * 1.3",
-      "3. 前三天股价下降：5天前的MA3 > 当日MA3 * 1.2"
+      "仙人指路形态策略，支持周线和日线两个周期，各周期独立检测，结果取并集（OR）。",
+      "必选条件：",
+      "1. 最新K线收上影线：close > open 且 (high − close) / (close − open) ≥ 阈值。",
+      "2. 当日放量：该K线成交量 ≥ 之前3根K线平均成交量 × 倍数。",
+      "3. 前期均线下降：lookback_bars 根前的 MA 值 ≥ 当前 MA 值 × 比例。"
     ],
+    "weekly": {
+      "_render": "inline_template",
+      "_label": "周线",
+      "_tf_key": "w",
+      "_templates": [
+        {
+          "text": "MA {ma_period} 均线",
+          "required": true
+        },
+        {
+          "text": "上影线与实体比值 ≥ {shadow_ratio}",
+          "required": true,
+          "help": "上影线 = high − close，实体 = close − open，比值 = 上影线/实体"
+        },
+        {
+          "text": "当K线成交量 ≥ 前3根均量 × {volume_multiplier}",
+          "required": true
+        },
+        {
+          "text": "{lookback_bars} 根前的MA值 ≥ 当前MA值 × {price_decline_ratio}",
+          "required": true,
+          "help": "检测前期均线是否高于当前均线，表明股价从高位回落"
+        }
+      ]
+    },
     "daily": {
-      "_comment": "日线形态参数",
-      "shadow_ratio": "上影线占比阈值，默认 0.6 (即3/5)",
-      "volume_multiplier": "放量倍数，默认 1.3",
-      "lookback_days": "前N天对比MA3，默认 5",
-      "price_decline_ratio": "MA3下降比例阈值，默认 1.2"
+      "_render": "inline_template",
+      "_label": "日线",
+      "_tf_key": "d",
+      "_templates": [
+        {
+          "text": "MA {ma_period} 均线",
+          "required": true
+        },
+        {
+          "text": "上影线与实体比值 ≥ {shadow_ratio}",
+          "required": true,
+          "help": "上影线 = high − close，实体 = close − open，比值 = 上影线/实体"
+        },
+        {
+          "text": "当K线成交量 ≥ 前3根均量 × {volume_multiplier}",
+          "required": true
+        },
+        {
+          "text": "{lookback_bars} 根前的MA值 ≥ 当前MA值 × {price_decline_ratio}",
+          "required": true,
+          "help": "检测前期均线是否高于当前均线，表明股价从高位回落"
+        }
+      ]
+    },
+    "universe_filters": {
+      "concepts": {
+        "enabled": "是否启用概念预筛选。",
+        "concept_terms": "概念名称关键字列表，语义为 AND（全部命中才保留）。",
+        "reason_terms": "选股理由关键字列表，语义为 OR（任一命中即保留）。"
+      }
     },
     "execution": {
-      "_comment": "执行层参数",
-      "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader 执行"
+      "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader，默认 false。"
     }
   }
 }

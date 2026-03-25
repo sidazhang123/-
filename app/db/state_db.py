@@ -3,7 +3,7 @@
 
 职责：
 1. 管理任务状态、任务日志、筛选结果与前端配置持久化。
-2. 负责 schema 初始化与版本升级策略（当前 schema_version=v5）。
+2. 负责 schema 初始化与版本升级策略（当前 schema_version=v6）。
 3. 对外提供线程安全读写接口，供任务管理器与 API 路由调用。
 
 设计约束：
@@ -38,7 +38,7 @@ def _json_dumps(obj: Any) -> str:
 
 
 class StateDB:
-    SCHEMA_VERSION = "5"
+    SCHEMA_VERSION = "6"
     RETRY_TASK_QUERY_BATCH_SIZE = 2000
     MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v2"
     LEGACY_MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v1"
@@ -140,7 +140,7 @@ class StateDB:
         """
         初始化或升级状态库 schema。
 
-        当前目标版本：`schema_version = 5`。
+        当前目标版本：`schema_version = 6`。
         升级策略采用非破坏式迁移：优先保留任务和日志历史，再补齐新增表、索引和序列，最后更新 `app_meta`。
         """
         def _op(con: duckdb.DuckDBPyConnection) -> None:
@@ -173,10 +173,23 @@ class StateDB:
                 con.execute("drop table if exists maintenance_no_source_days")
                 con.execute("drop table if exists _maintenance_meta")
 
+                # v5→v6: 合并 concept_jobs/concept_logs 到 maintenance_jobs/maintenance_logs
+                mj_cols = [
+                    str(r[0]).lower()
+                    for r in con.execute(
+                        "select column_name from information_schema.columns "
+                        "where table_name = 'maintenance_jobs'"
+                    ).fetchall()
+                ]
+                table_exists = len(mj_cols) > 0
+                has_type_col = "type" in mj_cols
+                if table_exists and not has_type_col:
+                    con.execute("alter table maintenance_jobs add column type varchar default 'maintenance'")
+                    con.execute("update maintenance_jobs set type = 'maintenance' where type is null")
+
             con.execute("create sequence if not exists task_logs_seq start 1")
             con.execute("create sequence if not exists task_results_seq start 1")
             con.execute("create sequence if not exists maintenance_logs_seq start 1")
-            con.execute("create sequence if not exists concept_logs_seq start 1")
 
             con.execute(
                 """
@@ -250,10 +263,11 @@ class StateDB:
                     phase varchar,
                     progress double default 0,
                     source_db varchar not null,
-                    mode varchar not null,
+                    mode varchar,
                     params_json varchar,
                     summary_json varchar,
-                    error_message varchar
+                    error_message varchar,
+                    type varchar not null default 'maintenance'
                 )
                 """
             )
@@ -261,37 +275,7 @@ class StateDB:
             con.execute(
                 """
                 create table if not exists maintenance_logs (
-                    log_id bigint default nextval('maintenance_logs_seq'),
-                    job_id varchar not null,
-                    ts timestamp not null,
-                    level varchar not null,
-                    message varchar not null,
-                    detail_json varchar
-                )
-                """
-            )
-            con.execute(
-                """
-                create table if not exists concept_jobs (
-                    job_id varchar primary key,
-                    created_at timestamp not null,
-                    updated_at timestamp not null,
-                    started_at timestamp,
-                    finished_at timestamp,
-                    status varchar not null,
-                    phase varchar,
-                    progress double default 0,
-                    source_db varchar not null,
-                    params_json varchar,
-                    summary_json varchar,
-                    error_message varchar
-                )
-                """
-            )
-            con.execute(
-                """
-                create table if not exists concept_logs (
-                    log_id bigint default nextval('concept_logs_seq'),
+                    log_id bigint primary key default nextval('maintenance_logs_seq'),
                     job_id varchar not null,
                     ts timestamp not null,
                     level varchar not null,
@@ -301,13 +285,80 @@ class StateDB:
                 """
             )
             con.execute("create index if not exists idx_task_logs_task_id_log_id on task_logs(task_id, log_id)")
+            maintenance_log_pk_exists = bool(
+                con.execute(
+                    """
+                    select 1
+                    from information_schema.table_constraints tc
+                    join information_schema.key_column_usage kcu
+                      on tc.constraint_name = kcu.constraint_name
+                     and tc.table_name = kcu.table_name
+                    where tc.table_name = 'maintenance_logs'
+                      and tc.constraint_type = 'PRIMARY KEY'
+                      and kcu.column_name = 'log_id'
+                    limit 1
+                    """
+                ).fetchone()
+            )
+            if not maintenance_log_pk_exists:
+                con.execute("drop index if exists idx_maintenance_logs_job_id_log_id")
+                con.execute("alter table maintenance_logs add primary key (log_id)")
+
             con.execute(
                 "create index if not exists idx_maintenance_logs_job_id_log_id on maintenance_logs(job_id, log_id)"
             )
-            con.execute("create index if not exists idx_concept_logs_job_id_log_id on concept_logs(job_id, log_id)")
             con.execute("create index if not exists idx_tasks_created_at on tasks(created_at)")
             con.execute("create index if not exists idx_maintenance_jobs_created_at on maintenance_jobs(created_at)")
-            con.execute("create index if not exists idx_concept_jobs_created_at on concept_jobs(created_at)")
+
+            # legacy cleanup:
+            # 1. 迁移 concept_jobs/concept_logs 遗留数据到 maintenance_*；
+            # 2. 删除旧 concept_* 表，避免新版本继续保留空壳表。
+            legacy_tables = {
+                str(row[0]).lower()
+                for row in con.execute(
+                    "select table_name from information_schema.tables where table_name in ('concept_jobs', 'concept_logs')"
+                ).fetchall()
+            }
+            current_mj_cols = {
+                str(row[0]).lower()
+                for row in con.execute(
+                    "select column_name from information_schema.columns where table_name = 'maintenance_jobs'"
+                ).fetchall()
+            }
+            if legacy_tables and "type" in current_mj_cols:
+                if "concept_jobs" in legacy_tables:
+                    con.execute(
+                        """
+                        insert into maintenance_jobs (
+                            job_id, created_at, updated_at, started_at, finished_at,
+                            status, phase, progress, source_db, mode, params_json,
+                            summary_json, error_message, type
+                        )
+                        select
+                            job_id, created_at, updated_at, started_at, finished_at,
+                            status, phase, progress, source_db, 'concept_update', params_json,
+                            summary_json, error_message, 'concept'
+                        from concept_jobs
+                        where job_id not in (select job_id from maintenance_jobs)
+                        """
+                    )
+                if "concept_logs" in legacy_tables:
+                    con.execute(
+                        """
+                        insert into maintenance_logs (job_id, ts, level, message, detail_json)
+                        select job_id, ts, level, message, detail_json
+                        from concept_logs
+                        where job_id in (
+                            select job_id from maintenance_jobs where type = 'concept'
+                        )
+                        """
+                    )
+                con.execute("drop table if exists concept_logs")
+                con.execute("drop table if exists concept_jobs")
+                try:
+                    con.execute("drop sequence if exists concept_logs_seq")
+                except Exception:
+                    pass
 
             con.execute(
                 """
@@ -966,327 +1017,6 @@ class StateDB:
 
         self._with_write_connection(_op)
 
-    def upsert_maintenance_no_source_days(
-        self,
-        *,
-        source_db_key: str,
-        rows: list[tuple[str, str, date, datetime]],
-        max_retries: int = 2,
-    ) -> int:
-        """
-        输入：
-        1. source_db_key: 源库唯一键（建议传入 resolve().as_posix().lower()）。
-        2. rows: 记录列表，元素格式为 (code, freq, trade_day, expires_at)。
-        3. max_retries: 达到后写入 permanent_skip=true 的最大确认次数。
-        输出：
-        1. 返回去重后写入/更新的记录条数。
-        用途：
-        1. 持久化“源端确认无数据”的股票-周期-日期状态。
-        边界条件：
-        1. 空列表直接返回 0，不写库。
-        2. 同键冲突时保留 first_confirmed_at，更新 last_confirmed_at 与 expires_at，并累计 confirm_count。
-        """
-
-        key = str(source_db_key or "").strip().lower()
-        if not key or not rows:
-            return 0
-        safe_max_retries = max(1, int(max_retries))
-
-        now = datetime.now()
-        dedup: dict[tuple[str, str, date], datetime] = {}
-        for raw_code, raw_freq, raw_day, raw_expires in rows:
-            code = str(raw_code or "").strip().lower()
-            freq = str(raw_freq or "").strip().lower()
-            if not code or not freq:
-                continue
-            if not isinstance(raw_day, date):
-                continue
-            if not isinstance(raw_expires, datetime):
-                continue
-            token = (code, freq, raw_day)
-            old_exp = dedup.get(token)
-            if old_exp is None or raw_expires > old_exp:
-                dedup[token] = raw_expires
-        if not dedup:
-            return 0
-
-        payload = [
-            (
-                key,
-                code,
-                freq,
-                trade_day,
-                now,
-                now,
-                expires_at,
-                1,
-                bool(safe_max_retries <= 1),
-            )
-            for (code, freq, trade_day), expires_at in dedup.items()
-        ]
-
-        def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
-            cols_source_db_key = [r[0] for r in payload]
-            cols_code = [r[1] for r in payload]
-            cols_freq = [r[2] for r in payload]
-            cols_trade_day = [r[3] for r in payload]
-            cols_first_confirmed_at = [r[4] for r in payload]
-            cols_last_confirmed_at = [r[5] for r in payload]
-            cols_expires_at = [r[6] for r in payload]
-            cols_confirm_count = [r[7] for r in payload]
-            cols_permanent_skip = [r[8] for r in payload]
-            con.execute(
-                """
-                insert into maintenance_no_source_days(
-                    source_db_key, code, freq, trade_day,
-                    first_confirmed_at, last_confirmed_at, expires_at,
-                    confirm_count, permanent_skip
-                )
-                select
-                    src.source_db_key,
-                    src.code,
-                    src.freq,
-                    src.trade_day,
-                    src.first_confirmed_at,
-                    src.last_confirmed_at,
-                    src.expires_at,
-                    src.confirm_count,
-                    src.permanent_skip
-                from (
-                    select
-                        unnest($source_db_key::varchar[]) as source_db_key,
-                        unnest($code::varchar[]) as code,
-                        unnest($freq::varchar[]) as freq,
-                        unnest($trade_day::date[]) as trade_day,
-                        unnest($first_confirmed_at::timestamp[]) as first_confirmed_at,
-                        unnest($last_confirmed_at::timestamp[]) as last_confirmed_at,
-                        unnest($expires_at::timestamp[]) as expires_at,
-                        unnest($confirm_count::integer[]) as confirm_count,
-                        unnest($permanent_skip::boolean[]) as permanent_skip
-                ) src
-                on conflict(source_db_key, code, freq, trade_day) do update set
-                    last_confirmed_at = excluded.last_confirmed_at,
-                    expires_at = excluded.expires_at,
-                    confirm_count = coalesce(maintenance_no_source_days.confirm_count, 1) + 1,
-                    permanent_skip = case
-                        when maintenance_no_source_days.permanent_skip then true
-                        when coalesce(maintenance_no_source_days.confirm_count, 1) + 1 >= $max_retries then true
-                        else false
-                    end
-                """,
-                {
-                    "source_db_key": cols_source_db_key,
-                    "code": cols_code,
-                    "freq": cols_freq,
-                    "trade_day": cols_trade_day,
-                    "first_confirmed_at": cols_first_confirmed_at,
-                    "last_confirmed_at": cols_last_confirmed_at,
-                    "expires_at": cols_expires_at,
-                    "confirm_count": cols_confirm_count,
-                    "permanent_skip": cols_permanent_skip,
-                    "max_retries": safe_max_retries,
-                },
-            )
-
-        self._with_write_connection(_op)
-        return len(payload)
-
-    def reconcile_maintenance_no_source_retry_policy(
-        self,
-        *,
-        source_db_key: str,
-        max_retries: int,
-    ) -> int:
-        """
-        输入：
-        1. source_db_key: 源库唯一键（建议传入 resolve().as_posix().lower()）。
-        2. max_retries: 无源永久跳过阈值。
-        输出：
-        1. 返回本次追溯置为 permanent_skip=true 的记录数。
-        用途：
-        1. 当 no_source 重试阈值下调时，对历史记录做追溯生效。
-        边界条件：
-        1. source_db_key 为空时返回 0。
-        2. max_retries 最小按 1 处理。
-        """
-
-        key = str(source_db_key or "").strip().lower()
-        if not key:
-            return 0
-        safe_max_retries = max(1, int(max_retries))
-
-        def _op(con: duckdb.DuckDBPyConnection) -> int:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
-
-            affected = int(
-                con.execute(
-                    """
-                    select count(*)
-                    from maintenance_no_source_days
-                    where source_db_key = ?
-                      and coalesce(permanent_skip, false) = false
-                      and coalesce(confirm_count, 1) >= ?
-                    """,
-                    [key, safe_max_retries],
-                ).fetchone()[0]
-                or 0
-            )
-            if affected <= 0:
-                return 0
-            con.execute(
-                """
-                update maintenance_no_source_days
-                set permanent_skip = true
-                where source_db_key = ?
-                  and coalesce(permanent_skip, false) = false
-                  and coalesce(confirm_count, 1) >= ?
-                """,
-                [key, safe_max_retries],
-            )
-            return affected
-
-        return int(self._with_write_connection(_op) or 0)
-
-    def list_active_maintenance_no_source_days(
-        self,
-        *,
-        source_db_key: str,
-        start_day: date | None = None,
-        end_day: date | None = None,
-        now_ts: datetime | None = None,
-        freqs: Iterable[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """
-        输入：
-        1. source_db_key: 源库唯一键。
-        2. start_day: 可选起始日期（含）。
-        3. end_day: 可选结束日期（含）。
-        4. now_ts: 可选当前时间，默认 datetime.now()。
-        5. freqs: 可选周期过滤列表。
-        输出：
-        1. 返回有效无源日期记录列表。
-        用途：
-        1. 读取当前仍生效的“无源日期”状态，用于补全与连续性抑制。
-        边界条件：
-        1. source_db_key 为空时返回空列表。
-        """
-
-        key = str(source_db_key or "").strip().lower()
-        if not key:
-            return []
-        safe_now = now_ts or datetime.now()
-
-        where = ["source_db_key = ?", "(expires_at > ? or permanent_skip = true)"]
-        params: list[Any] = [key, safe_now]
-        if isinstance(start_day, date):
-            where.append("trade_day >= ?")
-            params.append(start_day)
-        if isinstance(end_day, date):
-            where.append("trade_day <= ?")
-            params.append(end_day)
-
-        freq_tokens: list[str] = []
-        if freqs is not None:
-            for token in freqs:
-                item = str(token or "").strip().lower()
-                if item:
-                    freq_tokens.append(item)
-        if freq_tokens:
-            placeholders = ", ".join("?" for _ in freq_tokens)
-            where.append(f"freq in ({placeholders})")
-            params.extend(freq_tokens)
-
-        sql = f"""
-            select
-                source_db_key, code, freq, trade_day,
-                first_confirmed_at, last_confirmed_at, expires_at,
-                confirm_count, permanent_skip
-            from maintenance_no_source_days
-            where {' and '.join(where)}
-            order by freq asc, code asc, trade_day asc
-        """
-
-        def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
-            return con.execute(sql, params).fetchall()
-
-        rows = self._with_read_connection(_op)
-        result: list[dict[str, Any]] = []
-        for (
-            source_key,
-            code,
-            freq,
-            trade_day,
-            first_confirmed_at,
-            last_confirmed_at,
-            expires_at,
-            confirm_count,
-            permanent_skip,
-        ) in rows:
-            result.append(
-                {
-                    "source_db_key": str(source_key),
-                    "code": str(code),
-                    "freq": str(freq),
-                    "trade_day": trade_day,
-                    "first_confirmed_at": first_confirmed_at,
-                    "last_confirmed_at": last_confirmed_at,
-                    "expires_at": expires_at,
-                    "confirm_count": int(confirm_count or 1),
-                    "permanent_skip": bool(permanent_skip),
-                }
-            )
-        return result
-
-    def delete_expired_maintenance_no_source_days(
-        self,
-        *,
-        source_db_key: str,
-        now_ts: datetime | None = None,
-    ) -> int:
-        """
-        输入：
-        1. source_db_key: 源库唯一键。
-        2. now_ts: 可选当前时间，默认 datetime.now()。
-        输出：
-        1. 固定返回 0（历史保留策略，不执行删除）。
-        用途：
-        1. 与旧接口保持兼容；新策略长期保留无源历史与累计计数。
-        边界条件：
-        1. 任意输入均不会触发删除。
-        """
-        _ = source_db_key
-        _ = now_ts
-        return 0
-
     def create_task(
         self,
         *,
@@ -1431,7 +1161,7 @@ class StateDB:
         source_db: str,
         params: dict[str, Any] | None = None,
     ) -> None:
-        """创建概念更新任务主记录。"""
+        """创建概念更新任务（存入 maintenance_jobs，type='concept'）。"""
 
         now = datetime.now()
         params_json = _json_dumps(params or {})
@@ -1439,14 +1169,14 @@ class StateDB:
         def _op(con: duckdb.DuckDBPyConnection) -> None:
             con.execute(
                 """
-                insert into concept_jobs (
-                    job_id, created_at, updated_at, status, source_db, params_json
+                insert into maintenance_jobs (
+                    job_id, created_at, updated_at, status, source_db, mode, params_json, type
                 )
-                values (?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [job_id, now, now, "queued", source_db, params_json],
+                [job_id, now, now, "queued", source_db, "concept_update", params_json, "concept"],
             )
-            self._trim_concept_logs(con)
+            self._trim_maintenance_logs(con, job_type="concept")
 
         self._with_write_connection(_op)
 
@@ -1475,18 +1205,8 @@ class StateDB:
         self._with_write_connection(_op)
 
     def update_concept_job_fields(self, job_id: str, **fields: Any) -> None:
-        """更新概念任务字段。"""
-
-        if not fields:
-            return
-        fields["updated_at"] = datetime.now()
-        set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
-        values = list(fields.values()) + [job_id]
-
-        def _op(con: duckdb.DuckDBPyConnection) -> None:
-            con.execute(f"update concept_jobs set {set_clause} where job_id = ?", values)
-
-        self._with_write_connection(_op)
+        """更新概念任务字段（同一张 maintenance_jobs 表）。"""
+        self.update_maintenance_job_fields(job_id, **fields)
 
     def append_maintenance_log(
         self,
@@ -1530,21 +1250,8 @@ class StateDB:
         message: str,
         detail: dict[str, Any] | None = None,
     ) -> None:
-        """写入概念任务日志。"""
-
-        now = datetime.now()
-        detail_json = _json_dumps(detail) if detail else None
-
-        def _op(con: duckdb.DuckDBPyConnection) -> None:
-            con.execute(
-                """
-                insert into concept_logs (job_id, ts, level, message, detail_json)
-                values (?, ?, ?, ?, ?)
-                """,
-                [job_id, now, level, message, detail_json],
-            )
-
-        self._with_write_connection(_op)
+        """写入概念任务日志（同一张 maintenance_logs 表）。"""
+        self.append_maintenance_log(job_id=job_id, level=level, message=message, detail=detail)
 
     def append_log(
         self,
@@ -1691,81 +1398,58 @@ class StateDB:
             [removed_info, removed_info, removed_error, removed_error, now, task_id],
         )
 
-    def _trim_maintenance_logs(self, con: duckdb.DuckDBPyConnection) -> None:
+    def _trim_maintenance_logs(
+        self, con: duckdb.DuckDBPyConnection, *, job_type: str | None = None
+    ) -> None:
+        """仅保留最近 N 个任务的全量日志，删除更旧任务日志。
+
+        job_type 为 None 时按 LOG_KEEP_MAINTENANCE_JOBS 裁剪 maintenance 类型；
+        job_type='concept' 时按 LOG_KEEP_CONCEPT_JOBS 裁剪 concept 类型。
         """
-        输入：
-        1. con: 写连接。
-        输出：
-        1. 无返回值。
-        用途：
-        1. 仅保留最近 N 个维护任务的全量日志，删除更旧任务日志。
-        边界条件：
-        1. 保留任务数小于等于 0 时不裁剪。
-        """
-        keep_jobs = int(LOG_KEEP_MAINTENANCE_JOBS or 0)
+        if job_type == "concept":
+            keep_jobs = int(LOG_KEEP_CONCEPT_JOBS or 0)
+        else:
+            keep_jobs = int(LOG_KEEP_MAINTENANCE_JOBS or 0)
         if keep_jobs <= 0:
             return
+
+        type_filter = "maintenance" if job_type is None else job_type
         rows = con.execute(
             """
             select job_id
             from maintenance_jobs
+            where type = ?
             order by coalesce(started_at, created_at) desc, created_at desc, job_id desc
             limit ?
             """,
-            [keep_jobs],
+            [type_filter, keep_jobs],
         ).fetchall()
         keep_job_ids = [str(row[0]) for row in rows if row and row[0]]
-        if not keep_job_ids:
-            con.execute("delete from maintenance_logs")
+
+        # 获取该 type 下所有 job_id，用于删除多余日志
+        all_rows = con.execute(
+            "select job_id from maintenance_jobs where type = ?",
+            [type_filter],
+        ).fetchall()
+        all_job_ids = [str(row[0]) for row in all_rows if row and row[0]]
+        remove_job_ids = [jid for jid in all_job_ids if jid not in keep_job_ids]
+
+        if not remove_job_ids:
             return
 
-        placeholders = ", ".join(["?"] * len(keep_job_ids))
+        placeholders = ", ".join(["?"] * len(remove_job_ids))
         con.execute(
-            f"delete from maintenance_logs where job_id not in ({placeholders})",
-            keep_job_ids,
+            f"delete from maintenance_logs where job_id in ({placeholders})",
+            remove_job_ids,
         )
         con.execute(
-            f"delete from maintenance_jobs where job_id not in ({placeholders})",
-            keep_job_ids,
+            f"delete from maintenance_jobs where job_id in ({placeholders})",
+            remove_job_ids,
         )
 
     def _trim_concept_logs(self, con: duckdb.DuckDBPyConnection) -> None:
-        """
-        输入：
-        1. con: 写连接。
-        输出：
-        1. 无返回值。
-        用途：
-        1. 仅保留最近 N 个概念任务的全量日志。
-        边界条件：
-        1. 保留任务数小于等于 0 时不裁剪。
-        """
-
-        keep_jobs = int(LOG_KEEP_CONCEPT_JOBS or 0)
-        if keep_jobs <= 0:
-            return
-        rows = con.execute(
-            """
-            select job_id
-            from concept_jobs
-            order by coalesce(started_at, created_at) desc, created_at desc, job_id desc
-            limit ?
-            """,
-            [keep_jobs],
-        ).fetchall()
-        keep_job_ids = [str(row[0]) for row in rows if row and row[0]]
-        if not keep_job_ids:
-            con.execute("delete from concept_logs")
-            return
-
-        placeholders = ", ".join(["?"] * len(keep_job_ids))
-        con.execute(
-            f"""
-            delete from concept_logs
-            where job_id not in ({placeholders})
-            """,
-            keep_job_ids,
-        )
+        """裁剪概念任务日志（委托给 _trim_maintenance_logs）。"""
+        self._trim_maintenance_logs(con, job_type="concept")
 
     def add_result(
         self,
@@ -1836,95 +1520,6 @@ class StateDB:
             con.execute(
                 "update tasks set result_count = result_count + 1, updated_at = ? where task_id = ?",
                 [now, task_id],
-            )
-
-        self._with_write_connection(_op)
-
-    def upsert_stock_state(
-        self,
-        *,
-        task_id: str,
-        code: str,
-        name: str,
-        status: str,
-        processed_bars: int,
-        signal_count: int,
-        last_dt: datetime | None,
-        last_rules: dict[str, Any] | None,
-        error_message: str | None = None,
-    ) -> None:
-        """
-        输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. code: 输入参数，具体约束以调用方和实现为准。
-        3. name: 输入参数，具体约束以调用方和实现为准。
-        4. status: 输入参数，具体约束以调用方和实现为准。
-        5. processed_bars: 输入参数，具体约束以调用方和实现为准。
-        6. signal_count: 输入参数，具体约束以调用方和实现为准。
-        7. last_dt: 输入参数，具体约束以调用方和实现为准。
-        8. last_rules: 输入参数，具体约束以调用方和实现为准。
-        9. error_message: 输入参数，具体约束以调用方和实现为准。
-        输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
-        用途：
-        1. 执行 `upsert_stock_state` 对应的业务或工具逻辑。
-        边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
-        """
-        now = datetime.now()
-        last_rules_json = _json_dumps(last_rules) if last_rules is not None else None
-
-        def _op(con: duckdb.DuckDBPyConnection) -> None:
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
-            table_exists = con.execute(
-                """
-                select 1
-                from information_schema.tables
-                where table_schema = current_schema()
-                  and table_name = 'task_stock_states'
-                """
-            ).fetchone()
-            if not table_exists:
-                return
-
-            con.execute(
-                """
-                insert into task_stock_states (
-                    task_id, code, name, status, processed_bars, signal_count,
-                    last_dt, last_rules_json, error_message, updated_at
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                on conflict (task_id, code) do update set
-                    name = excluded.name,
-                    status = excluded.status,
-                    processed_bars = excluded.processed_bars,
-                    signal_count = excluded.signal_count,
-                    last_dt = excluded.last_dt,
-                    last_rules_json = excluded.last_rules_json,
-                    error_message = excluded.error_message,
-                    updated_at = excluded.updated_at
-                """,
-                [
-                    task_id,
-                    code,
-                    name,
-                    status,
-                    processed_bars,
-                    signal_count,
-                    last_dt,
-                    last_rules_json,
-                    error_message,
-                    now,
-                ],
             )
 
         self._with_write_connection(_op)
@@ -2019,7 +1614,8 @@ class StateDB:
                 """
                 select
                     job_id, created_at, updated_at, started_at, finished_at,
-                    status, phase, progress, source_db, mode, params_json, summary_json, error_message
+                    status, phase, progress, source_db, mode, params_json, summary_json,
+                    error_message, type
                 from maintenance_jobs
                 where job_id = ?
                 """,
@@ -2044,6 +1640,7 @@ class StateDB:
             "params_json",
             "summary_json",
             "error_message",
+            "type",
         ]
         result = dict(zip(keys, row))
         result["params"] = json.loads(result["params_json"]) if result.get("params_json") else {}
@@ -2053,44 +1650,8 @@ class StateDB:
         return result
 
     def get_concept_job(self, job_id: str) -> dict[str, Any] | None:
-        """按任务 ID 读取概念更新任务详情。"""
-
-        def _op(con: duckdb.DuckDBPyConnection):
-            return con.execute(
-                """
-                select
-                    job_id, created_at, updated_at, started_at, finished_at,
-                    status, phase, progress, source_db, params_json, summary_json, error_message
-                from concept_jobs
-                where job_id = ?
-                """,
-                [job_id],
-            ).fetchone()
-
-        row = self._with_read_connection(_op)
-        if not row:
-            return None
-
-        keys = [
-            "job_id",
-            "created_at",
-            "updated_at",
-            "started_at",
-            "finished_at",
-            "status",
-            "phase",
-            "progress",
-            "source_db",
-            "params_json",
-            "summary_json",
-            "error_message",
-        ]
-        result = dict(zip(keys, row))
-        result["params"] = json.loads(result["params_json"]) if result.get("params_json") else {}
-        result["summary"] = json.loads(result["summary_json"]) if result.get("summary_json") else {}
-        result.pop("params_json", None)
-        result.pop("summary_json", None)
-        return result
+        """按任务 ID 读取概念更新任务详情（同一张 maintenance_jobs 表）。"""
+        return self.get_maintenance_job(job_id)
 
     def get_logs(
         self,
@@ -2232,47 +1793,10 @@ class StateDB:
         limit: int,
         after_log_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        """读取概念任务日志。"""
-
-        params: list[Any] = [job_id]
-        where = "where job_id = ?"
-        if level in {"info", "error", "debug"}:
-            where += " and level = ?"
-            params.append(level)
-        if after_log_id is not None:
-            where += " and log_id > ?"
-            params.append(int(after_log_id))
-            page_sql = "limit ?"
-            params.append(limit)
-        else:
-            page_sql = "limit ? offset ?"
-            params.extend([limit, offset])
-
-        def _op(con: duckdb.DuckDBPyConnection):
-            return con.execute(
-                f"""
-                select log_id, ts, level, message, detail_json
-                from concept_logs
-                {where}
-                order by log_id asc
-                {page_sql}
-                """,
-                params,
-            ).fetchall()
-
-        rows = self._with_read_connection(_op)
-        result: list[dict[str, Any]] = []
-        for log_id, ts, level_v, message, detail_json in rows:
-            result.append(
-                {
-                    "log_id": int(log_id),
-                    "ts": ts,
-                    "level": level_v,
-                    "message": message,
-                    "detail": json.loads(detail_json) if detail_json else None,
-                }
-            )
-        return result
+        """读取概念任务日志（同一张 maintenance_logs 表）。"""
+        return self.get_maintenance_logs(
+            job_id=job_id, level=level, offset=offset, limit=limit, after_log_id=after_log_id
+        )
 
     def get_results(self, task_id: str, offset: int, limit: int) -> list[dict[str, Any]]:
         """
@@ -2325,71 +1849,6 @@ class StateDB:
                     "strategy_name": strategy_name,
                     "signal_label": signal_label,
                     "payload": json.loads(payload_json) if payload_json else {},
-                }
-            )
-        return result
-
-    def get_stock_states(self, task_id: str, offset: int, limit: int) -> list[dict[str, Any]]:
-        """
-        输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        2. offset: 输入参数，具体约束以调用方和实现为准。
-        3. limit: 输入参数，具体约束以调用方和实现为准。
-        输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
-        用途：
-        1. 执行 `get_stock_states` 对应的业务或工具逻辑。
-        边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
-        """
-        def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
-            table_exists = con.execute(
-                """
-                select 1
-                from information_schema.tables
-                where table_schema = current_schema()
-                  and table_name = 'task_stock_states'
-                """
-            ).fetchone()
-            if not table_exists:
-                return []
-
-            return con.execute(
-                """
-                select code, name, status, processed_bars, signal_count, last_dt, last_rules_json, error_message, updated_at
-                from task_stock_states
-                where task_id = ?
-                order by code asc
-                limit ? offset ?
-                """,
-                [task_id, limit, offset],
-            ).fetchall()
-
-        rows = self._with_read_connection(_op)
-
-        result: list[dict[str, Any]] = []
-        for code, name, status, processed_bars, signal_count, last_dt, last_rules_json, error_message, updated_at in rows:
-            result.append(
-                {
-                    "code": code,
-                    "name": name,
-                    "status": status,
-                    "processed_bars": processed_bars,
-                    "signal_count": signal_count,
-                    "last_dt": last_dt,
-                    "last_rules": json.loads(last_rules_json) if last_rules_json else {},
-                    "error_message": error_message,
-                    "updated_at": updated_at,
                 }
             )
         return result
@@ -2451,25 +1910,30 @@ class StateDB:
         ]
         return [dict(zip(keys, row)) for row in rows]
 
-    def list_maintenance_jobs(self, offset: int, limit: int) -> list[dict[str, Any]]:
-        """分页读取维护任务列表。"""
+    def list_maintenance_jobs(
+        self, offset: int, limit: int, *, job_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """分页读取维护任务列表。job_type 为 None 时返回所有类型。"""
 
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            if job_type:
+                return con.execute(
+                    """
+                    select
+                        job_id, created_at, started_at, finished_at, status,
+                        phase, progress, source_db, mode, error_message, type
+                    from maintenance_jobs
+                    where type = ?
+                    order by created_at desc, job_id desc
+                    limit ? offset ?
+                    """,
+                    [job_type, limit, offset],
+                ).fetchall()
             return con.execute(
                 """
                 select
                     job_id, created_at, started_at, finished_at, status,
-                    phase, progress, source_db, mode, error_message
+                    phase, progress, source_db, mode, error_message, type
                 from maintenance_jobs
                 order by created_at desc, job_id desc
                 limit ? offset ?
@@ -2489,41 +1953,18 @@ class StateDB:
             "source_db",
             "mode",
             "error_message",
+            "type",
         ]
         return [dict(zip(keys, row)) for row in rows]
 
     def list_concept_jobs(self, offset: int, limit: int) -> list[dict[str, Any]]:
-        """分页读取概念任务列表。"""
+        """分页读取概念任务列表（从 maintenance_jobs 按 type='concept' 过滤）。"""
+        return self.list_maintenance_jobs(offset, limit, job_type="concept")
 
-        def _op(con: duckdb.DuckDBPyConnection):
-            return con.execute(
-                """
-                select
-                    job_id, created_at, started_at, finished_at, status,
-                    phase, progress, source_db, error_message
-                from concept_jobs
-                order by created_at desc, job_id desc
-                limit ? offset ?
-                """,
-                [limit, offset],
-            ).fetchall()
-
-        rows = self._with_read_connection(_op)
-        keys = [
-            "job_id",
-            "created_at",
-            "started_at",
-            "finished_at",
-            "status",
-            "phase",
-            "progress",
-            "source_db",
-            "error_message",
-        ]
-        return [dict(zip(keys, row)) for row in rows]
-
-    def list_maintenance_jobs_by_status(self, statuses: Iterable[str], limit: int = 2000) -> list[dict[str, Any]]:
-        """按状态读取维护任务列表。"""
+    def list_maintenance_jobs_by_status(
+        self, statuses: Iterable[str], limit: int = 2000, *, job_type: str | None = None
+    ) -> list[dict[str, Any]]:
+        """按状态读取维护任务列表。job_type 为 None 时返回所有类型。"""
 
         status_list = [s for s in statuses if s]
         if not status_list:
@@ -2531,27 +1972,23 @@ class StateDB:
         placeholders = ",".join(["?"] * len(status_list))
 
         def _op(con: duckdb.DuckDBPyConnection):
-            """
-            输入：
-            1. con: 输入参数，具体约束以调用方和实现为准。
-            输出：
-            1. 返回值语义由函数实现定义；无返回时为 `None`。
-            用途：
-            1. 执行 `_op` 对应的业务或工具逻辑。
-            边界条件：
-            1. 关键边界与异常分支按函数体内判断与调用约定处理。
-            """
+            type_filter = ""
+            params: list[Any] = list(status_list)
+            if job_type:
+                type_filter = "and type = ?"
+                params.append(job_type)
+            params.append(limit)
             return con.execute(
                 f"""
                 select
                     job_id, status, created_at, updated_at, started_at, finished_at,
-                    phase, progress, source_db, mode, params_json, summary_json, error_message
+                    phase, progress, source_db, mode, params_json, summary_json, error_message, type
                 from maintenance_jobs
-                where status in ({placeholders})
+                where status in ({placeholders}) {type_filter}
                 order by created_at desc
                 limit ?
                 """,
-                [*status_list, limit],
+                params,
             ).fetchall()
 
         rows = self._with_read_connection(_op)
@@ -2574,57 +2011,17 @@ class StateDB:
                     "params": params,
                     "summary": summary,
                     "error_message": row[12],
+                    "type": row[13],
                 }
             )
         return result
 
     def list_concept_jobs_by_status(self, statuses: Iterable[str], limit: int = 2000) -> list[dict[str, Any]]:
-        """按状态读取概念任务列表。"""
-
-        status_list = [s for s in statuses if s]
-        if not status_list:
-            return []
-        placeholders = ",".join(["?"] * len(status_list))
-
-        def _op(con: duckdb.DuckDBPyConnection):
-            return con.execute(
-                f"""
-                select
-                    job_id, status, created_at, updated_at, started_at, finished_at,
-                    phase, progress, source_db, params_json, summary_json, error_message
-                from concept_jobs
-                where status in ({placeholders})
-                order by created_at desc
-                limit ?
-                """,
-                [*status_list, limit],
-            ).fetchall()
-
-        rows = self._with_read_connection(_op)
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            params = json.loads(row[9]) if row[9] else {}
-            summary = json.loads(row[10]) if row[10] else {}
-            result.append(
-                {
-                    "job_id": row[0],
-                    "status": row[1],
-                    "created_at": row[2],
-                    "updated_at": row[3],
-                    "started_at": row[4],
-                    "finished_at": row[5],
-                    "phase": row[6],
-                    "progress": row[7],
-                    "source_db": row[8],
-                    "params": params,
-                    "summary": summary,
-                    "error_message": row[11],
-                }
-            )
-        return result
+        """按状态读取概念任务列表（从 maintenance_jobs 按 type='concept' 过滤）。"""
+        return self.list_maintenance_jobs_by_status(statuses, limit, job_type="concept")
 
     def get_running_maintenance_job(self) -> dict[str, Any] | None:
-        """返回当前进行中的维护任务（若不存在返回 None）。"""
+        """返回当前进行中的维护任务（任意类型，若不存在返回 None）。"""
 
         jobs = self.list_maintenance_jobs_by_status(["queued", "running", "stopping"], limit=1)
         if not jobs:
@@ -2634,7 +2031,7 @@ class StateDB:
     def get_running_concept_job(self) -> dict[str, Any] | None:
         """返回当前进行中的概念任务（若不存在返回 None）。"""
 
-        jobs = self.list_concept_jobs_by_status(["queued", "running", "stopping"], limit=1)
+        jobs = self.list_maintenance_jobs_by_status(["queued", "running", "stopping"], limit=1, job_type="concept")
         if not jobs:
             return None
         return jobs[0]
@@ -2704,20 +2101,6 @@ class StateDB:
                 }
             )
         return result
-
-    def get_processed_stock_codes(self, task_id: str) -> set[str]:
-        """
-        输入：
-        1. task_id: 输入参数，具体约束以调用方和实现为准。
-        输出：
-        1. 返回值语义由函数实现定义；无返回时为 `None`。
-        用途：
-        1. 执行 `get_processed_stock_codes` 对应的业务或工具逻辑。
-        边界条件：
-        1. 关键边界与异常分支按函数体内判断与调用约定处理。
-        """
-        processed_codes, _ = self.get_task_recovery_snapshot(task_id)
-        return processed_codes
 
     def get_task_recovery_snapshot(self, task_id: str) -> tuple[set[str], set[str]]:
         """

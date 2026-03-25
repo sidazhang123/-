@@ -15,11 +15,11 @@
 
 1. 策略目录统一为 `strategies/groups/*`。
 2. 当前策略组共 6 个：
-   1. `burst_pullback_box_v1`（specialized）
-   2. `bu_zhi_dao_v1`（specialized）
-   3. `flag_rally_v1`（specialized）
-   4. `xianren_zhilu_v1`（specialized）
-   5. `bigbro_buy`（specialized 主路径，保留 backtrader 回退）
+   1. `consecutive_uptrends_v1`（specialized，w/d/60）
+   2. `flag_pattern_v1`（specialized，w/d/15）
+   3. `multi_tf_ma_uptrend_v1`（specialized，w/d/60/15）
+   4. `weekly_oversold_rsi_v1`（specialized，w）
+   5. `xianren_zhilu_v1`（specialized，w/d）
    6. `strategy_2`（specialized 模板）
 3. 服务监听固定 `0.0.0.0:8000`。
 4. 状态库 schema 版本：`app_meta.schema_version = "5"`。
@@ -47,11 +47,11 @@
 ├─ strategies/
 │  ├─ engine_commons.py
 │  └─ groups/
-│     ├─ bigbro_buy/
-│     ├─ burst_pullback_box_v1/
-│     ├─ bu_zhi_dao_v1/
-│     ├─ flag_rally_v1/
+│     ├─ consecutive_uptrends_v1/
+│     ├─ flag_pattern_v1/
+│     ├─ multi_tf_ma_uptrend_v1/
 │     ├─ strategy_2/
+│     ├─ weekly_oversold_rsi_v1/
 │     └─ xianren_zhilu_v1/
 └─ app/
    ├─ app_config.yaml

@@ -780,16 +780,18 @@ button.secondary:hover {
 
 /* Fetch progress section inside status card */
 .fetch-progress-section {
+  --_fp-accent: #8b5cf6;
   grid-column: 1 / -1;
   padding: var(--space-md) var(--space-lg);
   background: var(--color-bg);
   border-radius: var(--radius-md);
-  border-left: 3px solid var(--color-accent);
+  border: 1.5px solid var(--_fp-accent);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.35), 0 0 2px rgba(139, 92, 246, 0.18);
 }
 .fetch-progress-header {
   font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--color-accent);
+  color: var(--_fp-accent);
   margin-bottom: var(--space-sm);
 }
 .fetch-progress-grid {
@@ -805,6 +807,9 @@ button.secondary:hover {
 }
 .fetch-progress-section .progress-bar {
   margin-top: var(--space-sm);
+}
+.fetch-progress-section .progress-bar > div {
+  background: var(--_fp-accent);
 }
 .progress-bar {
   width: 100%;
@@ -1656,7 +1661,8 @@ button.secondary:hover {
   min-width: 0;
 }
 
-.param-section-body > .param-section {
+.param-section-body > .param-section,
+.param-section-body > .param-inline-section {
   flex: 0 0 100%;
   width: 100%;
 }
@@ -1745,6 +1751,135 @@ button.secondary:hover {
   min-width: 140px;
   border: 0;
   padding: 4px 0;
+}
+
+/* ── 级联禁用：section.enabled=false 时子字段灰化 ── */
+
+.param-section-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── 内嵌模板渲染 ── */
+
+.param-inline-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 14px;
+  background: rgba(245, 247, 250, 0.8);
+}
+
+.param-inline-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.param-inline-section-title {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.param-inline-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.param-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  line-height: 2;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.param-inline-text {
+  white-space: nowrap;
+}
+
+.param-inline-field {
+  display: inline-block;
+  width: auto;
+  min-width: 48px;
+  max-width: 80px;
+  padding: 2px 6px;
+  border: 1px solid rgba(0, 113, 227, 0.25);
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  text-align: center;
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.param-inline-field:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(0, 113, 227, 0.12);
+}
+
+.param-inline-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.param-inline-toggle-row > input[type="checkbox"] {
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.param-inline-toggle-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  line-height: 2;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.param-inline-toggle-disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.param-inline-help {
+  display: block;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+.param-inline-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.6;
+  vertical-align: middle;
+}
+
+.param-inline-badge.required {
+  background: rgba(0, 113, 227, 0.10);
+  color: var(--color-accent);
+}
+
+.param-inline-badge.optional {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--color-text-secondary);
 }
 
 @media (max-width: 900px) {

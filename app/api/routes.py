@@ -1198,6 +1198,8 @@ def list_concept_jobs(
             "status": item.get("status"),
             "phase": item.get("phase"),
             "progress": item.get("progress"),
+            "mode": item.get("mode"),
+            "type": item.get("type", "concept"),
             "error_message": item.get("error_message"),
         }
         for item in raw_items
@@ -1280,6 +1282,7 @@ def list_maintenance_jobs(
             "phase": item.get("phase"),
             "progress": item.get("progress"),
             "mode": item.get("mode"),
+            "type": item.get("type", "maintenance"),
             "error_message": item.get("error_message"),
         }
         for item in raw_items
@@ -1475,6 +1478,7 @@ def _maintenance_status_dict(job: dict[str, Any]) -> dict[str, Any]:
         "phase": job.get("phase"),
         "progress": float(job.get("progress") or 0.0),
         "mode": str(job.get("mode") or "latest_update"),
+        "type": job.get("type", "maintenance"),
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "error_message": job.get("error_message"),
@@ -1499,6 +1503,8 @@ def _concept_status_dict(job: dict[str, Any]) -> dict[str, Any]:
         "status": job["status"],
         "phase": job.get("phase"),
         "progress": float(job.get("progress") or 0.0),
+        "mode": str(job.get("mode") or "concept_update"),
+        "type": job.get("type", "concept"),
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "error_message": job.get("error_message"),

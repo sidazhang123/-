@@ -32,11 +32,22 @@
       "复制后必须先修改 manifest.json 的 id、name、description、module、execution.required_timeframes、execution.specialized_entry，再去 engine.py 填写实际扫描逻辑。",
       "engine.py 是主逻辑文件；strategy.py 在 specialized 策略里通常只保留 backtrader 协议占位和降级兜底，不应被当成主执行入口。",
       "信号 payload 中的 chart_interval_start_ts / chart_interval_end_ts 必须表示单次信号的实际展示窗口，建议同步填写 window_start_ts / window_end_ts，禁止写成全任务跨度或多段历史拼接后的总跨度。",
-      "如需概念预筛选，统一写在 default_params.universe_filters.concepts 下，并固定使用 concept_terms / reason_terms；实际过滤由 TaskManager 在进入 engine 前执行，engine 不要重复做同一轮裁剪。"
+      "如需概念预筛选，统一写在 default_params.universe_filters.concepts 下，并固定使用 concept_terms / reason_terms；实际过滤由 TaskManager 在进入 engine 前执行，engine 不要重复做同一轮裁剪。",
+      "【强制要求：inline_template】所有新策略的 param_help 中每个周期参数组必须采用 inline_template 渲染模式（_render: inline_template + _label + _tf_key + _templates），不允许使用纯 _comment 文本方式。即使是单周期策略也必须遵守此规范。参考示例：multi_tf_ma_uptrend_v1（AND 多周期）、consecutive_uptrends_v1（OR 多周期）、xianren_zhilu_v1（OR 双周期）。",
+      "【多周期策略】如果策略需要多个周期（如 w/d/60/15），将 default_params 按 weekly/daily/min60/min15 分段，每段含 enabled 开关。多周期 AND 逻辑参考 multi_tf_ma_uptrend_v1，多周期 OR 逻辑参考 consecutive_uptrends_v1、flag_pattern_v1、xianren_zhilu_v1。",
+      "【通用工具】执行参数规范化 normalize_execution_params()、概念过滤参数 read_universe_filter_params()、周期粗细排序 coarsest_tf() 已提取到 engine_commons.py，新策略直接 import 即可，无需重复定义。"
     ],
     "daily": {
-      "_comment": "示例日线参数组。复制模板后应把这里替换成与你策略真正相关的参数，并保持 default_params 与 param_help 一一对应。",
-      "example_param": "示例参数。后续 AI 应将其替换为真实策略参数，并在 engine.py 的参数规范化函数里同步读取与校验。"
+      "_render": "inline_template",
+      "_label": "日线",
+      "_tf_key": "d",
+      "_templates": [
+        {
+          "text": "示例参数 {example_param}",
+          "required": true,
+          "help": "复制模板后将此模板替换为真实策略参数的渲染模板，并在 engine.py 的参数规范化函数里同步读取与校验。"
+        }
+      ]
     },
     "universe_filters": {
       "_comment": "框架保留命名空间：股票池预筛选。新策略如需概念裁剪，只能在这个命名空间下声明，不要自造顶层 concepts 字段。",

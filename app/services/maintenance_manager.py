@@ -463,8 +463,12 @@ class MaintenanceManager:
             if phase:
                 fields["phase"] = str(phase)
             if isinstance(detail, dict) and "round" in detail and "processed" in detail:
+                fp = {k: v for k, v in detail.items() if k != "rows"}
+                summary_obj: dict[str, object] = {"fetch_progress": fp}
+                if "rows_written" in detail:
+                    summary_obj["rows_written"] = detail["rows_written"]
                 fields["summary_json"] = json.dumps(
-                    {"fetch_progress": {k: v for k, v in detail.items() if k != "rows"}},
+                    summary_obj,
                     ensure_ascii=False,
                     default=str,
                 )

@@ -103,6 +103,7 @@ strategies.groups.<strategy_id>.engine:run_<strategy_id>_specialized
 1. `default_params` 中出现的关键参数，都应有对应说明。
 2. `_overview` 要写清策略思路、输入周期和输出窗口语义。
 3. 如果某个参数会影响 payload 或图表行为，要写清楚。
+4. **强制要求**：所有周期参数组必须采用 `_render: "inline_template"` 渲染模式（配合 `_label`、`_tf_key`、`_templates` 数组），不允许使用纯 `_comment` 文本方式。即使是单周期策略也必须遵守此规范。
 
 ## 六、engine.py 约定
 
@@ -170,7 +171,42 @@ default_params.universe_filters.concepts
 3. 结果页没有因为 payload 时间字段错误而显示异常窗口。
 4. 如果启用概念过滤，能在结果股票概念信息接口里看到一致结果。
 
-## 九、简化执行清单
+## 九、多周期策略扩展
+
+本模板默认为单日线策略。如果需要多周期（如 w/d/60/15），需做以下扩展：
+
+### manifest.json 变更
+
+1. `execution.required_timeframes` 声明所有用到的周期，如 `["w", "d", "60"]`。
+2. `default_params` 按 `weekly`/`daily`/`min60`/`min15` 分段，每段含 `enabled` 开关。
+3. `param_help` 中每个周期参数组**必须**使用 `_render: "inline_template"` 模式，搭配 `_label`、`_tf_key`、`_templates` 数组实现前端参数渲染。此规范对单周期和多周期策略均适用。
+
+### engine.py 变更
+
+1. 定义 `_TF_TABLE: dict[str, str]` 映射周期 key 到 klines 表名。
+2. 定义 `_TF_ORDER: list[str]` 周期粗细排序。
+3. 从 `engine_commons` 导入 `coarsest_tf()` 用于多周期信号合并。
+4. 多周期之间可选 AND 逻辑（全部通过才出信号）或 OR 逻辑（任一通过即出信号）。
+
+### 参考示例
+
+1. `multi_tf_ma_uptrend_v1`：w/d/60/15 四周期 AND 逻辑 + inline_template 前端渲染。
+2. `consecutive_uptrends_v1`：w/d/60 三周期 OR 逻辑 + 可选急跌段。
+3. `flag_pattern_v1`：w/d/15 三周期 OR 逻辑 + HV 收敛检测。
+4. `xianren_zhilu_v1`：w/d 双周期 OR 逻辑 + K线形态检测。
+
+## 十、通用工具（engine_commons.py）
+
+以下函数已提取到 `strategies/engine_commons.py`，新策略直接 import 即可：
+
+1. `normalize_execution_params(group_params)` —— 标准执行参数规范化（仅 fallback_to_backtrader）。
+2. `read_universe_filter_params(group_params)` —— 概念预筛选参数读取（仅 metrics 用途）。
+3. `coarsest_tf(tfs)` —— 从周期列表中选出最粗粒度周期。
+4. `STANDARD_TF_ORDER` —— 标准周期粗细排序常量 `["w", "d", "60", "30", "15"]`。
+
+如策略有额外执行参数（如 `worker_count`），可保留本地版本的 `_normalize_execution_params`。
+
+## 十一、简化执行清单
 
 - [ ] 复制 `strategy_2` 为新目录。
 - [ ] 改 `manifest.json` 的 id/name/description/module/specialized_entry。

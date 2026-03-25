@@ -5,7 +5,7 @@
 ## 当前目录基线
 
 1. `strategy_2/`：specialized 模板，后续 AI 与开发者创建新策略时应优先复制它。
-2. `bigbro_buy/`、`burst_pullback_box_v1/`、`bu_zhi_dao_v1/`、`flag_rally_v1/`、`xianren_zhilu_v1/`：当前实际策略组。
+2. `consecutive_uptrends_v1/`、`flag_pattern_v1/`、`multi_tf_ma_uptrend_v1/`、`weekly_oversold_rsi_v1/`、`xianren_zhilu_v1/`：当前实际策略组。
 
 ## 标准结构
 

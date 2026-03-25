@@ -152,3 +152,68 @@ def build_signal_dict(
         "signal_label": signal_label,
         "payload": payload,
     }
+
+
+# ---------------------------------------------------------------------------
+# 通用参数规范化工具（各引擎共用，避免重复定义）
+# ---------------------------------------------------------------------------
+
+STANDARD_TF_ORDER: list[str] = ["w", "d", "60", "30", "15"]
+"""标准周期粗细排序（粗 → 细），供多周期策略选取最粗命中周期。"""
+
+
+def normalize_execution_params(group_params: dict[str, Any]) -> dict[str, Any]:
+    """规范化执行参数（标准版：仅提取 backtrader 回退开关）。
+
+    输入：
+    1. group_params: TaskManager 合并后的策略参数。
+    输出：
+    1. 返回执行层参数字典，包含 fallback_to_backtrader 布尔值。
+    用途：
+    1. 供无额外执行参数的 specialized 策略复用，避免各引擎重复定义。
+    边界条件：
+    1. 含有自定义执行参数（如 worker_count）的策略应保留本地版本。
+    """
+    raw = as_dict(group_params.get("execution"))
+    return {
+        "fallback_to_backtrader": as_bool(raw.get("fallback_to_backtrader"), False),
+    }
+
+
+def read_universe_filter_params(group_params: dict[str, Any]) -> dict[str, Any]:
+    """读取框架保留的股票池预筛选配置。
+
+    输入：
+    1. group_params: TaskManager 合并后的策略参数。
+    输出：
+    1. 返回概念过滤参数，仅用于 metrics 和调试展示。
+    用途：
+    1. 记录 TaskManager 预筛选后的上下文，不在 engine 内二次裁剪股票池。
+    边界条件：
+    1. 引擎不重复执行同一轮概念过滤。
+    """
+    raw_universe = as_dict(group_params.get("universe_filters"))
+    raw_concepts = as_dict(raw_universe.get("concepts"))
+    concept_terms = raw_concepts.get("concept_terms")
+    reason_terms = raw_concepts.get("reason_terms")
+    return {
+        "enabled": as_bool(raw_concepts.get("enabled"), False),
+        "concept_terms": [str(item).strip() for item in concept_terms] if isinstance(concept_terms, list) else [],
+        "reason_terms": [str(item).strip() for item in reason_terms] if isinstance(reason_terms, list) else [],
+    }
+
+
+def coarsest_tf(tfs: list[str]) -> str:
+    """返回给定周期列表中最粗粒度的周期。
+
+    输入：
+    1. tfs: 周期 key 列表。
+    输出：
+    1. 返回 STANDARD_TF_ORDER 中排序最靠前的匹配周期。
+    边界条件：
+    1. 列表为空时返回 "d"（日线兜底）。
+    """
+    for tf in STANDARD_TF_ORDER:
+        if tf in tfs:
+            return tf
+    return "d"

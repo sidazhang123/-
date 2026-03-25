@@ -44,12 +44,21 @@ const JOB_KIND_TEXT = {
   concept: "概念更新",
 };
 
+const JOB_TYPE_LABEL = {
+  concept: "概念更新",
+  latest_update: "数据更新",
+  historical_backfill: "历史维护",
+};
+
+function jobTypeLabel(jobType, mode) {
+  if (jobType === "concept") return JOB_TYPE_LABEL.concept;
+  return JOB_TYPE_LABEL[mode] || JOB_TYPE_LABEL.latest_update;
+}
+
 const JOB_KIND_UI = {
   maintenance: {
-    selectLabel: "历史维护任务",
     startHint: "可保存当前模式。",
     phaseLabel: "阶段说明",
-    modeLabel: "模式",
     stepsLabel: "步骤进度",
     tasksLabel: "抓取进度",
     retryLabel: "重试轮次",
@@ -57,7 +66,6 @@ const JOB_KIND_UI = {
     removedLabel: "分钟线数量异常",
     render(job) {
       const summary = job.summary || {};
-      $("maintenanceModeText").textContent = formatMode(job.mode);
       $("maintenanceStepsText").textContent = `${Number(summary.steps_completed || 0)}/${Number(summary.steps_total || 0)}`;
       $("maintenanceTasksText").textContent = `总 ${Number(summary.total_tasks || 0)} | 成功 ${Number(summary.success_tasks || 0)} | 失败 ${Number(summary.failed_tasks || 0)}`;
       $("maintenanceRetryText").textContent = `轮次 ${Number(summary.retry_rounds_used || 0)} | 超限剔除 ${Number(summary.retry_skipped_tasks || 0)}`;
@@ -67,10 +75,8 @@ const JOB_KIND_UI = {
     },
   },
   concept: {
-    selectLabel: "历史概念任务",
     startHint: "概念任务不使用运行模式，直接全量刷新 stock_concepts。",
     phaseLabel: "阶段说明",
-    modeLabel: "任务类型",
     stepsLabel: "处理进度",
     tasksLabel: "抓取统计",
     retryLabel: "过滤统计",
@@ -78,7 +84,6 @@ const JOB_KIND_UI = {
     removedLabel: "耗时(秒)",
     render(job) {
       const summary = job.summary || {};
-      $("maintenanceModeText").textContent = JOB_KIND_TEXT.concept;
       $("maintenanceStepsText").textContent = `${Number(summary.steps_completed || 0)}/${Number(summary.steps_total || 0)}`;
       $("maintenanceTasksText").textContent = `总 ${Number(summary.total_tasks || 0)} | 成功 ${Number(summary.success_tasks || 0)} | 失败 ${Number(summary.failed_tasks || 0)}`;
       $("maintenanceRetryText").textContent = `过滤 ${Number(summary.filtered_records || 0)} 条`;
@@ -114,6 +119,14 @@ function currentRunMode() {
 
 function syncJobTypeFromRunMode() {
   state.jobType = currentRunMode() === "concept" ? "concept" : "maintenance";
+}
+
+function syncJobTypeFromSelection() {
+  const select = $("maintenanceJobSelect");
+  const opt = select.selectedOptions[0];
+  if (opt && opt.dataset.type) {
+    state.jobType = opt.dataset.type;
+  }
 }
 
 function currentJobType() {
@@ -301,9 +314,7 @@ function renderFetchProgress(fp, jobStatus) {
 
 function applyJobTypeUi(jobType) {
   const ui = JOB_KIND_UI[jobType] || JOB_KIND_UI.maintenance;
-  $("maintenanceJobSelectLabel").textContent = ui.selectLabel;
   $("maintenancePhaseLabelTitle").textContent = ui.phaseLabel;
-  $("maintenanceModeLabel").textContent = ui.modeLabel;
   $("maintenanceStepsLabel").textContent = ui.stepsLabel;
   $("maintenanceTasksLabel").textContent = ui.tasksLabel;
   $("maintenanceRetryLabel").textContent = ui.retryLabel;
@@ -358,14 +369,14 @@ async function refreshMaintenanceJobs(selectJobId = null) {
   if (state.pollInFlight) return;
   state.pollInFlight = true;
   try {
-    const jobType = currentJobType();
-    const data = await getJSON(`${getJobApiBase(jobType)}?offset=0&limit=150`);
+    const data = await getJSON("/api/maintenance/jobs?offset=0&limit=150");
     const select = $("maintenanceJobSelect");
     select.innerHTML = "";
     for (const item of data.items || []) {
       const option = document.createElement("option");
       option.value = item.job_id;
-      option.textContent = `${item.job_id.slice(0, 8)} | ${JOB_STATUS_TEXT[item.status] || item.status}`;
+      option.dataset.type = item.type || "maintenance";
+      option.textContent = `${item.job_id.slice(0, 8)} | ${jobTypeLabel(item.type, item.mode)} | ${JOB_STATUS_TEXT[item.status] || item.status}`;
       select.appendChild(option);
     }
 
@@ -374,14 +385,15 @@ async function refreshMaintenanceJobs(selectJobId = null) {
       state.jobId = null;
       state.lastJob = null;
       stopPolling();
-      resetLogCache(null, jobType);
-      resetJobStatusCard(jobType);
+      resetLogCache(null, currentJobType());
+      resetJobStatusCard(currentJobType());
       startHeartbeatStream();
       return;
     }
 
     state.jobId = target;
     select.value = target;
+    syncJobTypeFromSelection();
     startPolling();
   } finally {
     state.pollInFlight = false;
@@ -443,7 +455,15 @@ function startPolling() {
   });
 
   es.addEventListener("job-status", (e) => {
-    renderJobStatus(JSON.parse(e.data), jobType);
+    const data = JSON.parse(e.data);
+    const sel = $("maintenanceJobSelect");
+    if (sel.value === state.jobId) {
+      const opt = sel.options[sel.selectedIndex];
+      if (opt) {
+        opt.textContent = `${state.jobId.slice(0, 8)} | ${jobTypeLabel(data.type || jobType, data.mode)} | ${JOB_STATUS_TEXT[data.status] || data.status}`;
+      }
+    }
+    renderJobStatus(data, jobType);
   });
 
   es.addEventListener("logs-info", (e) => {
@@ -526,14 +546,9 @@ function bindLogAutoScroll() {
 }
 
 function bindEvents() {
-  $("maintenanceRunMode").addEventListener("change", async () => {
+  $("maintenanceRunMode").addEventListener("change", () => {
     syncJobTypeFromRunMode();
-    state.jobId = null;
-    state.lastJob = null;
-    stopPolling();
-    resetLogCache(null, currentJobType());
-    resetJobStatusCard(currentJobType());
-    await refreshMaintenanceJobs();
+    applyJobTypeUi(currentJobType());
   });
 
   $("startMaintenanceBtn").addEventListener("click", () => {
@@ -548,6 +563,8 @@ function bindEvents() {
   $("maintenanceJobSelect").addEventListener("change", (ev) => {
     state.jobId = ev.target.value;
     state.lastJob = null;
+    syncJobTypeFromSelection();
+    applyJobTypeUi(currentJobType());
     resetLogCache(state.jobId, currentJobType());
     startPolling();
   });

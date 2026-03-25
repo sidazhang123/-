@@ -37,6 +37,8 @@ from strategies.engine_commons import (
     as_int,
     build_signal_dict,
     connect_source_readonly,
+    normalize_execution_params,
+    read_universe_filter_params,
 )
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,13 @@ STRATEGY_LABEL = "策略2（模板）"
 # TODO: 把这组默认参数改成你的真实策略参数。
 # 这里的结构必须和 manifest.json -> default_params 保持一致，
 # 否则前端展示、参数校验和 engine 读取会出现分叉。
+#
+# 【多周期策略补充】若需要多个周期，添加以下结构：
+# _TF_TABLE: dict[str, str] = {"w": "klines_w", "d": "klines_d", "60": "klines_60"}
+# _TF_ORDER: list[str] = ["w", "d", "60"]  # 粗 → 细排序
+# 并在 manifest.json 中为每个周期添加 enabled 开关与 param_help 的
+# _render: "inline_template" + _label + _tf_key + _templates 模式。
+# 参考示例：multi_tf_ma_uptrend_v1、consecutive_uptrends_v1。
 # ---------------------------------------------------------------------------
 DEFAULT_DAILY_PARAMS: dict[str, Any] = {
     "example_param": 10,
@@ -88,36 +97,12 @@ def _normalize_daily_params(group_params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _normalize_execution_params(group_params: dict[str, Any]) -> dict[str, Any]:
-    """提取执行层参数。
-
-    这些参数通常不改变买卖规则本身，但会影响回退、缓存或调试行为。
-    新策略如果不需要额外执行参数，可以保持最小集合。
-    """
-    raw = as_dict(group_params.get("execution"))
-    return {
-        "fallback_to_backtrader": as_bool(
-            raw.get("fallback_to_backtrader"),
-            DEFAULT_EXECUTION_PARAMS["fallback_to_backtrader"],
-        ),
-    }
-
-
-def _read_universe_filter_params(group_params: dict[str, Any]) -> dict[str, Any]:
-    """读取框架保留的股票池预筛选配置。
-
-    注意：概念预筛选实际发生在 TaskManager。
-    此处仅用于 metrics、logging 或调试提示，禁止在 engine 内再次按相同规则过滤 codes。
-    """
-    raw_universe = as_dict(group_params.get("universe_filters"))
-    raw_concepts = as_dict(raw_universe.get("concepts"))
-    concept_terms = raw_concepts.get("concept_terms")
-    reason_terms = raw_concepts.get("reason_terms")
-    return {
-        "enabled": as_bool(raw_concepts.get("enabled"), False),
-        "concept_terms": [str(item).strip() for item in concept_terms] if isinstance(concept_terms, list) else [],
-        "reason_terms": [str(item).strip() for item in reason_terms] if isinstance(reason_terms, list) else [],
-    }
+# ---------------------------------------------------------------------------
+# 执行参数与概念过滤参数规范化已提取到 engine_commons.py：
+#   normalize_execution_params() —— 标准版，仅提取 fallback_to_backtrader
+#   read_universe_filter_params() —— 读取概念预筛选配置
+# 如果新策略需要额外执行参数（如 worker_count），可以保留本地版本。
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -281,8 +266,8 @@ def run_strategy_2_specialized(
     _ = (cache_scope, cache_dir)  # 当前模板不使用缓存，保留参数以兼容框架签名
 
     daily_params = _normalize_daily_params(group_params)
-    execution_params = _normalize_execution_params(group_params)
-    universe_filter_params = _read_universe_filter_params(group_params)
+    execution_params = normalize_execution_params(group_params)
+    universe_filter_params = read_universe_filter_params(group_params)
 
     empty_metrics: dict[str, Any] = {
         "daily_phase_sec": 0.0,

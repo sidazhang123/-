@@ -137,7 +137,6 @@ class RuleScreenStrategy(bt.Strategy):
         self.clock_tf = self._pick_clock_tf()
         self.active_timeframes = self._pick_active_timeframes()
         self._inactive_rule_results = self._build_inactive_rule_results()
-        self._fast_skip_non_last_daily = self._should_fast_skip_non_last_daily()
 
     def _pick_clock_tf(self) -> str:
         """
@@ -190,18 +189,6 @@ class RuleScreenStrategy(bt.Strategy):
                 "values": {},
             }
         return inactive
-
-    def _should_fast_skip_non_last_daily(self) -> bool:
-        # Strategy-specific fast path:
-        # bigbro_buy only evaluates on the last daily bar when d.last_bar_only=true.
-        if self.strategy_group_id != "bigbro_buy":
-            return False
-        if self.active_timeframes != ("d",):
-            return False
-        d_section = self.group_params.get("d")
-        if not isinstance(d_section, dict):
-            return False
-        return self._parse_bool(d_section.get("last_bar_only"), True)
 
     def tf_base_shift(self, tf: str) -> int:
         # 源库中的各周期时间戳统一为周期结束时间（d/w 为当日 15:00），可直接读取当前索引。
@@ -327,14 +314,6 @@ class RuleScreenStrategy(bt.Strategy):
         """
         clock_data = self.data_by_tf[self.clock_tf]
         clock_dt = bt.num2date(clock_data.datetime[0]).replace(tzinfo=None)
-
-        # Fast path for bigbro_buy: skip all non-last daily bars.
-        if self._fast_skip_non_last_daily:
-            daily_data = self.data_by_tf.get("d")
-            if daily_data is not None and len(daily_data) < daily_data.buflen():
-                self.summary.processed_bars += 1
-                self.summary.last_dt = clock_dt
-                return
 
         per_rule: dict[str, dict[str, Any]] = dict(self._inactive_rule_results)
         for tf in self.active_timeframes:

@@ -11,10 +11,10 @@ strategies/
 ├── README.md
 └── groups/
     ├── strategy_2/              # 唯一推荐的新策略模板
-    ├── bigbro_buy/
-    ├── burst_pullback_box_v1/
-    ├── bu_zhi_dao_v1/
-    ├── flag_rally_v1/
+    ├── consecutive_uptrends_v1/
+    ├── flag_pattern_v1/
+    ├── multi_tf_ma_uptrend_v1/
+    ├── weekly_oversold_rsi_v1/
     └── xianren_zhilu_v1/
 ```
 
@@ -27,12 +27,13 @@ strategies/
 ## 二、先记住这几条强约束
 
 1. 新策略默认使用 `specialized` 引擎，不要把 backtrader 当主路径。
-2. 新策略优先复制 `strategy_2`，不要直接复制 `burst_pullback_box_v1`、`bigbro_buy` 等业务策略。
+2. 新策略优先复制 `strategy_2`，不要直接复制其他业务策略。
 3. `engine.py` 是主逻辑文件，`strategy.py` 在 specialized 策略里通常只保留 backtrader 协议占位。
 4. `manifest.execution.specialized_entry` 必须指向 `engine.py` 中真实存在的函数。
 5. 信号 payload 必须正确填写 `chart_interval_start_ts` 与 `chart_interval_end_ts`，且它们必须表示单次信号的实际展示窗口。
 6. 如需概念预筛选，只能使用 `default_params.universe_filters.concepts`，推荐字段固定为 `concept_terms` 与 `reason_terms`。
 7. 概念预筛选由 TaskManager 在 engine 之前执行，engine 不得重复做相同裁剪。
+8. **所有新策略的 `param_help` 中每个周期参数组必须采用 `_render: "inline_template"` 渲染模式**（配合 `_label`、`_tf_key`、`_templates`），不允许使用纯 `_comment` 文本方式。即使是单周期策略也必须遵守此规范。
 
 ## 三、为什么新策略应优先走 specialized
 
@@ -299,7 +300,7 @@ order by t.code, t.datetime;
 
 ### 9.2 任务内并行
 
-只有在计算密集、单股扫描逻辑重的策略中才建议启用 `supports_intra_task_parallel=true`。参考 `burst_pullback_box_v1`。
+只有在计算密集、单股扫描逻辑重的策略中才建议启用 `supports_intra_task_parallel=true`。
 
 ### 9.3 缓存
 
@@ -312,9 +313,9 @@ order by t.code, t.datetime;
 ## 十、推荐参考顺序
 
 1. 第一参考：`strategy_2`，看它的 README、manifest、engine.py、strategy.py。
-2. 第二参考：`bigbro_buy`，适合学习纯日线 specialized 结构。
-3. 第三参考：`bu_zhi_dao_v1`，适合看双周期加载。
-4. 第四参考：`burst_pullback_box_v1`，适合看多进程、缓存和两阶段扫描。
+2. 第二参考：`multi_tf_ma_uptrend_v1`，适合学习多周期均线 AND 逻辑 + inline_template 前端渲染。
+3. 第三参考：`consecutive_uptrends_v1`，适合看多周期 OR 逻辑与可选急跌段检测。
+4. 第四参考：`xianren_zhilu_v1`，适合看双周期 OR 逻辑与 K线形态检测。
 
 ## 十一、新策略上线前检查清单
 
