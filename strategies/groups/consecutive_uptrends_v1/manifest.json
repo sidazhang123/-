@@ -81,22 +81,26 @@
           "required": true
         },
         {
-          "text": "启用急跌检查 {selloff_enabled}",
-          "required": false
+          "text": "启用急跌检查",
+          "required": false,
+          "toggle": "selloff_enabled"
         },
         {
           "text": "急跌起始偏移上限：连阳长度的 {selloff_start_pct}%",
           "required": false,
-          "help": "连阳结束后最多间隔 floor(偏移% × 连阳根数) 根K线开始急跌"
+          "help": "连阳结束后最多间隔 floor(偏移% × 连阳根数) 根K线开始急跌",
+          "follow_toggle": "selloff_enabled"
         },
         {
           "text": "急跌连续 {selloff_bars} 根K线",
-          "required": false
+          "required": false,
+          "follow_toggle": "selloff_enabled"
         },
         {
           "text": "急跌回撤不超过连阳涨幅的 {selloff_return_pct}%",
           "required": false,
-          "help": "回撤 = (连阳最高收盘价 − 急跌最低收盘价) / 连阳总涨幅"
+          "help": "回撤 = (连阳最高收盘价 − 急跌最低收盘价) / 连阳总涨幅",
+          "follow_toggle": "selloff_enabled"
         }
       ]
     },
@@ -118,22 +122,26 @@
           "required": true
         },
         {
-          "text": "启用急跌检查 {selloff_enabled}",
-          "required": false
+          "text": "启用急跌检查",
+          "required": false,
+          "toggle": "selloff_enabled"
         },
         {
           "text": "急跌起始偏移上限：连阳长度的 {selloff_start_pct}%",
           "required": false,
-          "help": "连阳结束后最多间隔 floor(偏移% × 连阳根数) 根K线开始急跌"
+          "help": "连阳结束后最多间隔 floor(偏移% × 连阳根数) 根K线开始急跌",
+          "follow_toggle": "selloff_enabled"
         },
         {
           "text": "急跌连续 {selloff_bars} 根K线",
-          "required": false
+          "required": false,
+          "follow_toggle": "selloff_enabled"
         },
         {
           "text": "急跌回撤不超过连阳涨幅的 {selloff_return_pct}%",
           "required": false,
-          "help": "回撤 = (连阳最高收盘价 − 急跌最低收盘价) / 连阳总涨幅"
+          "help": "回撤 = (连阳最高收盘价 − 急跌最低收盘价) / 连阳总涨幅",
+          "follow_toggle": "selloff_enabled"
         }
       ]
     },
@@ -155,22 +163,26 @@
           "required": true
         },
         {
-          "text": "启用急跌检查 {selloff_enabled}",
-          "required": false
+          "text": "启用急跌检查",
+          "required": false,
+          "toggle": "selloff_enabled"
         },
         {
           "text": "急跌起始偏移上限：连阳长度的 {selloff_start_pct}%",
           "required": false,
-          "help": "连阳结束后最多间隔 floor(偏移% × 连阳根数) 根K线开始急跌"
+          "help": "连阳结束后最多间隔 floor(偏移% × 连阳根数) 根K线开始急跌",
+          "follow_toggle": "selloff_enabled"
         },
         {
           "text": "急跌连续 {selloff_bars} 根K线",
-          "required": false
+          "required": false,
+          "follow_toggle": "selloff_enabled"
         },
         {
           "text": "急跌回撤不超过连阳涨幅的 {selloff_return_pct}%",
           "required": false,
-          "help": "回撤 = (连阳最高收盘价 − 急跌最低收盘价) / 连阳总涨幅"
+          "help": "回撤 = (连阳最高收盘价 − 急跌最低收盘价) / 连阳总涨幅",
+          "follow_toggle": "selloff_enabled"
         }
       ]
     },

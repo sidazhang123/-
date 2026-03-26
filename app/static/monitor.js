@@ -403,6 +403,7 @@ function renderInlineTemplateSection(path, sectionValue, helpNode) {
     const text = tpl.text || "";
     const isRequired = tpl.required === true;
     const toggleField = tpl.toggle || null;
+    const followToggleField = tpl.follow_toggle || null;
     const helpTip = tpl.help || "";
 
     // 解析 {field_name} 占位符，替换为内联 input
@@ -451,6 +452,18 @@ function renderInlineTemplateSection(path, sectionValue, helpNode) {
             ${badge} ${lineHtml}
             ${helpTip ? `<span class="param-inline-help">${escapeHtml(helpTip)}</span>` : ""}
           </div>
+        </div>
+      `;
+    } else if (followToggleField) {
+      // 跟随 toggle 行：不渲染自身 checkbox，但根据目标字段控制灰化
+      const ftPath = path.concat(followToggleField);
+      const ftKey = pathToString(ftPath);
+      const ftVal = sectionValue[followToggleField] === true;
+      const disabledClass = ftVal ? "" : "param-inline-toggle-disabled";
+      rowsHtml += `
+        <div class="param-inline-row ${disabledClass}" data-inline-toggle-body="${escapeHtml(ftKey)}">
+          ${badge} ${lineHtml}
+          ${helpTip ? `<span class="param-inline-help">${escapeHtml(helpTip)}</span>` : ""}
         </div>
       `;
     } else {
