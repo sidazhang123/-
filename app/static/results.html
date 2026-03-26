@@ -20,6 +20,7 @@
           <li><a href="/"><i data-lucide="activity" class="nav-icon"></i><span>任务监控</span></a></li>
           <li><a href="/maintenance"><i data-lucide="database" class="nav-icon"></i><span>数据维护</span></a></li>
           <li><a href="/results" class="active"><i data-lucide="bar-chart-3" class="nav-icon"></i><span>筛选结果</span></a></li>
+          <li><a href="/task-manager"><i data-lucide="trash-2" class="nav-icon"></i><span>任务管理</span></a></li>
         </ul>
       </div>
     </nav>
@@ -29,6 +30,7 @@
       <a href="/"><i data-lucide="activity" class="nav-icon"></i>监控</a>
       <a href="/maintenance"><i data-lucide="database" class="nav-icon"></i>维护</a>
       <a href="/results" class="active"><i data-lucide="bar-chart-3" class="nav-icon"></i>结果</a>
+      <a href="/task-manager"><i data-lucide="trash-2" class="nav-icon"></i>管理</a>
     </nav>
 
     <!-- ── Main ── -->
@@ -44,6 +46,7 @@
           历史任务
           <select id="taskSelect"></select>
         </label>
+        <button type="button" id="showParamsBtn" class="param-badge-btn" title="查看任务参数快照" disabled>参</button>
         <span id="resultsStreamState" class="stream-state is-idle">SSE: 未连接</span>
         <div class="button-cluster">
           <button id="refreshTasksBtn">刷新任务列表</button>
@@ -118,7 +121,19 @@
 
   <div id="conceptTooltip" class="concept-tooltip" hidden></div>
 
+  <!-- Param modal -->
+  <div id="paramModalOverlay" class="param-modal-overlay" hidden>
+    <div class="param-modal-box">
+      <div class="param-modal-header">
+        <span class="param-modal-title">任务参数快照</span>
+        <button type="button" id="paramModalCloseBtn" class="param-modal-close" title="关闭">&times;</button>
+      </div>
+      <div id="paramModalBody" class="param-modal-body"></div>
+    </div>
+  </div>
+
   <script src="/static/vendor/lucide/lucide.min.js"></script>
+  <script src="/static/param-render.js?v=20260322"></script>
   <script src="/static/results.js?v=20260322-results-top-concepts"></script>
   <script>lucide.createIcons();</script>
 </body>

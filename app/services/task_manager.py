@@ -24,6 +24,7 @@ from __future__ import annotations
 4. 保留暂停/恢复/停止语义，保证状态可恢复与可追踪。
 """
 
+import copy
 import json
 import logging
 import random
@@ -141,6 +142,7 @@ class TaskManager:
                 "run_mode": run_mode,
                 "sample_size": sample_size,
                 "skip_coverage_filter": skip_coverage_filter,
+                "param_help": copy.deepcopy(group_meta.param_help) if group_meta.param_help else None,
             },
         )
         self._submit_task(task_id)

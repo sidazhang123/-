@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>任务管理 - 量价筛选系统</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260322-task-manager" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- ── Top Navigation ── -->
+    <nav class="topnav">
+      <div class="topnav-inner">
+        <a href="/" class="topnav-brand">
+          <div class="brand-icon">量</div>
+          <span>量价筛选</span>
+        </a>
+        <ul class="topnav-links">
+          <li><a href="/"><i data-lucide="activity" class="nav-icon"></i><span>任务监控</span></a></li>
+          <li><a href="/maintenance"><i data-lucide="database" class="nav-icon"></i><span>数据维护</span></a></li>
+          <li><a href="/results"><i data-lucide="bar-chart-3" class="nav-icon"></i><span>筛选结果</span></a></li>
+          <li><a href="/task-manager" class="active"><i data-lucide="trash-2" class="nav-icon"></i><span>任务管理</span></a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <!-- ── Mobile bottom nav ── -->
+    <nav class="mobile-nav">
+      <a href="/"><i data-lucide="activity" class="nav-icon"></i>监控</a>
+      <a href="/maintenance"><i data-lucide="database" class="nav-icon"></i>维护</a>
+      <a href="/results"><i data-lucide="bar-chart-3" class="nav-icon"></i>结果</a>
+      <a href="/task-manager" class="active"><i data-lucide="trash-2" class="nav-icon"></i>管理</a>
+    </nav>
+
+    <!-- ── Main ── -->
+    <div class="main-content">
+      <div class="page-header">
+        <h1>任务管理</h1>
+        <p>查看筛选任务历史，批量删除已完成任务。</p>
+      </div>
+
+      <section class="panel">
+        <h2>筛选任务列表</h2>
+        <div class="task-mgr-toolbar">
+          <button id="refreshBtn" type="button">刷新</button>
+          <button id="selectAllBtn" type="button" class="ghost">全选</button>
+          <button id="deselectAllBtn" type="button" class="ghost">取消</button>
+          <button id="deleteSelectedBtn" type="button" class="danger" disabled>删除</button>
+          <span id="selectionHint" class="hint"></span>
+        </div>
+        <div class="table-wrap large">
+          <table id="taskTable" class="sticky-header">
+            <thead>
+              <tr>
+                <th style="width:36px"><input type="checkbox" id="headerCheckbox" title="全选/取消" /></th>
+                <th>策略组</th>
+                <th>策略名称</th>
+                <th>状态</th>
+                <th>命中</th>
+                <th>进度</th>
+                <th>创建时间</th>
+                <th>完成时间</th>
+                <th>参数快照</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="emptyHint" class="hint" hidden>暂无筛选任务。</div>
+      </section>
+    </div><!-- /.main-content -->
+  </div><!-- /.app-shell -->
+
+  <!-- Param modal -->
+  <div id="paramModalOverlay" class="param-modal-overlay" hidden>
+    <div class="param-modal-box">
+      <div class="param-modal-header">
+        <span class="param-modal-title">任务参数快照</span>
+        <button type="button" id="paramModalCloseBtn" class="param-modal-close" title="关闭">&times;</button>
+      </div>
+      <div id="paramModalBody" class="param-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Delete confirmation dialog -->
+  <div id="deleteConfirmOverlay" class="param-modal-overlay" hidden>
+    <div class="param-modal-box" style="max-width:420px">
+      <div class="param-modal-header">
+        <span class="param-modal-title">确认删除</span>
+        <button type="button" id="deleteConfirmCancelBtn" class="param-modal-close" title="关闭">&times;</button>
+      </div>
+      <div class="param-modal-body">
+        <p id="deleteConfirmText" style="margin:0 0 16px"></p>
+        <div class="btn-row" style="justify-content:flex-end;gap:8px">
+          <button type="button" id="deleteConfirmNoBtn" class="ghost">取消</button>
+          <button type="button" id="deleteConfirmYesBtn" class="danger">确认删除</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/lucide/lucide.min.js"></script>
+  <script src="/static/param-render.js?v=20260322"></script>
+  <script src="/static/task-manager.js?v=20260322"></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>

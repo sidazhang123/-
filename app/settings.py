@@ -103,9 +103,7 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         "app_policy": "progress_stage_warning",
     },
     "log_keep": {
-        "task_per_task": 2000,
-        "maintenance_jobs": 2,
-        "concept_jobs": 4,
+        "jobs_per_category": 3,
     },
     "app": {
         "startup_prewarm_parallel_fetcher_enabled": True,
@@ -539,19 +537,9 @@ def _build_runtime_settings(raw_config: dict[str, Any]) -> dict[str, Any]:
         _expect_string_list(concept_cfg.get("exclude_board_names"), "concept.exclude_board_names")
     )
     log_keep_cfg = _expect_mapping(merged.get("log_keep"), "log_keep")
-    log_keep_task_per_task = _expect_int(
-        log_keep_cfg.get("task_per_task"),
-        "log_keep.task_per_task",
-        minimum=1,
-    )
-    log_keep_maintenance_jobs = _expect_int(
-        log_keep_cfg.get("maintenance_jobs"),
-        "log_keep.maintenance_jobs",
-        minimum=1,
-    )
-    log_keep_concept_jobs = _expect_int(
-        log_keep_cfg.get("concept_jobs"),
-        "log_keep.concept_jobs",
+    log_keep_jobs_per_category = _expect_int(
+        log_keep_cfg.get("jobs_per_category"),
+        "log_keep.jobs_per_category",
         minimum=1,
     )
     app_cfg = _expect_mapping(merged.get("app"), "app")
@@ -619,9 +607,7 @@ def _build_runtime_settings(raw_config: dict[str, Any]) -> dict[str, Any]:
         "CONCEPT_MAX_WORKERS": concept_max_workers,
         "CONCEPT_RETRY_COUNT": concept_retry_count,
         "CONCEPT_EXCLUDE_BOARD_NAMES": concept_exclude_board_names,
-        "LOG_KEEP_TASK_PER_TASK": log_keep_task_per_task,
-        "LOG_KEEP_MAINTENANCE_JOBS": log_keep_maintenance_jobs,
-        "LOG_KEEP_CONCEPT_JOBS": log_keep_concept_jobs,
+        "LOG_KEEP_JOBS_PER_CATEGORY": log_keep_jobs_per_category,
         "APP_STARTUP_PREWARM_PARALLEL_FETCHER_ENABLED": app_startup_prewarm_parallel_fetcher_enabled,
     }
 
@@ -686,6 +672,4 @@ CONCEPT_REQUEST_TIMEOUT_SECONDS = _RUNTIME_SETTINGS["CONCEPT_REQUEST_TIMEOUT_SEC
 CONCEPT_MAX_WORKERS = _RUNTIME_SETTINGS["CONCEPT_MAX_WORKERS"]
 CONCEPT_RETRY_COUNT = _RUNTIME_SETTINGS["CONCEPT_RETRY_COUNT"]
 CONCEPT_EXCLUDE_BOARD_NAMES = _RUNTIME_SETTINGS["CONCEPT_EXCLUDE_BOARD_NAMES"]
-LOG_KEEP_TASK_PER_TASK = _RUNTIME_SETTINGS["LOG_KEEP_TASK_PER_TASK"]
-LOG_KEEP_MAINTENANCE_JOBS = _RUNTIME_SETTINGS["LOG_KEEP_MAINTENANCE_JOBS"]
-LOG_KEEP_CONCEPT_JOBS = _RUNTIME_SETTINGS["LOG_KEEP_CONCEPT_JOBS"]
+LOG_KEEP_JOBS_PER_CATEGORY = _RUNTIME_SETTINGS["LOG_KEEP_JOBS_PER_CATEGORY"]

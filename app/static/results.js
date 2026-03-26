@@ -1729,6 +1729,8 @@ async function refreshTaskList(selectTaskId = null, shouldBroadcast = true) {
     select.value = taskId;
     state.lastResultCount = -1;
     renderTopConceptSummary();
+    const paramsBtn = $("showParamsBtn");
+    if (paramsBtn) paramsBtn.disabled = !taskId;
     await syncTask(true);
     startPolling();
   } finally {
@@ -1749,6 +1751,8 @@ function bindEvents() {
     state.lastResultCount = -1;
     writeTaskIdToUrl(state.taskId);
     renderTopConceptSummary();
+    const paramsBtnChg = $("showParamsBtn");
+    if (paramsBtnChg) paramsBtnChg.disabled = !state.taskId;
     try {
       await syncTask(true);
       startPolling();
@@ -1810,6 +1814,93 @@ function bindCrossTabSync() {
   }
 }
 
+// ── Param modal ──
+
+let _paramCache = {};
+
+async function loadTaskParams(taskId) {
+  if (_paramCache[taskId]) return _paramCache[taskId];
+  const data = await getJSON(`/api/tasks/${taskId}/params`);
+  _paramCache[taskId] = data;
+  return data;
+}
+
+const _RUN_MODE_TEXT = { full: "全量", sample20: "随机抽样" };
+
+function renderParamMeta(data) {
+  const parts = [];
+  if (data.strategy_name) parts.push(ParamRender.escapeHtml(data.strategy_name));
+  const modeLabel = _RUN_MODE_TEXT[data.run_mode] || data.run_mode || "";
+  if (modeLabel) {
+    let text = modeLabel;
+    if (data.run_mode === "sample20" && data.sample_size) text += ` (${data.sample_size})`;
+    parts.push(ParamRender.escapeHtml(text));
+  }
+  if (!parts.length) return "";
+  return `<div class="param-modal-meta">${parts.join(" · ")}</div>`;
+}
+
+function renderOverview(paramHelp) {
+  if (!paramHelp || !paramHelp._overview) return "";
+  const text = ParamRender.helpTextFromNode({ _overview: paramHelp._overview });
+  if (!text) return "";
+  const lines = text.split("\n").map((l) => `<p>${ParamRender.escapeHtml(l)}</p>`).join("");
+  return `<div class="param-modal-overview">${lines}</div>`;
+}
+
+function renderReadonlyParams(data) {
+  const groupParams = data.group_params;
+  const paramHelp = data.param_help;
+  if (!groupParams || !Object.keys(groupParams).length) {
+    return '<div class="param-modal-empty">无参数数据</div>';
+  }
+  const meta = renderParamMeta(data);
+  const overview = renderOverview(paramHelp);
+  const keys = Object.keys(groupParams);
+  const fields = keys.map((key) => {
+    const helpNode = paramHelp ? paramHelp[key] : null;
+    return ParamRender.renderParamField([key], groupParams[key], helpNode, key, 0, { readonly: true });
+  }).join("");
+  return meta + overview + fields;
+}
+
+function openParamModal() {
+  const taskId = state.taskId;
+  if (!taskId) return;
+  const overlay = $("paramModalOverlay");
+  const body = $("paramModalBody");
+  overlay.hidden = false;
+  body.innerHTML = '<div class="param-modal-loading">加载中…</div>';
+
+  loadTaskParams(taskId).then((data) => {
+    body.innerHTML = renderReadonlyParams(data);
+  }).catch((err) => {
+    body.innerHTML = `<div class="param-modal-empty">加载失败: ${escapeHtml(err.message || "未知错误")}</div>`;
+  });
+}
+
+function closeParamModal() {
+  const overlay = $("paramModalOverlay");
+  overlay.hidden = true;
+  $("paramModalBody").innerHTML = "";
+}
+
+function bindParamModal() {
+  const btn = $("showParamsBtn");
+  if (btn) btn.addEventListener("click", openParamModal);
+  const closeBtn = $("paramModalCloseBtn");
+  if (closeBtn) closeBtn.addEventListener("click", closeParamModal);
+  const overlay = $("paramModalOverlay");
+  if (overlay) {
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) closeParamModal();
+    });
+  }
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && overlay && !overlay.hidden) closeParamModal();
+  });
+}
+
 async function init() {
   await ensureEcharts();
   state.zoomLocks = loadZoomLocksFromStorage();
@@ -1819,6 +1910,7 @@ async function init() {
   bindFullscreenEvents();
   syncChartFullscreenState();
   bindCrossTabSync();
+  bindParamModal();
   await refreshTaskList();
 }
 

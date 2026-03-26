@@ -3,7 +3,7 @@
 
 职责：
 1. 管理任务状态、任务日志、筛选结果与前端配置持久化。
-2. 负责 schema 初始化与版本升级策略（当前 schema_version=v6）。
+2. 负责 schema 初始化与版本升级策略（当前 schema_version=v7）。
 3. 对外提供线程安全读写接口，供任务管理器与 API 路由调用。
 
 设计约束：
@@ -22,7 +22,9 @@ from typing import Any, Callable, Iterable, TypeVar
 
 import duckdb
 
-from app.settings import LOG_KEEP_CONCEPT_JOBS, LOG_KEEP_MAINTENANCE_JOBS, LOG_KEEP_TASK_PER_TASK
+from app.settings import (
+    LOG_KEEP_JOBS_PER_CATEGORY,
+)
 
 
 def _json_dumps(obj: Any) -> str:
@@ -38,7 +40,7 @@ def _json_dumps(obj: Any) -> str:
 
 
 class StateDB:
-    SCHEMA_VERSION = "6"
+    SCHEMA_VERSION = "7"
     RETRY_TASK_QUERY_BATCH_SIZE = 2000
     MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v2"
     LEGACY_MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v1"
@@ -140,7 +142,7 @@ class StateDB:
         """
         初始化或升级状态库 schema。
 
-        当前目标版本：`schema_version = 6`。
+        当前目标版本：`schema_version = 7`。
         升级策略采用非破坏式迁移：优先保留任务和日志历史，再补齐新增表、索引和序列，最后更新 `app_meta`。
         """
         def _op(con: duckdb.DuckDBPyConnection) -> None:
@@ -186,6 +188,15 @@ class StateDB:
                 if table_exists and not has_type_col:
                     con.execute("alter table maintenance_jobs add column type varchar default 'maintenance'")
                     con.execute("update maintenance_jobs set type = 'maintenance' where type is null")
+
+                # v6→v7: 统一使用 mode 区分任务类型，删除冗余 type 列
+                if table_exists and has_type_col:
+                    # 确保旧 concept 记录 mode 值已修正
+                    con.execute("update maintenance_jobs set mode = 'concept_update' where type = 'concept' and (mode is null or mode = '')")
+                    # 删除依赖索引后才能 drop column
+                    con.execute("drop index if exists idx_maintenance_jobs_created_at")
+                    con.execute("alter table maintenance_jobs drop column type")
+                    con.execute("create index if not exists idx_maintenance_jobs_created_at on maintenance_jobs(created_at)")
 
             con.execute("create sequence if not exists task_logs_seq start 1")
             con.execute("create sequence if not exists task_results_seq start 1")
@@ -266,8 +277,7 @@ class StateDB:
                     mode varchar,
                     params_json varchar,
                     summary_json varchar,
-                    error_message varchar,
-                    type varchar not null default 'maintenance'
+                    error_message varchar
                 )
                 """
             )
@@ -319,25 +329,19 @@ class StateDB:
                     "select table_name from information_schema.tables where table_name in ('concept_jobs', 'concept_logs')"
                 ).fetchall()
             }
-            current_mj_cols = {
-                str(row[0]).lower()
-                for row in con.execute(
-                    "select column_name from information_schema.columns where table_name = 'maintenance_jobs'"
-                ).fetchall()
-            }
-            if legacy_tables and "type" in current_mj_cols:
+            if legacy_tables:
                 if "concept_jobs" in legacy_tables:
                     con.execute(
                         """
                         insert into maintenance_jobs (
                             job_id, created_at, updated_at, started_at, finished_at,
                             status, phase, progress, source_db, mode, params_json,
-                            summary_json, error_message, type
+                            summary_json, error_message
                         )
                         select
                             job_id, created_at, updated_at, started_at, finished_at,
                             status, phase, progress, source_db, 'concept_update', params_json,
-                            summary_json, error_message, 'concept'
+                            summary_json, error_message
                         from concept_jobs
                         where job_id not in (select job_id from maintenance_jobs)
                         """
@@ -349,7 +353,7 @@ class StateDB:
                         select job_id, ts, level, message, detail_json
                         from concept_logs
                         where job_id in (
-                            select job_id from maintenance_jobs where type = 'concept'
+                            select job_id from maintenance_jobs where mode = 'concept_update'
                         )
                         """
                     )
@@ -1099,24 +1103,8 @@ class StateDB:
         source_db: str,
         params: dict[str, Any] | None = None,
     ) -> None:
-        """创建概念更新任务（存入 maintenance_jobs，type='concept'）。"""
-
-        now = datetime.now()
-        params_json = _json_dumps(params or {})
-
-        def _op(con: duckdb.DuckDBPyConnection) -> None:
-            con.execute(
-                """
-                insert into maintenance_jobs (
-                    job_id, created_at, updated_at, status, source_db, mode, params_json, type
-                )
-                values (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [job_id, now, now, "queued", source_db, "concept_update", params_json, "concept"],
-            )
-            self._trim_maintenance_logs(con, job_type="concept")
-
-        self._with_write_connection(_op)
+        """创建概念更新任务（mode='concept_update'）。"""
+        self.create_maintenance_job(job_id=job_id, source_db=source_db, mode="concept_update", params=params)
 
     def update_maintenance_job_fields(self, job_id: str, **fields: Any) -> None:
         """更新数据维护任务字段。"""
@@ -1191,8 +1179,6 @@ class StateDB:
         1. 无返回值。
         用途：
         1. 向 task_logs 表写入一条筛选任务日志，并同步更新 tasks 表的 info/error 计数。
-        边界条件：
-        1. 写入后会触发 _trim_task_logs 裁剪，保持单任务日志不超过配置上限。
         """
         now = datetime.now()
         detail_json = _json_dumps(detail) if detail else None
@@ -1216,151 +1202,54 @@ class StateDB:
                     "update tasks set info_log_count = info_log_count + 1, updated_at = ? where task_id = ?",
                     [now, task_id],
                 )
-            self._trim_task_logs(con, task_id=task_id, now=now)
 
         self._with_write_connection(_op)
 
-    def _trim_task_logs(self, con: duckdb.DuckDBPyConnection, *, task_id: str, now: datetime) -> None:
-        """
-        输入：
-        1. con: 写连接。
-        2. task_id: 任务 ID。
-        3. now: 当前时间，用于回写 tasks.updated_at。
-        输出：
-        1. 无返回值。
-        用途：
-        1. 按配置上限裁剪单任务日志条数，并同步 info/error 计数。
-        边界条件：
-        1. 上限小于等于 0 时不裁剪。
-        2. 仅删除最旧日志，保留最新窗口。
-        """
-
-        keep_limit = int(LOG_KEEP_TASK_PER_TASK or 0)
-        if keep_limit <= 0:
-            return
-        counts_row = con.execute(
-            """
-            select info_log_count, error_log_count
-            from tasks
-            where task_id = ?
-            """,
-            [task_id],
-        ).fetchone()
-        if not counts_row:
-            return
-        total_logs = int(counts_row[0] or 0) + int(counts_row[1] or 0)
-        overflow = total_logs - keep_limit
-        if overflow <= 0:
-            return
-
-        removed_rows = con.execute(
-            """
-            select level, count(*) as cnt
-            from (
-                select level
-                from task_logs
-                where task_id = ?
-                order by log_id asc
-                limit ?
-            ) as removed
-            group by level
-            """,
-            [task_id, overflow],
-        ).fetchall()
-        removed_info = 0
-        removed_error = 0
-        for level_value, count_value in removed_rows:
-            token = str(level_value or "").strip().lower()
-            if token == "error":
-                removed_error += int(count_value or 0)
-            elif token == "info":
-                removed_info += int(count_value or 0)
-
-        con.execute(
-            """
-            delete from task_logs
-            where log_id in (
-                select log_id
-                from task_logs
-                where task_id = ?
-                order by log_id asc
-                limit ?
-            )
-            """,
-            [task_id, overflow],
-        )
-        if removed_info <= 0 and removed_error <= 0:
-            return
-        con.execute(
-            """
-            update tasks
-            set
-                info_log_count = case
-                    when info_log_count > ? then info_log_count - ?
-                    else 0
-                end,
-                error_log_count = case
-                    when error_log_count > ? then error_log_count - ?
-                    else 0
-                end,
-                updated_at = ?
-            where task_id = ?
-            """,
-            [removed_info, removed_info, removed_error, removed_error, now, task_id],
-        )
-
     def _trim_maintenance_logs(
-        self, con: duckdb.DuckDBPyConnection, *, job_type: str | None = None
+        self, con: duckdb.DuckDBPyConnection
     ) -> None:
-        """仅保留最近 N 个任务的全量日志，删除更旧任务日志。
+        """按 mode 分组裁剪，每组保留最近 N 个任务的全量日志，删除更旧任务。
 
-        job_type 为 None 时按 LOG_KEEP_MAINTENANCE_JOBS 裁剪 maintenance 类型；
-        job_type='concept' 时按 LOG_KEEP_CONCEPT_JOBS 裁剪 concept 类型。
+        所有任务统一通过 mode 列区分类别（latest_update / historical_backfill / concept_update），
+        每个 mode 独立保留 jobs_per_category 个最新任务。
         """
-        if job_type == "concept":
-            keep_jobs = int(LOG_KEEP_CONCEPT_JOBS or 0)
-        else:
-            keep_jobs = int(LOG_KEEP_MAINTENANCE_JOBS or 0)
-        if keep_jobs <= 0:
+        keep = int(LOG_KEEP_JOBS_PER_CATEGORY or 0)
+        if keep <= 0:
             return
 
-        type_filter = "maintenance" if job_type is None else job_type
-        rows = con.execute(
-            """
-            select job_id
-            from maintenance_jobs
-            where type = ?
-            order by coalesce(started_at, created_at) desc, created_at desc, job_id desc
-            limit ?
-            """,
-            [type_filter, keep_jobs],
+        modes_rows = con.execute(
+            "select distinct mode from maintenance_jobs where mode is not null"
         ).fetchall()
-        keep_job_ids = [str(row[0]) for row in rows if row and row[0]]
-
-        # 获取该 type 下所有 job_id，用于删除多余日志
+        modes = [str(r[0]) for r in modes_rows if r and r[0]]
+        keep_ids: set[str] = set()
+        for mode_val in modes:
+            rows = con.execute(
+                """
+                select job_id
+                from maintenance_jobs
+                where mode = ?
+                order by coalesce(started_at, created_at) desc, created_at desc, job_id desc
+                limit ?
+                """,
+                [mode_val, keep],
+            ).fetchall()
+            keep_ids.update(str(r[0]) for r in rows if r and r[0])
         all_rows = con.execute(
-            "select job_id from maintenance_jobs where type = ?",
-            [type_filter],
+            "select job_id from maintenance_jobs"
         ).fetchall()
-        all_job_ids = [str(row[0]) for row in all_rows if row and row[0]]
-        remove_job_ids = [jid for jid in all_job_ids if jid not in keep_job_ids]
+        remove_ids = [str(r[0]) for r in all_rows if r and r[0] and str(r[0]) not in keep_ids]
 
-        if not remove_job_ids:
+        if not remove_ids:
             return
-
-        placeholders = ", ".join(["?"] * len(remove_job_ids))
+        placeholders = ", ".join(["?"] * len(remove_ids))
         con.execute(
             f"delete from maintenance_logs where job_id in ({placeholders})",
-            remove_job_ids,
+            remove_ids,
         )
         con.execute(
             f"delete from maintenance_jobs where job_id in ({placeholders})",
-            remove_job_ids,
+            remove_ids,
         )
-
-    def _trim_concept_logs(self, con: duckdb.DuckDBPyConnection) -> None:
-        """裁剪概念任务日志（委托给 _trim_maintenance_logs）。"""
-        self._trim_maintenance_logs(con, job_type="concept")
 
     def add_result(
         self,
@@ -1499,7 +1388,7 @@ class StateDB:
                 select
                     job_id, created_at, updated_at, started_at, finished_at,
                     status, phase, progress, source_db, mode, params_json, summary_json,
-                    error_message, type
+                    error_message
                 from maintenance_jobs
                 where job_id = ?
                 """,
@@ -1524,7 +1413,6 @@ class StateDB:
             "params_json",
             "summary_json",
             "error_message",
-            "type",
         ]
         result = dict(zip(keys, row))
         result["params"] = json.loads(result["params_json"]) if result.get("params_json") else {}
@@ -1758,30 +1646,57 @@ class StateDB:
         ]
         return [dict(zip(keys, row)) for row in rows]
 
+    def delete_tasks(self, task_ids: list[str]) -> int:
+        """批量删除筛选任务及其关联日志和结果。
+
+        仅删除终态（completed/failed/stopped）任务，跳过运行态任务。
+        返回实际删除数量。
+        """
+        if not task_ids:
+            return 0
+
+        def _op(con: duckdb.DuckDBPyConnection) -> int:
+            placeholders = ", ".join(["?"] * len(task_ids))
+            # 仅选取终态任务
+            rows = con.execute(
+                f"select task_id from tasks where task_id in ({placeholders}) and status in ('completed', 'failed', 'stopped')",
+                task_ids,
+            ).fetchall()
+            ids = [str(r[0]) for r in rows if r and r[0]]
+            if not ids:
+                return 0
+            ph = ", ".join(["?"] * len(ids))
+            con.execute(f"delete from task_logs where task_id in ({ph})", ids)
+            con.execute(f"delete from task_results where task_id in ({ph})", ids)
+            con.execute(f"delete from tasks where task_id in ({ph})", ids)
+            return len(ids)
+
+        return self._with_write_connection(_op)
+
     def list_maintenance_jobs(
-        self, offset: int, limit: int, *, job_type: str | None = None
+        self, offset: int, limit: int, *, mode_filter: str | None = None
     ) -> list[dict[str, Any]]:
-        """分页读取维护任务列表。job_type 为 None 时返回所有类型。"""
+        """分页读取维护任务列表。mode_filter 不为 None 时按 mode 过滤。"""
 
         def _op(con: duckdb.DuckDBPyConnection):
-            if job_type:
+            if mode_filter:
                 return con.execute(
                     """
                     select
                         job_id, created_at, started_at, finished_at, status,
-                        phase, progress, source_db, mode, error_message, type
+                        phase, progress, source_db, mode, error_message
                     from maintenance_jobs
-                    where type = ?
+                    where mode = ?
                     order by created_at desc, job_id desc
                     limit ? offset ?
                     """,
-                    [job_type, limit, offset],
+                    [mode_filter, limit, offset],
                 ).fetchall()
             return con.execute(
                 """
                 select
                     job_id, created_at, started_at, finished_at, status,
-                    phase, progress, source_db, mode, error_message, type
+                    phase, progress, source_db, mode, error_message
                 from maintenance_jobs
                 order by created_at desc, job_id desc
                 limit ? offset ?
@@ -1801,18 +1716,17 @@ class StateDB:
             "source_db",
             "mode",
             "error_message",
-            "type",
         ]
         return [dict(zip(keys, row)) for row in rows]
 
     def list_concept_jobs(self, offset: int, limit: int) -> list[dict[str, Any]]:
-        """分页读取概念任务列表（从 maintenance_jobs 按 type='concept' 过滤）。"""
-        return self.list_maintenance_jobs(offset, limit, job_type="concept")
+        """分页读取概念任务列表（按 mode='concept_update' 过滤）。"""
+        return self.list_maintenance_jobs(offset, limit, mode_filter="concept_update")
 
     def list_maintenance_jobs_by_status(
-        self, statuses: Iterable[str], limit: int = 2000, *, job_type: str | None = None
+        self, statuses: Iterable[str], limit: int = 2000, *, mode_filter: str | None = None
     ) -> list[dict[str, Any]]:
-        """按状态读取维护任务列表。job_type 为 None 时返回所有类型。"""
+        """按状态读取维护任务列表。mode_filter 不为 None 时按 mode 过滤。"""
 
         status_list = [s for s in statuses if s]
         if not status_list:
@@ -1820,19 +1734,19 @@ class StateDB:
         placeholders = ",".join(["?"] * len(status_list))
 
         def _op(con: duckdb.DuckDBPyConnection):
-            type_filter = ""
+            mode_clause = ""
             params: list[Any] = list(status_list)
-            if job_type:
-                type_filter = "and type = ?"
-                params.append(job_type)
+            if mode_filter:
+                mode_clause = "and mode = ?"
+                params.append(mode_filter)
             params.append(limit)
             return con.execute(
                 f"""
                 select
                     job_id, status, created_at, updated_at, started_at, finished_at,
-                    phase, progress, source_db, mode, params_json, summary_json, error_message, type
+                    phase, progress, source_db, mode, params_json, summary_json, error_message
                 from maintenance_jobs
-                where status in ({placeholders}) {type_filter}
+                where status in ({placeholders}) {mode_clause}
                 order by created_at desc
                 limit ?
                 """,
@@ -1859,17 +1773,16 @@ class StateDB:
                     "params": params,
                     "summary": summary,
                     "error_message": row[12],
-                    "type": row[13],
                 }
             )
         return result
 
     def list_concept_jobs_by_status(self, statuses: Iterable[str], limit: int = 2000) -> list[dict[str, Any]]:
-        """按状态读取概念任务列表（从 maintenance_jobs 按 type='concept' 过滤）。"""
-        return self.list_maintenance_jobs_by_status(statuses, limit, job_type="concept")
+        """按状态读取概念任务列表（按 mode='concept_update' 过滤）。"""
+        return self.list_maintenance_jobs_by_status(statuses, limit, mode_filter="concept_update")
 
     def get_running_maintenance_job(self) -> dict[str, Any] | None:
-        """返回当前进行中的维护任务（任意类型，若不存在返回 None）。"""
+        """返回当前进行中的维护任务（任意模式，若不存在返回 None）。"""
 
         jobs = self.list_maintenance_jobs_by_status(["queued", "running", "stopping"], limit=1)
         if not jobs:
@@ -1879,7 +1792,7 @@ class StateDB:
     def get_running_concept_job(self) -> dict[str, Any] | None:
         """返回当前进行中的概念任务（若不存在返回 None）。"""
 
-        jobs = self.list_maintenance_jobs_by_status(["queued", "running", "stopping"], limit=1, job_type="concept")
+        jobs = self.list_maintenance_jobs_by_status(["queued", "running", "stopping"], limit=1, mode_filter="concept_update")
         if not jobs:
             return None
         return jobs[0]

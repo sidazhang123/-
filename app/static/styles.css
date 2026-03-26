@@ -1633,6 +1633,9 @@ button.secondary:hover {
   flex-direction: column;
   gap: 16px;
 }
+.param-section.is-root > .param-section-body > .param-field {
+  flex: 0 0 auto;
+}
 
 .param-section-title {
   font-size: var(--text-sm);
@@ -1924,3 +1927,158 @@ button.secondary:hover {
     flex-basis: 100%;
   }
 }
+
+/* ── Param badge button (参) ── */
+.param-badge-btn {
+  min-height: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  padding: 0 8px;
+  border: 1px solid rgba(34,139,34,0.2);
+  border-radius: 999px;
+  background: rgba(34,139,34,0.08);
+  color: #228b22;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.param-badge-btn:hover:not(:disabled) {
+  background: rgba(34,139,34,0.16);
+}
+.param-badge-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Param modal overlay ── */
+.param-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.35);
+  backdrop-filter: blur(2px);
+}
+.param-modal-overlay[hidden] {
+  display: none;
+}
+.param-modal-box {
+  width: min(820px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+.param-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+.param-modal-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+.param-modal-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.param-modal-close:hover {
+  background: rgba(0,0,0,0.06);
+}
+.param-modal-body {
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+.param-modal-meta {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  padding: 0 0 10px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  margin-bottom: 12px;
+}
+.param-modal-overview {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  padding: 0 0 10px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+  margin-bottom: 12px;
+}
+.param-modal-overview p {
+  margin: 0 0 2px;
+}
+.param-modal-loading,
+.param-modal-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+/* ── Readonly param value styles ── */
+.param-readonly-value {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.param-tags-readonly {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.param-tag-readonly {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(0,113,227,0.08);
+  color: var(--color-accent);
+  font-size: 12px;
+  font-weight: 500;
+}
+.param-tag-empty {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+/* ── Task manager page ── */
+.task-mgr-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.status-completed { background: rgba(34,197,94,0.12); color: #16a34a; }
+.status-failed    { background: rgba(239,68,68,0.12);  color: #dc2626; }
+.status-stopped   { background: rgba(148,163,184,0.15); color: #64748b; }
+.status-running   { background: rgba(59,130,246,0.12); color: #2563eb; }
+.status-queued    { background: rgba(234,179,8,0.12);  color: #ca8a04; }
+.status-paused    { background: rgba(168,85,247,0.12); color: #9333ea; }
+.status-stopping  { background: rgba(251,146,60,0.12); color: #ea580c; }

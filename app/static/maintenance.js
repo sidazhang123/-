@@ -39,20 +39,18 @@ const MODE_TEXT = {
   historical_backfill: "历史数据维护",
 };
 
-const JOB_KIND_TEXT = {
-  maintenance: "K线维护",
-  concept: "概念更新",
-};
-
 const JOB_TYPE_LABEL = {
-  concept: "概念更新",
+  concept_update: "概念更新",
   latest_update: "数据更新",
   historical_backfill: "历史维护",
 };
 
-function jobTypeLabel(jobType, mode) {
-  if (jobType === "concept") return JOB_TYPE_LABEL.concept;
+function jobTypeLabel(mode) {
   return JOB_TYPE_LABEL[mode] || JOB_TYPE_LABEL.latest_update;
+}
+
+function jobKindFromMode(mode) {
+  return mode === "concept_update" ? "concept" : "maintenance";
 }
 
 const JOB_KIND_UI = {
@@ -114,23 +112,23 @@ function deriveJobErrorText(job, jobType) {
 
 function currentRunMode() {
   const raw = $("maintenanceRunMode")?.value || "latest_update";
-  return raw === "concept" ? "concept" : normalizeMode(raw);
+  return raw === "concept" ? "concept_update" : normalizeMode(raw);
 }
 
 function syncJobTypeFromRunMode() {
-  state.jobType = currentRunMode() === "concept" ? "concept" : "maintenance";
+  state.jobType = jobKindFromMode(currentRunMode());
 }
 
 function syncJobTypeFromSelection() {
   const select = $("maintenanceJobSelect");
   const opt = select.selectedOptions[0];
-  if (opt && opt.dataset.type) {
-    state.jobType = opt.dataset.type;
+  if (opt && opt.dataset.mode) {
+    state.jobType = jobKindFromMode(opt.dataset.mode);
   }
 }
 
 function currentJobType() {
-  return state.jobType || (currentRunMode() === "concept" ? "concept" : "maintenance");
+  return state.jobType || jobKindFromMode(currentRunMode());
 }
 
 function getJobApiBase(jobType = currentJobType()) {
@@ -375,10 +373,10 @@ async function refreshMaintenanceJobs(selectJobId = null) {
     for (const item of data.items || []) {
       const option = document.createElement("option");
       option.value = item.job_id;
-      option.dataset.type = item.type || "maintenance";
+      option.dataset.mode = item.mode || "latest_update";
       const d = item.created_at ? new Date(item.created_at) : null;
       const ts = d ? ` | ${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}` : "";
-      option.textContent = `${item.job_id.slice(0, 8)} | ${jobTypeLabel(item.type, item.mode)} | ${JOB_STATUS_TEXT[item.status] || item.status}${ts}`;
+      option.textContent = `${item.job_id.slice(0, 8)} | ${jobTypeLabel(item.mode)} | ${JOB_STATUS_TEXT[item.status] || item.status}${ts}`;
       select.appendChild(option);
     }
 
@@ -462,7 +460,7 @@ function startPolling() {
     if (sel.value === state.jobId) {
       const opt = sel.options[sel.selectedIndex];
       if (opt) {
-        opt.textContent = `${state.jobId.slice(0, 8)} | ${jobTypeLabel(data.type || jobType, data.mode)} | ${JOB_STATUS_TEXT[data.status] || data.status}`;
+        opt.textContent = `${state.jobId.slice(0, 8)} | ${jobTypeLabel(data.mode)} | ${JOB_STATUS_TEXT[data.status] || data.status}`;
       }
     }
     renderJobStatus(data, jobType);
@@ -504,7 +502,7 @@ function startPolling() {
 
 function currentSettingsPayload() {
   return {
-    mode: currentRunMode() === "concept" ? "latest_update" : normalizeMode($("maintenanceRunMode").value),
+    mode: currentRunMode() === "concept_update" ? "latest_update" : normalizeMode($("maintenanceRunMode").value),
     info_log_autoscroll: Boolean(state.infoLogAutoScroll),
     error_log_autoscroll: Boolean(state.errorLogAutoScroll),
   };
@@ -521,7 +519,7 @@ async function loadSettings() {
 async function startSelectedJob() {
   const runMode = currentRunMode();
   let data;
-  if (runMode === "concept") {
+  if (runMode === "concept_update") {
     data = await postJSON("/api/concept/jobs", null);
     state.jobType = "concept";
   } else {

@@ -122,7 +122,7 @@ class TestStateDBConceptLogs(unittest.TestCase):
         keep_job_id = "concept-keep"
         latest_job_id = "concept-latest"
 
-        with mock.patch("app.db.state_db.LOG_KEEP_CONCEPT_JOBS", 2):
+        with mock.patch("app.db.state_db.LOG_KEEP_JOBS_PER_CATEGORY", 2):
             self._create_job(old_job_id)
             for idx in range(2):
                 self.state_db.append_concept_log(

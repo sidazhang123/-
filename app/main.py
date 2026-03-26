@@ -275,6 +275,14 @@ def maintenance_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "maintenance.html")
 
 
+@app.get("/task-manager")
+def task_manager_page() -> FileResponse:
+    """
+    返回任务管理页 `task-manager.html`。
+    """
+    return FileResponse(STATIC_DIR / "task-manager.html")
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> Response:
     """

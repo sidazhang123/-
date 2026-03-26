@@ -37,6 +37,12 @@ class CreateTaskResponse(BaseModel):
     task_id: str
 
 
+class DeleteTasksRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_ids: list[str] = Field(min_length=1, description="要删除的任务 ID 列表")
+
+
 class TaskStatusResponse(BaseModel):
     task_id: str
     status: str

@@ -219,19 +219,11 @@ concept:
     - "赛马概念"
 
 log_keep:
-  # 单个筛选任务保留的 task_logs 最大条数。
-  # 超过上限后自动清理最旧日志。
-  # 约束：>= 1
-  task_per_task: 2000
-
-  # 维护日志保留最近 N 个任务的全量日志（不按单任务条数截断）。
+  # 每类任务保留最近 N 个 job（含全量日志）。
+  # 按 mode（latest_update / historical_backfill / concept_update）各保留 N 个。
   # 超出范围的旧任务记录和日志会被自动清理。
   # 约束：>= 1
-  maintenance_jobs: 10
-
-  # 概念更新日志保留最近 N 个任务的全量日志。
-  # 约束：>= 1
-  concept_jobs: 4
+  jobs_per_category: 3
 
 app:
   # 服务启动时是否预热 zsdtdx 并行抓取器进程池。

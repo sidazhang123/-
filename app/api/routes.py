@@ -29,6 +29,7 @@ from app.models.api_models import (
     ConceptStatusResponse,
     CreateTaskRequest,
     CreateTaskResponse,
+    DeleteTasksRequest,
     LogsResponse,
     MaintenanceControlResponse,
     MaintenanceCreateRequest,
@@ -771,6 +772,54 @@ def list_tasks(
     return {"items": state_db.list_tasks(offset=offset, limit=limit)}
 
 
+@router.delete("/tasks")
+def delete_tasks(body: DeleteTasksRequest, request: Request) -> dict[str, Any]:
+    """批量删除终态筛选任务及其关联日志和结果。"""
+    state_db = request.app.state.state_db
+    deleted = state_db.delete_tasks(body.task_ids)
+    return {"deleted": deleted}
+
+
+@router.get("/tasks/{task_id}/params")
+def get_task_params(task_id: str, request: Request) -> dict[str, Any]:
+    """
+    输入：
+    1. task_id: 筛选任务 ID。
+    2. request: FastAPI 请求对象。
+    输出：
+    1. 包含 group_params、param_help、run_mode 等字段的字典。
+    用途：
+    1. 读取任务参数快照；若数据库中 param_help 为空，则从当前策略清单兜底。
+    边界条件：
+    1. 策略组已被删除时 param_help 仍会为 None，前端需容忍。
+    """
+    state_db = request.app.state.state_db
+    task = state_db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+    params = task.get("params") or {}
+    param_help = params.get("param_help")
+    strategy_group_id = task.get("strategy_group_id") or ""
+    strategy_name = task.get("strategy_name") or ""
+    # 兜底：数据库中未存储 param_help 时，尝试从当前策略清单获取
+    if param_help is None and strategy_group_id:
+        registry = request.app.state.strategy_registry
+        try:
+            meta = registry.get_group_meta(strategy_group_id)
+            param_help = meta.param_help
+        except (KeyError, Exception):
+            pass
+    return {
+        "group_params": params.get("group_params") or {},
+        "param_help": param_help,
+        "strategy_group_id": strategy_group_id,
+        "strategy_name": strategy_name,
+        "run_mode": params.get("run_mode") or "full",
+        "sample_size": params.get("sample_size"),
+        "skip_coverage_filter": params.get("skip_coverage_filter"),
+    }
+
+
 @router.get("/tasks/{task_id}", response_model=TaskStatusResponse)
 def get_task(task_id: str, request: Request) -> TaskStatusResponse:
     """
@@ -1219,7 +1268,6 @@ def list_concept_jobs(
             "phase": item.get("phase"),
             "progress": item.get("progress"),
             "mode": item.get("mode"),
-            "type": item.get("type", "concept"),
             "error_message": item.get("error_message"),
         }
         for item in raw_items
@@ -1302,7 +1350,6 @@ def list_maintenance_jobs(
             "phase": item.get("phase"),
             "progress": item.get("progress"),
             "mode": item.get("mode"),
-            "type": item.get("type", "maintenance"),
             "error_message": item.get("error_message"),
         }
         for item in raw_items
@@ -1498,7 +1545,6 @@ def _maintenance_status_dict(job: dict[str, Any]) -> dict[str, Any]:
         "phase": job.get("phase"),
         "progress": float(job.get("progress") or 0.0),
         "mode": str(job.get("mode") or "latest_update"),
-        "type": job.get("type", "maintenance"),
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "error_message": job.get("error_message"),
@@ -1524,7 +1570,6 @@ def _concept_status_dict(job: dict[str, Any]) -> dict[str, Any]:
         "phase": job.get("phase"),
         "progress": float(job.get("progress") or 0.0),
         "mode": str(job.get("mode") or "concept_update"),
-        "type": job.get("type", "concept"),
         "started_at": job.get("started_at"),
         "finished_at": job.get("finished_at"),
         "error_message": job.get("error_message"),

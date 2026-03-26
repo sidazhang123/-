@@ -260,41 +260,6 @@ class TestStateDBLogCursorAndRetention(unittest.TestCase):
         self.assertEqual(processed_codes, {"000001", "000002"})
         self.assertEqual(signal_code_set, {"000001", "000003"})
 
-    def test_task_log_retention_respects_per_task_limit(self) -> None:
-        """
-        输入：
-        1. 无显式输入参数。
-        输出：
-        1. 无返回值。
-        用途：
-        1. 验证 task 日志超限后自动删除最旧记录，并同步 info/error 计数。
-        边界条件：
-        1. 保留上限通过 patch 缩小，避免测试写入过大样本。
-        """
-
-        task_id = "task-retention-case"
-        self._create_task(task_id)
-        with mock.patch("app.db.state_db.LOG_KEEP_TASK_PER_TASK", 5):
-            for idx in range(11):
-                level = "error" if idx % 3 == 0 else "info"
-                self.state_db.append_log(
-                    task_id=task_id,
-                    level=level,
-                    message=f"log-{idx}",
-                    detail={"idx": idx},
-                )
-
-        logs = self.state_db.get_logs(task_id=task_id, level="all", offset=0, limit=50)
-        self.assertEqual(len(logs), 5)
-        self.assertEqual([item["message"] for item in logs], [f"log-{idx}" for idx in range(6, 11)])
-
-        task = self.state_db.get_task(task_id)
-        self.assertIsNotNone(task)
-        info_count = sum(1 for item in logs if str(item.get("level")) == "info")
-        error_count = sum(1 for item in logs if str(item.get("level")) == "error")
-        self.assertEqual(int(task["info_log_count"]), info_count)
-        self.assertEqual(int(task["error_log_count"]), error_count)
-
     def test_maintenance_log_retention_keeps_recent_jobs_full_logs(self) -> None:
         """
         输入：
@@ -311,7 +276,7 @@ class TestStateDBLogCursorAndRetention(unittest.TestCase):
         keep_job_id = "job-retention-002"
         latest_job_id = "job-retention-003"
 
-        with mock.patch("app.db.state_db.LOG_KEEP_MAINTENANCE_JOBS", 2):
+        with mock.patch("app.db.state_db.LOG_KEEP_JOBS_PER_CATEGORY", 2):
             self._create_job(old_job_id)
             for idx in range(6):
                 self.state_db.append_maintenance_log(
@@ -420,9 +385,9 @@ class TestStateDBLogCursorAndRetention(unittest.TestCase):
         job_elapsed = time.monotonic() - job_begin
 
         self.assertEqual(len(tasks), 150)
-        # maintenance_jobs 会被 _trim_maintenance_logs 自动裁剪到保留上限
-        from app.settings import LOG_KEEP_MAINTENANCE_JOBS
-        expected_jobs = min(150, int(LOG_KEEP_MAINTENANCE_JOBS))
+        # maintenance_jobs 会被 _trim_maintenance_logs 自动裁剪到保留上限（按 mode 分组）
+        from app.settings import LOG_KEEP_JOBS_PER_CATEGORY
+        expected_jobs = min(150, int(LOG_KEEP_JOBS_PER_CATEGORY))
         self.assertEqual(len(jobs), expected_jobs)
         self.assertLess(task_elapsed, 2.0, f"list_tasks 查询耗时过高: {task_elapsed:.3f}s")
         self.assertLess(job_elapsed, 2.0, f"list_maintenance_jobs 查询耗时过高: {job_elapsed:.3f}s")
