@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from strategies.engine_commons import (
+    DetectionResult,
     StockScanResult,
     as_bool,
     as_dict,
@@ -593,6 +594,53 @@ def _scan_for_code(
     return None
 
 
+def detect_weekly_sideways(
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+) -> DetectionResult:
+    """在单只股票的周线数据上检测长期水平震荡形态。
+
+    输入：
+    1. code_frame: 单只股票的周线 OHLCV DataFrame（已按 ts 排序）。
+    2. params: 已规范化的周线参数。
+    输出：
+    1. DetectionResult，matched 表示是否命中，metrics 含通道与轮动明细。
+    用途：
+    1. 搜索最长有效窗口，返回通道参数和轮动统计。
+    2. 可被筛选编排器和未来回测引擎独立调用。
+    边界条件：
+    1. 数据不足时返回 matched=False。
+    2. 参考月过滤不在此层处理（由编排器负责）。
+    """
+    scan = _scan_for_code(code_frame=code_frame, params=params)
+    if scan is None:
+        return DetectionResult(matched=False)
+
+    channel, rotation, s_idx, e_idx = scan
+    return DetectionResult(
+        matched=True,
+        pattern_start_idx=s_idx,
+        pattern_end_idx=e_idx,
+        pattern_start_ts=code_frame.iloc[s_idx]["ts"],
+        pattern_end_ts=code_frame.iloc[e_idx]["ts"],
+        metrics={
+            "channel": {
+                "upper_level": channel.upper_level,
+                "lower_level": channel.lower_level,
+                "range_pct": channel.range_pct,
+                "upper_slope_unit": channel.upper_slope_unit,
+                "lower_slope_unit": channel.lower_slope_unit,
+                "fit_error": channel.fit_error,
+            },
+            "rotation": {
+                "rotation_count": rotation.rotation_count,
+                "swing_count": rotation.swing_count,
+                "swing_details": rotation.swing_details,
+            },
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # 参考月比较
 # ---------------------------------------------------------------------------
@@ -627,6 +675,81 @@ def _check_reference_low(
 # ---------------------------------------------------------------------------
 
 
+def build_weekly_sideways_payload(
+    *,
+    code_frame: pd.DataFrame,
+    detection_result: DetectionResult,
+) -> dict[str, Any]:
+    """根据检测结果组装前端渲染 payload（含 overlay_lines）。
+
+    输入：
+    1. code_frame: 该股票的周线 DataFrame。
+    2. detection_result: detect_weekly_sideways 返回的 DetectionResult（matched=True）。
+    输出：
+    1. 符合图表渲染合同的 payload dict，包含 overlay_lines 和通道/轮动明细。
+    边界条件：
+    1. 仅在命中时调用。
+    """
+    m = detection_result.metrics
+    s_idx = detection_result.pattern_start_idx
+    e_idx = detection_result.pattern_end_idx
+    channel = m["channel"]
+    rotation = m["rotation"]
+
+    window_start_ts = code_frame.iloc[s_idx]["ts"]
+    window_end_ts = code_frame.iloc[e_idx]["ts"]
+
+    # 图表区间：整个窗口 + 向前延伸 10% 以提供上下文
+    window_bars = e_idx - s_idx + 1
+    extra_bars = max(int(window_bars * 0.1), 3)
+    chart_start_idx = max(s_idx - extra_bars, 0)
+    chart_interval_start_ts = code_frame.iloc[chart_start_idx]["ts"]
+    chart_interval_end_ts = code_frame.iloc[e_idx]["ts"]
+
+    # 构建 overlay_lines（两条水平实线）
+    overlay_lines = [
+        {
+            "label": "上沿",
+            "start_ts": window_start_ts,
+            "start_price": channel["upper_level"],
+            "end_ts": window_end_ts,
+            "end_price": channel["upper_level"],
+            "color": "#ef4444",
+            "dash": False,
+        },
+        {
+            "label": "下沿",
+            "start_ts": window_start_ts,
+            "start_price": channel["lower_level"],
+            "end_ts": window_end_ts,
+            "end_price": channel["lower_level"],
+            "color": "#22c55e",
+            "dash": False,
+        },
+    ]
+
+    # 构建诊断信息
+    window_start_date = pd.Timestamp(window_start_ts)
+    window_end_date = pd.Timestamp(window_end_ts)
+    duration_months = round((window_end_date - window_start_date).days / _DAYS_PER_MONTH, 1)
+
+    signal_label = f"周线水平震荡 {duration_months}月"
+
+    return {
+        "window_start_ts": window_start_ts,
+        "window_end_ts": window_end_ts,
+        "chart_interval_start_ts": chart_interval_start_ts,
+        "chart_interval_end_ts": chart_interval_end_ts,
+        "anchor_day_ts": window_end_ts,
+        "overlay_lines": overlay_lines,
+        "signal_summary": signal_label,
+        "channel": channel,
+        "rotation": rotation,
+        "duration_months": duration_months,
+        "window_bars": window_bars,
+    }
+
+
 def _scan_one_code(
     *,
     code: str,
@@ -655,14 +778,11 @@ def _scan_one_code(
     stats = {"candidate": 0, "kept": 0}
     total_bars = len(code_frame)
 
-    scan = _scan_for_code(
-        code_frame=code_frame,
-        params=weekly_params,
-    )
+    result = detect_weekly_sideways(code_frame, weekly_params)
 
     stats["candidate"] = 1
 
-    if scan is None:
+    if not result.matched:
         return StockScanResult(
             code=code,
             name=name,
@@ -671,12 +791,11 @@ def _scan_one_code(
             signals=[],
         ), stats
 
-    channel, rotation, s_idx, e_idx = scan
-
     # 参考月过滤
     if ref_params["enabled"]:
+        channel = result.metrics["channel"]
         ref_low = ref_low_map.get(code)
-        if not _check_reference_low(channel.lower_level, ref_low, ref_params):
+        if not _check_reference_low(channel["lower_level"], ref_low, ref_params):
             return StockScanResult(
                 code=code,
                 name=name,
@@ -685,79 +804,20 @@ def _scan_one_code(
                 signals=[],
             ), stats
 
-    # 构建展示数据
-    window_start_ts = code_frame.iloc[s_idx]["ts"]
-    window_end_ts = code_frame.iloc[e_idx]["ts"]
-
-    # 图表区间：整个窗口 + 向前延伸 10% 以提供上下文
-    window_bars = e_idx - s_idx + 1
-    extra_bars = max(int(window_bars * 0.1), 3)
-    chart_start_idx = max(s_idx - extra_bars, 0)
-    chart_interval_start_ts = code_frame.iloc[chart_start_idx]["ts"]
-    chart_interval_end_ts = code_frame.iloc[e_idx]["ts"]
-
-    # 构建 overlay_lines（两条水平实线）
-    overlay_lines = [
-        {
-            "label": "上沿",
-            "start_ts": window_start_ts,
-            "start_price": channel.upper_level,
-            "end_ts": window_end_ts,
-            "end_price": channel.upper_level,
-            "color": "#ef4444",
-            "dash": False,
-        },
-        {
-            "label": "下沿",
-            "start_ts": window_start_ts,
-            "start_price": channel.lower_level,
-            "end_ts": window_end_ts,
-            "end_price": channel.lower_level,
-            "color": "#22c55e",
-            "dash": False,
-        },
-    ]
-
-    # 构建诊断信息
-    window_start_date = pd.Timestamp(window_start_ts)
-    window_end_date = pd.Timestamp(window_end_ts)
-    duration_months = round((window_end_date - window_start_date).days / _DAYS_PER_MONTH, 1)
-
-    signal_label = f"周线水平震荡 {duration_months}月"
-
-    payload: dict[str, Any] = {
-        "window_start_ts": window_start_ts,
-        "window_end_ts": window_end_ts,
-        "chart_interval_start_ts": chart_interval_start_ts,
-        "chart_interval_end_ts": chart_interval_end_ts,
-        "anchor_day_ts": window_end_ts,
-        "overlay_lines": overlay_lines,
-        "signal_summary": signal_label,
-        "channel": {
-            "upper_level": channel.upper_level,
-            "lower_level": channel.lower_level,
-            "range_pct": channel.range_pct,
-            "upper_slope_unit": channel.upper_slope_unit,
-            "lower_slope_unit": channel.lower_slope_unit,
-            "fit_error": channel.fit_error,
-        },
-        "rotation": {
-            "rotation_count": rotation.rotation_count,
-            "swing_count": rotation.swing_count,
-            "swing_details": rotation.swing_details,
-        },
-        "duration_months": duration_months,
-        "window_bars": window_bars,
-    }
+    # 构建 payload
+    payload = build_weekly_sideways_payload(
+        code_frame=code_frame,
+        detection_result=result,
+    )
 
     signal = build_signal_dict(
         code=code,
         name=name,
-        signal_dt=window_end_ts,
+        signal_dt=payload["window_end_ts"],
         clock_tf="w",
         strategy_group_id=strategy_group_id,
         strategy_name=strategy_name,
-        signal_label=signal_label,
+        signal_label=payload["signal_summary"],
         payload=payload,
     )
 

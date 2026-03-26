@@ -26,6 +26,7 @@ from typing import Any
 import pandas as pd
 
 from strategies.engine_commons import (
+    DetectionResult,
     StockScanResult,
     as_bool,
     as_dict,
@@ -215,8 +216,8 @@ def _load_bars(
 # ---------------------------------------------------------------------------
 
 
-def _prepare_features(frame: pd.DataFrame, params: dict[str, Any]) -> pd.DataFrame:
-    """计算主 MA、偏离 MA 及百分比斜率列。
+def prepare_multi_tf_ma_features(frame: pd.DataFrame, params: dict[str, Any]) -> pd.DataFrame:
+    """计算主 MA、偏离 MA 及百分比斜率列（列式特征预计算）。
 
     输入：
     1. frame: 按 code+ts 排序的 OHLCV DataFrame。
@@ -224,7 +225,8 @@ def _prepare_features(frame: pd.DataFrame, params: dict[str, Any]) -> pd.DataFra
     输出：
     1. 返回新增 `ma`、`ma_dev`（偏离 MA）、`slope_pct` 列后的 DataFrame。
     用途：
-    1. 为后续逐股扫描提供统一特征列。
+    1. 筛选模式：数据加载后调用一次，后续 detect 直接使用已计算的特征列。
+    2. 回测模式：调用一次后滑窗 N 次 detect，避免重复计算 MA/斜率。
     边界条件：
     1. 空表直接原样返回。
     2. 偏离 MA 仅在 close_deviation_enabled 为 True 时计算（否则与 ma 相同）。
@@ -377,56 +379,66 @@ def _check_consolidation(code_frame: pd.DataFrame, params: dict[str, Any]) -> tu
 # ---------------------------------------------------------------------------
 
 
-def _check_tf_conditions(
+def detect_multi_tf_ma_uptrend(
     code_frame: pd.DataFrame,
     params: dict[str, Any],
     tf_key: str,
-) -> tuple[bool, dict[str, Any]]:
+) -> DetectionResult:
     """对单只股票的单个周期执行全部条件检查。
 
     输入：
-    1. code_frame: 单只股票在该周期的特征 DataFrame。
+    1. code_frame: 单只股票在该周期的特征 DataFrame（含 ma/slope_pct/ma_dev 列）。
     2. params: 已规范化的单周期参数。
     3. tf_key: 周期标识。
     输出：
-    1. (是否全部通过, 检查结果明细 dict)。
+    1. DetectionResult，matched 表示是否全部通过，metrics 含斜率/偏离/收敛明细。
     用途：
     1. 汇总必选 + 可选条件结果。
+    2. 可被筛选编排器和未来回测引擎独立调用。
     边界条件：
-    1. 数据为空直接返回 False。
+    1. code_frame 必须已包含特征列（由 prepare_multi_tf_ma_features 预计算）。
+    2. 数据为空直接返回 matched=False。
     """
-    detail: dict[str, Any] = {"tf": tf_key, "enabled": True, "passed": False}
+    metrics: dict[str, Any] = {"tf": tf_key, "enabled": True}
 
     if code_frame.empty:
-        detail["reason"] = "无数据"
-        return False, detail
+        metrics["reason"] = "无数据"
+        return DetectionResult(matched=False, metrics=metrics)
 
     # 必选：斜率检查
     slope_ok, slope_values, slope_reason = _check_slope(code_frame, params)
-    detail["slope_passed"] = slope_ok
-    detail["slope_values"] = [round(v, 4) for v in slope_values]
+    metrics["slope_passed"] = slope_ok
+    metrics["slope_values"] = [round(v, 4) for v in slope_values]
     if not slope_ok:
-        detail["reason"] = slope_reason
-        return False, detail
+        metrics["reason"] = slope_reason
+        return DetectionResult(matched=False, metrics=metrics)
 
     # 可选：收盘偏离
     dev_ok, dev_pct, dev_reason = _check_close_deviation(code_frame, params)
-    detail["close_deviation_passed"] = dev_ok
-    detail["close_deviation_pct"] = round(dev_pct, 4)
+    metrics["close_deviation_passed"] = dev_ok
+    metrics["close_deviation_pct"] = round(dev_pct, 4)
     if not dev_ok:
-        detail["reason"] = dev_reason
-        return False, detail
+        metrics["reason"] = dev_reason
+        return DetectionResult(matched=False, metrics=metrics)
 
     # 可选：收敛震荡
     cons_ok, cons_pct, cons_reason = _check_consolidation(code_frame, params)
-    detail["consolidation_passed"] = cons_ok
-    detail["consolidation_amp_pct"] = round(cons_pct, 4)
+    metrics["consolidation_passed"] = cons_ok
+    metrics["consolidation_amp_pct"] = round(cons_pct, 4)
     if not cons_ok:
-        detail["reason"] = cons_reason
-        return False, detail
+        metrics["reason"] = cons_reason
+        return DetectionResult(matched=False, metrics=metrics)
 
-    detail["passed"] = True
-    return True, detail
+    n = int(params["n"])
+    i = len(code_frame) - 1
+    return DetectionResult(
+        matched=True,
+        pattern_start_idx=max(i - n + 1, 0),
+        pattern_end_idx=i,
+        pattern_start_ts=code_frame.iloc[max(i - n + 1, 0)]["ts"],
+        pattern_end_ts=code_frame.iloc[i]["ts"],
+        metrics=metrics,
+    )
 
 
 
@@ -453,6 +465,49 @@ def _build_signal_label(enabled_tfs: list[str], per_tf_detail: dict[str, dict[st
         latest_slope = f"{slopes[-1]:.1f}%" if slopes else "n/a"
         parts.append(f"{_TF_LABEL.get(tf, tf)}MA{ma_period}斜率{latest_slope}")
     return " + ".join(parts) if parts else STRATEGY_LABEL
+
+
+def build_multi_tf_ma_uptrend_payload(
+    *,
+    enabled_tfs: list[str],
+    per_tf_detail: dict[str, dict[str, Any]],
+    tf_data: dict[str, pd.DataFrame],
+    all_params: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """根据各周期检测结果组装前端渲染 payload。
+
+    输入：
+    1. enabled_tfs: 已启用的周期 key 列表（全部通过）。
+    2. per_tf_detail: 各周期检查结果 dict。
+    3. tf_data: 各周期的 DataFrame。
+    4. all_params: 各周期的已规范化参数。
+    输出：
+    1. 符合图表渲染合同的 payload dict。
+    边界条件：
+    1. 仅在全部周期通过时调用。
+    """
+    clock_tf = coarsest_tf(enabled_tfs)
+    clock_frame = tf_data[clock_tf]
+    latest_ts = clock_frame.iloc[-1]["ts"]
+
+    # 展示窗口 = 最粗周期的最近 n 根线
+    n_coarsest = int(all_params[clock_tf]["n"])
+    window_start_idx = max(len(clock_frame) - n_coarsest, 0)
+    window_start_ts = clock_frame.iloc[window_start_idx]["ts"]
+    window_end_ts = latest_ts
+
+    signal_label = _build_signal_label(enabled_tfs, per_tf_detail, all_params)
+
+    return {
+        "window_start_ts": window_start_ts,
+        "window_end_ts": window_end_ts,
+        "chart_interval_start_ts": window_start_ts,
+        "chart_interval_end_ts": window_end_ts,
+        "anchor_day_ts": latest_ts,
+        "enabled_timeframes": enabled_tfs,
+        "per_tf": per_tf_detail,
+        "signal_summary": signal_label,
+    }
 
 
 def _scan_one_code(
@@ -486,9 +541,10 @@ def _scan_one_code(
     for tf in enabled_tfs:
         frame = tf_data.get(tf, pd.DataFrame())
         params = all_params[tf]
-        passed, detail = _check_tf_conditions(frame, params, tf)
+        result = detect_multi_tf_ma_uptrend(frame, params, tf)
+        detail = {"passed": result.matched, **result.metrics}
         per_tf_detail[tf] = detail
-        if not passed:
+        if not result.matched:
             all_passed = False
             break
 
@@ -504,37 +560,22 @@ def _scan_one_code(
 
     # 全部通过 → 生成信号
     stats["kept"] = 1
+    payload = build_multi_tf_ma_uptrend_payload(
+        enabled_tfs=enabled_tfs,
+        per_tf_detail=per_tf_detail,
+        tf_data=tf_data,
+        all_params=all_params,
+    )
     clock_tf = coarsest_tf(enabled_tfs)
-    clock_frame = tf_data[clock_tf]
-    latest_ts = clock_frame.iloc[-1]["ts"]
-
-    # 展示窗口 = 最粗周期的最近 n 根线
-    n_coarsest = int(all_params[clock_tf]["n"])
-    window_start_idx = max(len(clock_frame) - n_coarsest, 0)
-    window_start_ts = clock_frame.iloc[window_start_idx]["ts"]
-    window_end_ts = latest_ts
-
-    signal_label = _build_signal_label(enabled_tfs, per_tf_detail, all_params)
-
-    payload: dict[str, Any] = {
-        "window_start_ts": window_start_ts,
-        "window_end_ts": window_end_ts,
-        "chart_interval_start_ts": window_start_ts,
-        "chart_interval_end_ts": window_end_ts,
-        "anchor_day_ts": latest_ts,
-        "enabled_timeframes": enabled_tfs,
-        "per_tf": per_tf_detail,
-        "signal_summary": signal_label,
-    }
 
     signal = build_signal_dict(
         code=code,
         name=name,
-        signal_dt=latest_ts,
+        signal_dt=payload["anchor_day_ts"],
         clock_tf=clock_tf,
         strategy_group_id=strategy_group_id,
         strategy_name=strategy_name,
-        signal_label=signal_label,
+        signal_label=payload["signal_summary"],
         payload=payload,
     )
 
@@ -638,7 +679,7 @@ def run_multi_tf_ma_uptrend_v1_specialized(
         tf_load_times[tf] = round(time.perf_counter() - t0, 4)
 
         if not frame.empty:
-            frame = _prepare_features(frame, params)
+            frame = prepare_multi_tf_ma_features(frame, params)
         tf_frames[tf] = frame
 
     base_metrics["load_times"] = tf_load_times

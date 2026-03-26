@@ -6,8 +6,16 @@
 
 复制模板后的推荐顺序：
 1. 先改 `manifest.json` 的 `id/name/description/module/specialized_entry`。
-2. 再改本文件中的 `STRATEGY_LABEL`、默认参数、参数规范化函数和 `_scan_one_code()`。
-3. 只在确实需要 backtrader 回退时才去改 `strategy.py`。
+2. 再改本文件中的 `STRATEGY_LABEL`、默认参数、参数规范化函数。
+3. 实现三层函数：`detect_xxx` → `build_xxx_payload`，并在 `_scan_one_code` 中调用。
+4. 只在确实需要 backtrader 回退时才去改 `strategy.py`。
+
+三层架构（所有 specialized 策略必须遵循）：
+  prepare_xxx_features(bars, params) → enriched DataFrame（可选，仅当需要预计算指标时）
+  detect_xxx(bars, params)            → DetectionResult（纯检测，不含 I/O）
+  build_xxx_payload(result, ...)      → dict（组装前端信号 payload）
+  _scan_one_code()                    → 编排层，调用上述三层函数
+此设计让 detect 层可独立用于回测/单元测试，不依赖数据库或前端结构。
 
 强约束：
 1. 主入口签名保持 keyword-only，不要改成位置参数风格。
@@ -36,6 +44,7 @@ import duckdb
 import pandas as pd
 
 from strategies.engine_commons import (
+    DetectionResult,
     StockScanResult,
     as_bool,
     as_dict,
@@ -165,7 +174,95 @@ def _load_daily_bars(
 
 
 # ---------------------------------------------------------------------------
-# 单股扫描
+# 检测层：纯检测逻辑，不含 I/O，可独立用于回测和单元测试
+# ---------------------------------------------------------------------------
+
+def detect_strategy_2(
+    daily_frame: pd.DataFrame,
+    params: dict[str, Any],
+) -> DetectionResult:
+    """对单只股票的日线数据执行核心检测。
+
+    输入：
+    1. daily_frame: 单只股票的日线 DataFrame（已按时间排序）。
+    2. params: 已规范化的策略参数。
+    输出：
+    1. DetectionResult：matched=True 表示命中；metrics 中存放诊断指标。
+    边界条件：
+    1. 数据不足时直接返回 matched=False。
+
+    TODO: 复制模板后，在此实现你的核心筛选规则。
+    """
+    if daily_frame.empty:
+        return DetectionResult(matched=False)
+
+    # ---- 示例框架（替换为你的实际规则）----
+    # example_param = params["example_param"]
+    # ... 计算指标 ...
+    # if condition_met:
+    #     return DetectionResult(
+    #         matched=True,
+    #         pattern_start_idx=start_idx,
+    #         pattern_end_idx=end_idx,
+    #         metrics={"your_metric": value},
+    #     )
+    return DetectionResult(matched=False)
+
+
+# ---------------------------------------------------------------------------
+# 信号组装层：将检测结果转换为前端 payload
+# ---------------------------------------------------------------------------
+
+def build_strategy_2_payload(
+    *,
+    code: str,
+    name: str,
+    result: DetectionResult,
+    daily_frame: pd.DataFrame,
+    strategy_group_id: str,
+    strategy_name: str,
+) -> dict[str, Any]:
+    """将 DetectionResult 组装为标准信号 payload。
+
+    输入：
+    1. result: detect_strategy_2 返回的 DetectionResult。
+    2. daily_frame: 用于提取时间戳窗口。
+    输出：
+    1. 标准 signal dict，可直接写入 StockScanResult.signals。
+
+    TODO: 复制模板后，根据策略需要填充 payload 字段。
+    """
+    # 示例：从 pattern 索引提取时间窗口
+    # s_idx = result.pattern_start_idx or 0
+    # e_idx = result.pattern_end_idx or (len(daily_frame) - 1)
+    # window_start_ts = daily_frame.iloc[s_idx]["day_ts"]
+    # window_end_ts = daily_frame.iloc[e_idx]["day_ts"]
+
+    last_row = daily_frame.iloc[-1]
+    signal_dt = last_row["day_ts"]
+
+    return build_signal_dict(
+        code=code,
+        name=name,
+        signal_dt=signal_dt,
+        clock_tf="d",
+        strategy_group_id=strategy_group_id,
+        strategy_name=strategy_name,
+        signal_label=STRATEGY_LABEL,
+        payload={
+            # TODO: 替换为你的实际 payload 字段
+            # "window_start_ts": window_start_ts,
+            # "window_end_ts": window_end_ts,
+            # "chart_interval_start_ts": ...,
+            # "chart_interval_end_ts": ...,
+            # "overlay_lines": [],
+            **result.metrics,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# 单股扫描（编排层）
 # ---------------------------------------------------------------------------
 
 def _scan_one_code(
@@ -177,9 +274,7 @@ def _scan_one_code(
     strategy_group_id: str,
     strategy_name: str,
 ) -> tuple[StockScanResult, dict[str, int]]:
-    """扫描单只股票，返回 `(扫描结果, 统计信息)`。
-
-    这是后续 AI 真正编写策略规则的核心位置。
+    """编排层：调用 detect → build_payload，返回 `(扫描结果, 统计信息)`。
 
     输入：
     1. code/name: 当前股票标识。
@@ -192,8 +287,7 @@ def _scan_one_code(
     边界条件：
     1. 单股逻辑应允许返回 0 个信号；这不代表异常。
     2. 如果你在这里抛异常，主入口会把它转成单股错误，而不是终止整个任务。
-
-    TODO: 在此实现你的核心筛选规则。
+    3. 核心检测逻辑应放在 `detect_strategy_2` 中，此处只做编排。
     """
     stats = {
         "processed_bars": len(daily_frame),
@@ -203,48 +297,20 @@ def _scan_one_code(
 
     signals: list[dict[str, Any]] = []
 
-    # ---- 示例框架逻辑（复制模板后必须替换为你的实际规则）----
-    #
-    # for idx, row in daily_frame.iterrows():
-    #     if your_condition(row, daily_params):
-    #         stats["candidate_count"] += 1
-    #
-    #         # 可选：构建 overlay_lines，用于在 K 线图上绘制辅助线
-    #         # 前端会自动识别 payload 中的 overlay_lines 字段，
-    #         # 通过 ECharts markLine 在蜡烛图上渲染斜线/水平线。
-    #         # 典型用途：趋势线、支撑/阻力线、通道上下沿、三角形边界线等。
-    #         # overlay_lines = [
-    #         #     {
-    #         #         "label": "上沿",          # 线条标签，显示在起点
-    #         #         "start_ts": ...,          # 起点时间戳（datetime）
-    #         #         "start_price": ...,       # 起点价格（float）
-    #         #         "end_ts": ...,            # 终点时间戳（datetime）
-    #         #         "end_price": ...,         # 终点价格（float）
-    #         #         "color": "#ef4444",       # 可选，默认 #fbbf24
-    #         #         "dash": True,             # 可选，是否虚线，默认 True
-    #         #     },
-    #         # ]
-    #
-    #         signal = build_signal_dict(
-    #             code=code,
-    #             name=name,
-    #             signal_dt=row["day_ts"],
-    #             clock_tf="d",
-    #             strategy_group_id=strategy_group_id,
-    #             strategy_name=strategy_name,
-    #             signal_label=STRATEGY_LABEL,
-    #             payload={
-    #                 "window_start_ts": ...,        # 当前单次信号的命中窗口起点
-    #                 "window_end_ts": ...,          # 当前单次信号的命中窗口终点
-    #                 "chart_interval_start_ts": ...,
-    #                 "chart_interval_end_ts": ...,
-    #                 "anchor_day_ts": ...,          # 可选：红点锚点时间
-    #                 "overlay_lines": [],           # 可选：K 线图辅助线列表
-    #                 "your_custom_field": ...,
-    #             },
-    #         )
-    #         signals.append(signal)
-    #         stats["kept_count"] += 1
+    # ---- 三层调用：detect → build_payload ----
+    result = detect_strategy_2(daily_frame, daily_params)
+    if result.matched:
+        stats["candidate_count"] += 1
+        signal = build_strategy_2_payload(
+            code=code,
+            name=name,
+            result=result,
+            daily_frame=daily_frame,
+            strategy_group_id=strategy_group_id,
+            strategy_name=strategy_name,
+        )
+        signals.append(signal)
+        stats["kept_count"] += 1
 
     return StockScanResult(
         code=code,

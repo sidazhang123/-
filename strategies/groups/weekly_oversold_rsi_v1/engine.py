@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 
 from strategies.engine_commons import (
+    DetectionResult,
     StockScanResult,
     as_bool,
     as_dict,
@@ -162,6 +163,133 @@ def _compute_rsi_series(closes: np.ndarray, period: int) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# 三层架构：特征预计算 / 检测 / payload 组装
+# ---------------------------------------------------------------------------
+
+
+def prepare_weekly_rsi_features(code_frame: pd.DataFrame, params: dict[str, Any]) -> pd.DataFrame:
+    """计算 RSI 列（列式特征预计算）。
+
+    输入：
+    1. code_frame: 单只股票的全量周线 DataFrame（已按 ts 排序，含 close 列）。
+    2. params: 已规范化的 RSI 参数。
+    输出：
+    1. 返回增加了 rsi 列的 DataFrame。
+    用途：
+    1. 筛选模式：逐股调用后传入 detect_weekly_rsi。
+    2. 回测模式：调用一次后滑窗 N 次 detect，避免重复计算 RSI。
+    边界条件：
+    1. 空 DataFrame 直接返回。
+    """
+    if code_frame.empty:
+        return code_frame
+    rsi_period = int(params["rsi_period"])
+    closes = code_frame["close"].values.astype(np.float64)
+    rsi_series = _compute_rsi_series(closes, rsi_period)
+    result = code_frame.copy()
+    result["rsi"] = rsi_series
+    return result
+
+
+def detect_weekly_rsi(code_frame: pd.DataFrame, params: dict[str, Any]) -> DetectionResult:
+    """检测最新周线 RSI 是否处于历史性超跌区域。
+
+    输入：
+    1. code_frame: 单只股票的全量周线 DataFrame（已按 ts 排序，含 rsi 列）。
+    2. params: 已规范化的 RSI 参数。
+    输出：
+    1. DetectionResult，matched 表示是否命中，metrics 含 latest_rsi 与 historical_min_rsi。
+    用途：
+    1. 判断最新 RSI 是否同时低于阈值和历史最低 RSI 比例。
+    2. 可被筛选编排器和未来回测引擎独立调用。
+    边界条件：
+    1. code_frame 必须已包含 rsi 列（由 prepare_weekly_rsi_features 预计算）。
+    2. 有效 RSI 值为空或最新 RSI 为 NaN 时返回 matched=False。
+    """
+    rsi_threshold = float(params["rsi_threshold"])
+    historical_ratio = float(params["historical_ratio_pct"])
+
+    rsi_values = code_frame["rsi"].values
+    latest_rsi = float(rsi_values[-1])
+    if np.isnan(latest_rsi):
+        return DetectionResult(matched=False, metrics={"reason": "最新RSI为NaN"})
+
+    valid_rsi = rsi_values[~np.isnan(rsi_values)]
+    if len(valid_rsi) == 0:
+        return DetectionResult(matched=False, metrics={"reason": "无有效RSI值"})
+
+    historical_min_rsi = float(valid_rsi.min())
+    metrics = {
+        "latest_rsi": round(latest_rsi, 2),
+        "historical_min_rsi": round(historical_min_rsi, 2),
+    }
+
+    passed = (latest_rsi < rsi_threshold) and (latest_rsi <= historical_min_rsi * historical_ratio)
+    if not passed:
+        return DetectionResult(matched=False, metrics=metrics)
+
+    i = len(code_frame) - 1
+    return DetectionResult(
+        matched=True,
+        pattern_start_idx=i,
+        pattern_end_idx=i,
+        pattern_start_ts=code_frame.iloc[i]["ts"],
+        pattern_end_ts=code_frame.iloc[i]["ts"],
+        metrics=metrics,
+    )
+
+
+def build_weekly_rsi_payload(
+    *,
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+    detection_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    """根据检测结果组装前端渲染 payload。
+
+    输入：
+    1. code_frame: 该股票的全量周线 DataFrame。
+    2. params: 已规范化的 RSI 参数。
+    3. detection_metrics: detect_weekly_rsi 返回的 metrics dict。
+    输出：
+    1. 符合图表渲染合同的 payload dict。
+    边界条件：
+    1. 仅在命中时调用。
+    """
+    total_bars = len(code_frame)
+    latest_ts = code_frame.iloc[-1]["ts"]
+    rsi_period = int(params["rsi_period"])
+    rsi_threshold = float(params["rsi_threshold"])
+    historical_ratio = float(params["historical_ratio_pct"])
+    latest_rsi = detection_metrics["latest_rsi"]
+    historical_min_rsi = detection_metrics["historical_min_rsi"]
+
+    # 图表区间：最近 60 根周线
+    chart_bars = 60
+    chart_start_idx = max(total_bars - chart_bars, 0)
+    chart_interval_start_ts = code_frame.iloc[chart_start_idx]["ts"]
+    chart_interval_end_ts = latest_ts
+
+    signal_label = f"周线RSI{rsi_period}={latest_rsi:.1f}(历史最低{historical_min_rsi:.1f})"
+
+    return {
+        "window_start_ts": chart_interval_start_ts,
+        "window_end_ts": chart_interval_end_ts,
+        "chart_interval_start_ts": chart_interval_start_ts,
+        "chart_interval_end_ts": chart_interval_end_ts,
+        "anchor_day_ts": latest_ts,
+        "hit_timeframes": ["w"],
+        "latest_rsi": latest_rsi,
+        "historical_min_rsi": historical_min_rsi,
+        "rsi_period": rsi_period,
+        "rsi_threshold": rsi_threshold,
+        "historical_ratio": round(historical_ratio, 4),
+        "total_weekly_bars": total_bars,
+        "signal_summary": signal_label,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 单股扫描
 # ---------------------------------------------------------------------------
 
@@ -192,8 +320,6 @@ def _scan_one_code(
     stats = {"candidate": 1, "kept": 0}
     total_bars = len(code_frame)
     rsi_period = int(params["rsi_period"])
-    rsi_threshold = float(params["rsi_threshold"])
-    historical_ratio = float(params["historical_ratio_pct"])
 
     if total_bars <= rsi_period:
         return StockScanResult(
@@ -201,72 +327,33 @@ def _scan_one_code(
             signal_count=0, signals=[],
         ), stats
 
-    closes = code_frame["close"].values.astype(np.float64)
-    rsi_series = _compute_rsi_series(closes, rsi_period)
+    # Layer 1: 特征预计算
+    enriched = prepare_weekly_rsi_features(code_frame, params)
 
-    # 最近一根 RSI
-    latest_rsi = float(rsi_series[-1])
-    if np.isnan(latest_rsi):
+    # Layer 2: 检测
+    result = detect_weekly_rsi(enriched, params)
+    if not result.matched:
         return StockScanResult(
             code=code, name=name, processed_bars=total_bars,
             signal_count=0, signals=[],
         ), stats
 
-    # 历史最低 RSI（排除 NaN）
-    valid_rsi = rsi_series[~np.isnan(rsi_series)]
-    if len(valid_rsi) == 0:
-        return StockScanResult(
-            code=code, name=name, processed_bars=total_bars,
-            signal_count=0, signals=[],
-        ), stats
-
-    historical_min_rsi = float(valid_rsi.min())
-
-    # 命中条件
-    passed = (latest_rsi < rsi_threshold) and (latest_rsi <= historical_min_rsi * historical_ratio)
-
-    if not passed:
-        return StockScanResult(
-            code=code, name=name, processed_bars=total_bars,
-            signal_count=0, signals=[],
-        ), stats
-
-    # 命中 → 生成信号
+    # Layer 3: payload 组装
     stats["kept"] = 1
-
-    latest_ts = code_frame.iloc[-1]["ts"]
-
-    # 图表区间：最近 60 根周线
-    chart_bars = 60
-    chart_start_idx = max(total_bars - chart_bars, 0)
-    chart_interval_start_ts = code_frame.iloc[chart_start_idx]["ts"]
-    chart_interval_end_ts = latest_ts
-
-    signal_label = f"周线RSI{rsi_period}={latest_rsi:.1f}(历史最低{historical_min_rsi:.1f})"
-
-    payload: dict[str, Any] = {
-        "window_start_ts": chart_interval_start_ts,
-        "window_end_ts": chart_interval_end_ts,
-        "chart_interval_start_ts": chart_interval_start_ts,
-        "chart_interval_end_ts": chart_interval_end_ts,
-        "anchor_day_ts": latest_ts,
-        "hit_timeframes": ["w"],
-        "latest_rsi": round(latest_rsi, 2),
-        "historical_min_rsi": round(historical_min_rsi, 2),
-        "rsi_period": rsi_period,
-        "rsi_threshold": rsi_threshold,
-        "historical_ratio": round(historical_ratio, 4),
-        "total_weekly_bars": total_bars,
-    }
+    payload = build_weekly_rsi_payload(
+        code_frame=enriched,
+        params=params,
+        detection_metrics=result.metrics,
+    )
 
     signal = build_signal_dict(
         code=code,
         name=name,
-        signal_dt=latest_ts,
+        signal_dt=payload["anchor_day_ts"],
         clock_tf="w",
         strategy_group_id=strategy_group_id,
         strategy_name=strategy_name,
-        signal_label=signal_label,
+        signal_label=payload["signal_summary"],
         payload=payload,
     )
 

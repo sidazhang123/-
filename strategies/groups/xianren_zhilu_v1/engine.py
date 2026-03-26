@@ -21,6 +21,7 @@ from typing import Any
 import pandas as pd
 
 from strategies.engine_commons import (
+    DetectionResult,
     StockScanResult,
     as_bool,
     as_dict,
@@ -131,8 +132,20 @@ def _load_bars(
 # ---------------------------------------------------------------------------
 
 
-def _prepare_features(frame: pd.DataFrame, params: dict[str, Any]) -> pd.DataFrame:
-    """计算 MA 均线列。"""
+def prepare_xianren_zhilu_features(frame: pd.DataFrame, params: dict[str, Any]) -> pd.DataFrame:
+    """计算 MA 均线列（列式特征预计算）。
+
+    输入：
+    1. frame: 含多只股票的 OHLCV DataFrame（已按 code+ts 排序）。
+    2. params: 已规范化的单周期参数。
+    输出：
+    1. 返回增加了 ma 列的 DataFrame。
+    用途：
+    1. 筛选模式：数据加载后调用一次，后续 detect_xianren_zhilu 直接使用已计算的 ma 列。
+    2. 回测模式：调用一次后滑窗 N 次 detect，避免重复计算 MA。
+    边界条件：
+    1. 空 DataFrame 直接返回。
+    """
     if frame.empty:
         return frame
 
@@ -150,15 +163,25 @@ def _prepare_features(frame: pd.DataFrame, params: dict[str, Any]) -> pd.DataFra
 # ---------------------------------------------------------------------------
 
 
-def _check_xianren_zhilu(
+def detect_xianren_zhilu(
     code_frame: pd.DataFrame,
     params: dict[str, Any],
-) -> tuple[bool, dict[str, Any]]:
+) -> DetectionResult:
     """检测最新一根K线是否满足仙人指路形态。
 
-    返回 (是否命中, 检测明细 dict)。
+    输入：
+    1. code_frame: 单只股票在该周期的 OHLCV DataFrame（已按 ts 排序，含 ma 列）。
+    2. params: 已规范化的单周期参数。
+    输出：
+    1. DetectionResult，matched 表示是否命中，metrics 含上影线比值、量比、均线衰减比等明细。
+    用途：
+    1. 检测最新一根K线是否满足仙人指路三条件。
+    2. 可被筛选编排器和未来回测引擎独立调用。
+    边界条件：
+    1. code_frame 必须已包含 ma 列（由 prepare_xianren_zhilu_features 预计算）。
+    2. 数据不足时返回 matched=False。
     """
-    detail: dict[str, Any] = {"passed": False}
+    metrics: dict[str, Any] = {}
 
     shadow_ratio = float(params["shadow_ratio"])
     volume_multiplier = float(params["volume_multiplier"])
@@ -168,16 +191,16 @@ def _check_xianren_zhilu(
     # 数据量检查：至少需要 lookback_bars + ma_period 根线
     min_bars = lookback_bars + ma_period
     if len(code_frame) < min_bars:
-        detail["reason"] = f"数据不足，需 {min_bars} 根，仅有 {len(code_frame)} 根"
-        return False, detail
+        metrics["reason"] = f"数据不足，需 {min_bars} 根，仅有 {len(code_frame)} 根"
+        return DetectionResult(matched=False, metrics=metrics)
 
     i = len(code_frame) - 1
     current = code_frame.iloc[i]
     current_ma = current["ma"]
 
     if pd.isna(current_ma):
-        detail["reason"] = "当前MA值无效"
-        return False, detail
+        metrics["reason"] = "当前MA值无效"
+        return DetectionResult(matched=False, metrics=metrics)
 
     open_price = float(current["open"])
     close_price = float(current["close"])
@@ -187,47 +210,47 @@ def _check_xianren_zhilu(
     # 条件1：阳线（close > open）且 high > close
     body = close_price - open_price
     if body <= 0:
-        detail["reason"] = "非阳线"
-        return False, detail
+        metrics["reason"] = "非阳线"
+        return DetectionResult(matched=False, metrics=metrics)
 
     shadow = high_price - close_price
     if shadow <= 0:
-        detail["reason"] = "无上影线"
-        return False, detail
+        metrics["reason"] = "无上影线"
+        return DetectionResult(matched=False, metrics=metrics)
 
     # 上影线与实体比值
     shadow_ratio_actual = shadow / body
-    detail["shadow_ratio"] = round(shadow_ratio_actual, 3)
+    metrics["shadow_ratio"] = round(shadow_ratio_actual, 3)
     if shadow_ratio_actual < shadow_ratio:
-        detail["reason"] = f"上影线比值 {shadow_ratio_actual:.3f} < 阈值 {shadow_ratio}"
-        return False, detail
+        metrics["reason"] = f"上影线比值 {shadow_ratio_actual:.3f} < 阈值 {shadow_ratio}"
+        return DetectionResult(matched=False, metrics=metrics)
 
     # 条件2：放量（当前成交量 ≥ 前3根均量 × 倍数）
     if i < 3:
-        detail["reason"] = "数据不足3根计算均量"
-        return False, detail
+        metrics["reason"] = "数据不足3根计算均量"
+        return DetectionResult(matched=False, metrics=metrics)
 
     avg_volume_3 = code_frame.iloc[i - 3:i]["volume"].mean()
     if pd.isna(avg_volume_3) or float(avg_volume_3) == 0:
-        detail["reason"] = "前3根均量无效"
-        return False, detail
+        metrics["reason"] = "前3根均量无效"
+        return DetectionResult(matched=False, metrics=metrics)
 
     volume_ratio = current_volume / float(avg_volume_3)
-    detail["volume_ratio"] = round(volume_ratio, 2)
+    metrics["volume_ratio"] = round(volume_ratio, 2)
     if current_volume < float(avg_volume_3) * volume_multiplier:
-        detail["reason"] = f"量比 {volume_ratio:.2f} < 阈值 {volume_multiplier}"
-        return False, detail
+        metrics["reason"] = f"量比 {volume_ratio:.2f} < 阈值 {volume_multiplier}"
+        return DetectionResult(matched=False, metrics=metrics)
 
     # 条件3：前期均线下降（lookback_bars 根前的 MA ≥ 当前 MA × price_decline_ratio）
     lookback_idx = i - lookback_bars
     if lookback_idx < 0:
-        detail["reason"] = "回看索引越界"
-        return False, detail
+        metrics["reason"] = "回看索引越界"
+        return DetectionResult(matched=False, metrics=metrics)
 
     ma_lookback = code_frame.iloc[lookback_idx]["ma"]
     if pd.isna(ma_lookback):
-        detail["reason"] = "回看MA值无效"
-        return False, detail
+        metrics["reason"] = "回看MA值无效"
+        return DetectionResult(matched=False, metrics=metrics)
 
     current_ma_val = float(current_ma)
     ma_lookback_val = float(ma_lookback)
@@ -236,24 +259,75 @@ def _check_xianren_zhilu(
     if current_ma_val > 0:
         ma_decline_ratio = ma_lookback_val / current_ma_val
     else:
-        detail["reason"] = "当前MA为零"
-        return False, detail
+        metrics["reason"] = "当前MA为零"
+        return DetectionResult(matched=False, metrics=metrics)
 
-    detail["ma_current"] = round(current_ma_val, 2)
-    detail["ma_lookback"] = round(ma_lookback_val, 2)
-    detail["ma_decline_ratio"] = round(ma_decline_ratio, 2)
+    metrics["ma_current"] = round(current_ma_val, 2)
+    metrics["ma_lookback"] = round(ma_lookback_val, 2)
+    metrics["ma_decline_ratio"] = round(ma_decline_ratio, 2)
 
     if ma_lookback_val < current_ma_val * price_decline_ratio:
-        detail["reason"] = f"MA下降比 {ma_decline_ratio:.2f} < 阈值 {price_decline_ratio}"
-        return False, detail
+        metrics["reason"] = f"MA下降比 {ma_decline_ratio:.2f} < 阈值 {price_decline_ratio}"
+        return DetectionResult(matched=False, metrics=metrics)
 
-    detail["passed"] = True
-    return True, detail
+    return DetectionResult(
+        matched=True,
+        pattern_start_idx=i,
+        pattern_end_idx=i,
+        pattern_start_ts=current["ts"],
+        pattern_end_ts=current["ts"],
+        metrics=metrics,
+    )
 
 
 # ---------------------------------------------------------------------------
 # 单股扫描（多周期 OR）
 # ---------------------------------------------------------------------------
+
+
+def build_xianren_zhilu_payload(
+    *,
+    hit_tfs: list[str],
+    per_tf_detail: dict[str, dict[str, Any]],
+    tf_data: dict[str, pd.DataFrame],
+    all_params: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """根据各周期检测结果组装前端渲染 payload。
+
+    输入：
+    1. hit_tfs: 命中的周期 key 列表（至少有一个）。
+    2. per_tf_detail: 各周期检测明细（含未命中周期）。
+    3. tf_data: 各周期的 DataFrame。
+    4. all_params: 各周期的已规范化参数。
+    输出：
+    1. 符合图表渲染合同的 payload dict，包含 chart_interval、window、per_tf 等字段。
+    边界条件：
+    1. hit_tfs 不可为空（调用方应保证至少有一个命中周期）。
+    """
+    clock_tf = coarsest_tf(hit_tfs)
+    clock_frame = tf_data[clock_tf]
+    latest_ts = clock_frame.iloc[-1]["ts"]
+
+    # 展示窗口 = 最粗命中周期的回看区间
+    lookback_bars = int(all_params[clock_tf]["lookback_bars"])
+    window_start_idx = max(len(clock_frame) - lookback_bars - int(all_params[clock_tf]["ma_period"]), 0)
+    window_start_ts = clock_frame.iloc[window_start_idx]["ts"]
+    window_end_ts = latest_ts
+
+    # 构建信号标签
+    label_parts = [f"{_TF_LABEL.get(tf, tf)}{STRATEGY_LABEL}" for tf in hit_tfs]
+    signal_label = " + ".join(label_parts)
+
+    return {
+        "window_start_ts": window_start_ts,
+        "window_end_ts": window_end_ts,
+        "chart_interval_start_ts": window_start_ts,
+        "chart_interval_end_ts": window_end_ts,
+        "anchor_day_ts": latest_ts,
+        "hit_timeframes": hit_tfs,
+        "per_tf": per_tf_detail,
+        "signal_summary": signal_label,
+    }
 
 
 def _scan_one_code(
@@ -279,9 +353,10 @@ def _scan_one_code(
             per_tf_detail[tf] = {"passed": False, "reason": "无数据"}
             continue
         params = all_params[tf]
-        passed, detail = _check_xianren_zhilu(frame, params)
+        result = detect_xianren_zhilu(frame, params)
+        detail = {"passed": result.matched, **result.metrics}
         per_tf_detail[tf] = detail
-        if passed:
+        if result.matched:
             hit_tfs.append(tf)
 
     stats["candidate"] = 1
@@ -296,39 +371,22 @@ def _scan_one_code(
 
     # 命中 → 生成信号（clock_tf 取最粗命中周期）
     stats["kept"] = 1
+    payload = build_xianren_zhilu_payload(
+        hit_tfs=hit_tfs,
+        per_tf_detail=per_tf_detail,
+        tf_data=tf_data,
+        all_params=all_params,
+    )
     clock_tf = coarsest_tf(hit_tfs)
-    clock_frame = tf_data[clock_tf]
-    latest_ts = clock_frame.iloc[-1]["ts"]
-
-    # 展示窗口 = 最粗命中周期的回看区间
-    lookback_bars = int(all_params[clock_tf]["lookback_bars"])
-    window_start_idx = max(len(clock_frame) - lookback_bars - int(all_params[clock_tf]["ma_period"]), 0)
-    window_start_ts = clock_frame.iloc[window_start_idx]["ts"]
-    window_end_ts = latest_ts
-
-    # 构建信号标签
-    label_parts = [f"{_TF_LABEL.get(tf, tf)}{STRATEGY_LABEL}" for tf in hit_tfs]
-    signal_label = " + ".join(label_parts)
-
-    payload: dict[str, Any] = {
-        "window_start_ts": window_start_ts,
-        "window_end_ts": window_end_ts,
-        "chart_interval_start_ts": window_start_ts,
-        "chart_interval_end_ts": window_end_ts,
-        "anchor_day_ts": latest_ts,
-        "hit_timeframes": hit_tfs,
-        "per_tf": per_tf_detail,
-        "signal_summary": signal_label,
-    }
 
     signal = build_signal_dict(
         code=code,
         name=name,
-        signal_dt=latest_ts,
+        signal_dt=payload["anchor_day_ts"],
         clock_tf=clock_tf,
         strategy_group_id=strategy_group_id,
         strategy_name=strategy_name,
-        signal_label=signal_label,
+        signal_label=payload["signal_summary"],
         payload=payload,
     )
 
@@ -419,7 +477,7 @@ def run_xianren_zhilu_v1_specialized(
         tf_load_times[tf] = round(time.perf_counter() - t0, 4)
 
         if not frame.empty:
-            frame = _prepare_features(frame, params)
+            frame = prepare_xianren_zhilu_features(frame, params)
         tf_frames[tf] = frame
 
     base_metrics["load_times"] = tf_load_times

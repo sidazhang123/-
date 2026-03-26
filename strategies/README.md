@@ -161,11 +161,49 @@ def run_my_pattern_v1_specialized(
 2. specialized 策略在未显式传入时间窗时，应按策略所需最小历史量自行推导默认观察窗。
 3. `start_ts/end_ts` 仍可保留为脚本化调用或回测场景的可选入参，但不能再作为筛选页必填前置条件。
 
-实现建议顺序：
+#### 三层架构（必须遵循）
+
+所有 specialized 策略的 engine.py 必须按以下三层结构组织核心逻辑：
+
+| 层级 | 函数签名 | 职责 | 必需 |
+|---|---|---|---|
+| 特征准备 | `prepare_xxx_features(bars, params) → DataFrame` | 预计算技术指标，丰富原始数据 | 可选 |
+| 检测 | `detect_xxx(bars, params) → DetectionResult` | 纯检测，不含 I/O，不依赖前端结构 | **必须** |
+| 信号组装 | `build_xxx_payload(result, ...) → dict` | 将检测结果转为前端 payload | **必须** |
+
+设计目的：让 `detect_xxx` 可独立用于回测和单元测试，不依赖数据库或前端结构。
+
+`_scan_one_code` 作为编排层，依次调用三层函数：
+
+```python
+def _scan_one_code(*, code, name, daily_frame, daily_params, ...):
+    # 1. 特征准备（可选）
+    enriched = prepare_xxx_features(daily_frame, daily_params)
+    # 2. 检测
+    result = detect_xxx(enriched, daily_params)
+    if not result.matched:
+        return empty_result, stats
+    # 3. 信号组装
+    signal = build_xxx_payload(result=result, code=code, name=name, ...)
+    return StockScanResult(..., signals=[signal]), stats
+```
+
+`DetectionResult` 字段说明：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `matched` | `bool` | 是否命中 |
+| `pattern_start_idx` | `int \| None` | 形态起始索引（可选） |
+| `pattern_end_idx` | `int \| None` | 形态结束索引（可选） |
+| `pattern_start_ts` | `datetime \| None` | 形态起始时间戳（可选） |
+| `pattern_end_ts` | `datetime \| None` | 形态结束时间戳（可选） |
+| `metrics` | `dict[str, Any]` | 诊断指标，由策略自定义 |
+
+实现顺序：
 
 1. 先规范化参数。
 2. 再批量加载数据。
-3. 再逐股扫描并构建 `StockScanResult`。
+3. 再逐股扫描：调用 `detect_xxx` → `build_xxx_payload` → 构建 `StockScanResult`。
 4. 最后汇总 `metrics`。
 
 ### 第 5 步：保留 strategy.py 的占位语义
@@ -282,9 +320,10 @@ signal = build_signal_dict(
 常用能力：
 
 1. `StockScanResult`：单股扫描结果 dataclass。
-2. `as_dict` / `as_bool` / `as_int` / `as_float`：参数安全转换工具。
-3. `connect_source_readonly(source_db_path)`：只读连接源行情库。
-4. `build_signal_dict(...)`：构建标准信号结构。7. `read_filter_st_params(group_params)`：读取 ST 过滤开关（由 TaskManager 使用）。
+2. `DetectionResult`：检测层统一返回类型（matched / pattern_start_idx / pattern_end_idx / pattern_start_ts / pattern_end_ts / metrics）。
+3. `as_dict` / `as_bool` / `as_int` / `as_float`：参数安全转换工具。
+4. `connect_source_readonly(source_db_path)`：只读连接源行情库。
+5. `build_signal_dict(...)`：构建标准信号结构。7. `read_filter_st_params(group_params)`：读取 ST 过滤开关（由 TaskManager 使用）。
 推荐做法：
 
 1. 所有用户输入参数都先走 `as_*` 规范化。
@@ -355,6 +394,9 @@ order by t.code, t.datetime;
 - [ ] `filter_st` 段存在且 `enabled` 默认为 `true`。
 - [ ] payload 包含 `chart_interval_start_ts` / `chart_interval_end_ts`。
 - [ ] `chart_interval_*` 表示单次信号窗口，不是全任务总窗口。
+- [ ] 核心检测逻辑封装在公开的 `detect_xxx` 函数中，返回 `DetectionResult`。
+- [ ] payload 组装封装在公开的 `build_xxx_payload` 函数中。
+- [ ] `_scan_one_code` 仅做编排，不含检测逻辑。
 - [ ] `strategy.py` 没有被误改成主执行逻辑文件。
 - [ ] 重启服务后，前端能看到新策略并成功创建任务。
 

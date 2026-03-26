@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from strategies.engine_commons import (
+    DetectionResult,
     StockScanResult,
     as_bool,
     as_dict,
@@ -588,9 +589,146 @@ def _scan_tf_for_code(
     return best
 
 
+def detect_converging_triangle(
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+    tf_key: str,
+) -> DetectionResult:
+    """在单只股票的单个周期数据上检测大三角收敛形态。
+
+    输入：
+    1. code_frame: 单只股票在该周期的 OHLCV DataFrame（已按 ts 排序）。
+    2. params: 已规范化的单周期参数。
+    3. tf_key: 周期标识。
+    输出：
+    1. DetectionResult，matched 表示是否命中，metrics 含三角形几何与评分明细。
+    用途：
+    1. 枚举所有合法候选窗口，保留评分最高的一个。
+    2. 可被筛选编排器和未来回测引擎独立调用。
+    边界条件：
+    1. 数据不足时返回 matched=False。
+    """
+    tri = _scan_tf_for_code(code_frame=code_frame, params=params, tf_key=tf_key)
+    if tri is None:
+        return DetectionResult(matched=False)
+    return DetectionResult(
+        matched=True,
+        pattern_start_idx=tri.start_idx,
+        pattern_end_idx=tri.end_idx,
+        pattern_start_ts=code_frame.iloc[tri.start_idx]["ts"],
+        pattern_end_ts=code_frame.iloc[tri.end_idx]["ts"],
+        metrics={
+            "score": tri.score,
+            "window_bars": tri.window_bars,
+            "upper_slope_unit": tri.upper_slope_unit,
+            "lower_slope_unit": tri.lower_slope_unit,
+            "converging_speed": tri.converging_speed,
+            "slope_symmetry_ratio": tri.slope_symmetry_ratio,
+            "contraction_ratio": tri.contraction_ratio,
+            "apex_progress": tri.apex_progress,
+            "fit_error": tri.fit_error,
+            "upper_start": tri.upper_start,
+            "upper_end": tri.upper_end,
+            "lower_start": tri.lower_start,
+            "lower_end": tri.lower_end,
+            "upper_touch_count": tri.upper_touch_count,
+            "lower_touch_count": tri.lower_touch_count,
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # 单股扫描
 # ---------------------------------------------------------------------------
+
+
+def build_converging_triangle_payload(
+    *,
+    chosen_tf: str,
+    per_tf_results: dict[str, DetectionResult],
+    tf_data: dict[str, pd.DataFrame],
+) -> dict[str, Any]:
+    """根据各周期检测结果组装前端渲染 payload（含 overlay_lines）。
+
+    输入：
+    1. chosen_tf: 选定的展示周期（W 优先）。
+    2. per_tf_results: 各周期的 DetectionResult（仅含命中的）。
+    3. tf_data: 各周期的 DataFrame。
+    输出：
+    1. 符合图表渲染合同的 payload dict，包含 overlay_lines。
+    边界条件：
+    1. chosen_tf 必须在 per_tf_results 中存在。
+    """
+    det = per_tf_results[chosen_tf]
+    frame = tf_data[chosen_tf]
+    m = det.metrics
+
+    window_start_ts = frame.iloc[det.pattern_start_idx]["ts"]
+    window_end_ts = frame.iloc[det.pattern_end_idx]["ts"]
+
+    # 图表区间：整个窗口即为展示区间，额外向前延伸 10% 以提供上下文
+    extra_bars = max(int(m["window_bars"] * 0.1), 5)
+    chart_start_idx = max(det.pattern_start_idx - extra_bars, 0)
+    chart_interval_start_ts = frame.iloc[chart_start_idx]["ts"]
+    chart_interval_end_ts = frame.iloc[det.pattern_end_idx]["ts"]
+
+    tf_label = _TF_LABEL.get(chosen_tf, chosen_tf)
+    signal_label = f"{tf_label}大收敛三角"
+
+    # 构建 overlay_lines（上下沿拟合线坐标）
+    overlay_lines = [
+        {
+            "label": "上沿",
+            "start_ts": window_start_ts,
+            "start_price": m["upper_start"],
+            "end_ts": window_end_ts,
+            "end_price": m["upper_end"],
+            "color": "#ef4444",
+            "dash": True,
+        },
+        {
+            "label": "下沿",
+            "start_ts": window_start_ts,
+            "start_price": m["lower_start"],
+            "end_ts": window_end_ts,
+            "end_price": m["lower_end"],
+            "color": "#22c55e",
+            "dash": True,
+        },
+    ]
+
+    # 构建诊断信息
+    hit_tfs = list(per_tf_results.keys())
+    per_tf_detail: dict[str, dict[str, Any]] = {}
+    for tf, res in per_tf_results.items():
+        rm = res.metrics
+        per_tf_detail[tf] = {
+            "detected": True,
+            "score": rm["score"],
+            "upper_slope_unit": rm["upper_slope_unit"],
+            "lower_slope_unit": rm["lower_slope_unit"],
+            "converging_speed": rm["converging_speed"],
+            "slope_symmetry_ratio": rm["slope_symmetry_ratio"],
+            "contraction_ratio": rm["contraction_ratio"],
+            "apex_progress": rm["apex_progress"],
+            "fit_error": rm["fit_error"],
+            "window_bars": rm["window_bars"],
+            "upper_touch_count": rm["upper_touch_count"],
+            "lower_touch_count": rm["lower_touch_count"],
+        }
+
+    return {
+        "window_start_ts": window_start_ts,
+        "window_end_ts": window_end_ts,
+        "chart_interval_start_ts": chart_interval_start_ts,
+        "chart_interval_end_ts": chart_interval_end_ts,
+        "anchor_day_ts": window_end_ts,
+        "hit_timeframes": hit_tfs,
+        "chosen_tf": chosen_tf,
+        "per_tf": per_tf_detail,
+        "overlay_lines": overlay_lines,
+        "signal_summary": signal_label,
+    }
 
 
 def _scan_one_code(
@@ -620,20 +758,16 @@ def _scan_one_code(
     stats = {"candidate": 0, "kept": 0}
     total_bars = sum(len(df) for df in tf_data.values())
 
-    per_tf_result: dict[str, TriangleResult] = {}
+    per_tf_result: dict[str, DetectionResult] = {}
 
     for tf in enabled_tfs:
         frame = tf_data.get(tf, pd.DataFrame())
         params = all_params[tf]
         if frame.empty:
             continue
-        tri = _scan_tf_for_code(
-            code_frame=frame,
-            params=params,
-            tf_key=tf,
-        )
-        if tri is not None:
-            per_tf_result[tf] = tri
+        result = detect_converging_triangle(frame, params, tf)
+        if result.matched:
+            per_tf_result[tf] = result
 
     stats["candidate"] = 1
     if not per_tf_result:
@@ -653,84 +787,20 @@ def _scan_one_code(
     else:
         chosen_tf = list(per_tf_result.keys())[0]
 
-    tri = per_tf_result[chosen_tf]
-    frame = tf_data[chosen_tf]
-
-    # 构建展示数据
-    window_start_ts = frame.iloc[tri.start_idx]["ts"]
-    window_end_ts = frame.iloc[tri.end_idx]["ts"]
-
-    # 图表区间：整个窗口即为展示区间，额外向前延伸 10% 以提供上下文
-    extra_bars = max(int(tri.window_bars * 0.1), 5)
-    chart_start_idx = max(tri.start_idx - extra_bars, 0)
-    chart_interval_start_ts = frame.iloc[chart_start_idx]["ts"]
-    chart_interval_end_ts = frame.iloc[tri.end_idx]["ts"]
-
-    tf_label = _TF_LABEL.get(chosen_tf, chosen_tf)
-    signal_label = f"{tf_label}大收敛三角"
-
-    # 构建 overlay_lines（上下沿拟合线坐标）
-    overlay_lines = [
-        {
-            "label": "上沿",
-            "start_ts": window_start_ts,
-            "start_price": tri.upper_start,
-            "end_ts": window_end_ts,
-            "end_price": tri.upper_end,
-            "color": "#ef4444",
-            "dash": True,
-        },
-        {
-            "label": "下沿",
-            "start_ts": window_start_ts,
-            "start_price": tri.lower_start,
-            "end_ts": window_end_ts,
-            "end_price": tri.lower_end,
-            "color": "#22c55e",
-            "dash": True,
-        },
-    ]
-
-    # 构建诊断信息
-    hit_tfs = list(per_tf_result.keys())
-    per_tf_detail: dict[str, dict[str, Any]] = {}
-    for tf, result in per_tf_result.items():
-        per_tf_detail[tf] = {
-            "detected": True,
-            "score": result.score,
-            "upper_slope_unit": result.upper_slope_unit,
-            "lower_slope_unit": result.lower_slope_unit,
-            "converging_speed": result.converging_speed,
-            "slope_symmetry_ratio": result.slope_symmetry_ratio,
-            "contraction_ratio": result.contraction_ratio,
-            "apex_progress": result.apex_progress,
-            "fit_error": result.fit_error,
-            "window_bars": result.window_bars,
-            "upper_touch_count": result.upper_touch_count,
-            "lower_touch_count": result.lower_touch_count,
-        }
-
-    payload: dict[str, Any] = {
-        "window_start_ts": window_start_ts,
-        "window_end_ts": window_end_ts,
-        "chart_interval_start_ts": chart_interval_start_ts,
-        "chart_interval_end_ts": chart_interval_end_ts,
-        "anchor_day_ts": window_end_ts,
-        "hit_timeframes": hit_tfs,
-        "chosen_tf": chosen_tf,
-        "per_tf": per_tf_detail,
-        "overlay_lines": overlay_lines,
-        "signal_summary": signal_label,
-    }
+    payload = build_converging_triangle_payload(
+        chosen_tf=chosen_tf,
+        per_tf_results=per_tf_result,
+        tf_data=tf_data,
+    )
 
     signal = build_signal_dict(
         code=code,
         name=name,
-        signal_dt=window_end_ts,
+        signal_dt=payload["window_end_ts"],
         clock_tf=chosen_tf,
         strategy_group_id=strategy_group_id,
         strategy_name=strategy_name,
-        signal_label=signal_label,
+        signal_label=payload["signal_summary"],
         payload=payload,
     )
 

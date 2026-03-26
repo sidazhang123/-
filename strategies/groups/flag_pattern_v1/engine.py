@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 
 from strategies.engine_commons import (
+    DetectionResult,
     StockScanResult,
     as_bool,
     as_dict,
@@ -265,27 +266,26 @@ def _check_hv_convergence(
     return passed, round(hv_slope_norm, 4), reason
 
 
-def _detect_flag(
+def detect_flag(
     code_frame: pd.DataFrame,
     params: dict[str, Any],
-) -> tuple[bool, dict[str, Any]]:
+) -> DetectionResult:
     """在单只股票的单个周期数据上检测旗形。
 
     输入：
     1. code_frame: 单只股票在该周期的 OHLCV DataFrame（已按 ts 排序）。
     2. params: 已规范化的单周期参数。
     输出：
-    1. (是否检测到旗形, 检测结果明细 dict)。
+    1. DetectionResult，matched 表示是否命中，metrics 含旗杆+旗面明细。
     用途：
     1. 从窗口尾部向前搜索最新的一个有效 旗杆+旗面 组合。
+    2. 可被筛选编排器和未来回测引擎独立调用。
     边界条件：
     1. 数据不足 scan_bars 时使用全部可用数据。
     2. 旗杆首根 bar 的 low 必须是旗杆段的最小 low（P0 约束）。
     3. P1 所在 bar 必须在 P0 所在 bar 之后（上涨旗杆方向约束）。
     4. 找到第一个有效组合即返回，不继续搜索。
     """
-    detail: dict[str, Any] = {"detected": False}
-
     scan_bars = int(params["scan_bars"])
     pole_len_min = int(params["pole_len_min"])
     pole_len_max = int(params["pole_len_max"])
@@ -297,8 +297,7 @@ def _detect_flag(
     flag_low_below_max = float(params["flag_low_below_max"])
 
     if len(code_frame) < pole_len_min + 1:
-        detail["reason"] = "数据不足"
-        return False, detail
+        return DetectionResult(matched=False, metrics={"reason": "数据不足"})
 
     # 截取最新 scan_bars 根线
     window = code_frame.tail(scan_bars).reset_index(drop=True)
@@ -357,7 +356,6 @@ def _detect_flag(
             actual_flag_len_max = min(flag_len_max_calc, available_bars)
 
             # 从最长旗面开始尝试（更多数据做 HV 检查）
-            found_flag = False
             for flag_len in range(actual_flag_len_max, flag_len_min_calc - 1, -1):
                 flag_end = flag_start + flag_len - 1  # inclusive
 
@@ -390,37 +388,40 @@ def _detect_flag(
                     continue
 
                 # 命中！
-                found_flag = True
                 pole_start_ts = window.iloc[pole_start]["ts"]
                 pole_end_ts = window.iloc[pole_end]["ts"]
                 flag_start_ts = window.iloc[flag_start]["ts"]
                 flag_end_ts = window.iloc[flag_end]["ts"]
 
-                detail.update({
-                    "detected": True,
-                    "pole_start_ts": pole_start_ts,
-                    "pole_end_ts": pole_end_ts,
-                    "flag_start_ts": flag_start_ts,
-                    "flag_end_ts": flag_end_ts,
-                    "pole_len": pole_len,
-                    "flag_len": flag_len,
-                    "p0": round(p0, 4),
-                    "p1": round(p1, 4),
-                    "pole_return": round(pole_return, 4),
-                    "pole_gain": round(pole_gain, 4),
-                    "flag_high": round(flag_high, 4),
-                    "flag_low": round(flag_low, 4),
-                    "high_above": round(high_above, 4),
-                    "low_below": round(low_below, 4),
-                    "hv_slope_norm": hv_slope_norm,
-                })
-                break
+                return DetectionResult(
+                    matched=True,
+                    pattern_start_idx=int(pole_start),
+                    pattern_end_idx=int(flag_end),
+                    pattern_start_ts=pole_start_ts,
+                    pattern_end_ts=flag_end_ts,
+                    metrics={
+                        "pole_start_ts": pole_start_ts,
+                        "pole_end_ts": pole_end_ts,
+                        "flag_start_ts": flag_start_ts,
+                        "flag_end_ts": flag_end_ts,
+                        "pole_len": pole_len,
+                        "flag_len": flag_len,
+                        "p0": round(p0, 4),
+                        "p1": round(p1, 4),
+                        "pole_return": round(pole_return, 4),
+                        "pole_gain": round(pole_gain, 4),
+                        "flag_high": round(flag_high, 4),
+                        "flag_low": round(flag_low, 4),
+                        "high_above": round(high_above, 4),
+                        "low_below": round(low_below, 4),
+                        "hv_slope_norm": hv_slope_norm,
+                    },
+                )
 
-            if found_flag:
-                return True, detail
-
-    detail["reason"] = "未找到符合条件的旗形"
-    return False, detail
+    return DetectionResult(
+        matched=False,
+        metrics={"reason": "未找到符合条件的旗形"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +450,53 @@ def _build_signal_label(hit_tfs: list[str], per_tf_detail: dict[str, dict[str, A
         flag_len = detail.get("flag_len", 0)
         parts.append(f"{_TF_LABEL.get(tf, tf)}旗形(杆涨{pole_return*100:.1f}%,面{flag_len}根)")
     return " + ".join(parts) if parts else STRATEGY_LABEL
+
+
+def build_flag_pattern_payload(
+    *,
+    hit_tfs: list[str],
+    per_tf_detail: dict[str, dict[str, Any]],
+    tf_data: dict[str, pd.DataFrame],
+    all_params: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """根据各周期检测结果组装前端渲染 payload。
+
+    输入：
+    1. hit_tfs: 命中的周期 key 列表（至少有一个）。
+    2. per_tf_detail: 各周期检测明细（含未命中周期）。
+    3. tf_data: 各周期的 DataFrame。
+    4. all_params: 各周期的已规范化参数。
+    输出：
+    1. 符合图表渲染合同的 payload dict，包含 chart_interval、window、per_tf 等字段。
+    边界条件：
+    1. hit_tfs 不可为空（调用方应保证至少有一个命中周期）。
+    """
+    clock_tf = coarsest_tf(hit_tfs)
+    clock_detail = per_tf_detail[clock_tf]
+    clock_frame = tf_data[clock_tf]
+
+    # 展示窗口：从旗杆起始到旗面结束
+    window_start_ts = clock_detail["pole_start_ts"]
+    window_end_ts = clock_detail["flag_end_ts"]
+
+    # 图表区间：取最粗命中周期最近 scan_bars 根线
+    scan_bars = int(all_params[clock_tf]["scan_bars"])
+    chart_start_idx = max(len(clock_frame) - scan_bars, 0)
+    chart_interval_start_ts = clock_frame.iloc[chart_start_idx]["ts"]
+    chart_interval_end_ts = clock_frame.iloc[-1]["ts"]
+
+    signal_label = _build_signal_label(hit_tfs, per_tf_detail)
+
+    return {
+        "window_start_ts": window_start_ts,
+        "window_end_ts": window_end_ts,
+        "chart_interval_start_ts": chart_interval_start_ts,
+        "chart_interval_end_ts": chart_interval_end_ts,
+        "anchor_day_ts": clock_detail.get("pole_end_ts", window_end_ts),
+        "hit_timeframes": hit_tfs,
+        "per_tf": per_tf_detail,
+        "signal_summary": signal_label,
+    }
 
 
 def _scan_one_code(
@@ -487,10 +535,10 @@ def _scan_one_code(
         if frame.empty:
             per_tf_detail[tf] = {"detected": False, "reason": "无数据"}
             continue
-        detected, detail = _detect_flag(frame, params)
-        detail["tf"] = tf
+        result = detect_flag(frame, params)
+        detail = {"detected": result.matched, "tf": tf, **result.metrics}
         per_tf_detail[tf] = detail
-        if detected:
+        if result.matched:
             hit_tfs.append(tf)
 
     stats["candidate"] = 1
@@ -505,41 +553,22 @@ def _scan_one_code(
 
     # 命中 → 生成 1 条合并信号
     stats["kept"] = 1
+    payload = build_flag_pattern_payload(
+        hit_tfs=hit_tfs,
+        per_tf_detail=per_tf_detail,
+        tf_data=tf_data,
+        all_params=all_params,
+    )
     clock_tf = coarsest_tf(hit_tfs)
-    clock_detail = per_tf_detail[clock_tf]
-    clock_frame = tf_data[clock_tf]
-
-    # 展示窗口：从旗杆起始到旗面结束（使用最粗命中周期的数据）
-    window_start_ts = clock_detail["pole_start_ts"]
-    window_end_ts = clock_detail["flag_end_ts"]
-
-    # 图表区间：取最粗命中周期最近 scan_bars 根线
-    scan_bars = int(all_params[clock_tf]["scan_bars"])
-    chart_start_idx = max(len(clock_frame) - scan_bars, 0)
-    chart_interval_start_ts = clock_frame.iloc[chart_start_idx]["ts"]
-    chart_interval_end_ts = clock_frame.iloc[-1]["ts"]
-
-    signal_label = _build_signal_label(hit_tfs, per_tf_detail)
-
-    payload: dict[str, Any] = {
-        "window_start_ts": window_start_ts,
-        "window_end_ts": window_end_ts,
-        "chart_interval_start_ts": chart_interval_start_ts,
-        "chart_interval_end_ts": chart_interval_end_ts,
-        "anchor_day_ts": clock_detail.get("pole_end_ts", window_end_ts),
-        "hit_timeframes": hit_tfs,
-        "per_tf": per_tf_detail,
-        "signal_summary": signal_label,
-    }
 
     signal = build_signal_dict(
         code=code,
         name=name,
-        signal_dt=window_end_ts,
+        signal_dt=payload["window_end_ts"],
         clock_tf=clock_tf,
         strategy_group_id=strategy_group_id,
         strategy_name=strategy_name,
-        signal_label=signal_label,
+        signal_label=payload["signal_summary"],
         payload=payload,
     )
 

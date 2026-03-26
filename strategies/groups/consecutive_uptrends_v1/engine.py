@@ -28,6 +28,7 @@ from typing import Any
 import pandas as pd
 
 from strategies.engine_commons import (
+    DetectionResult,
     StockScanResult,
     as_bool,
     as_dict,
@@ -183,27 +184,26 @@ def _load_bars(
 # ---------------------------------------------------------------------------
 
 
-def _detect_streak(
+def detect_streak(
     code_frame: pd.DataFrame,
     params: dict[str, Any],
-) -> tuple[bool, dict[str, Any]]:
+) -> DetectionResult:
     """在单只股票的单个周期数据上检测连续小阳（含可选急跌段）。
 
     输入：
     1. code_frame: 单只股票在该周期的 OHLCV DataFrame（已按 ts 排序）。
     2. params: 已规范化的单周期参数。
     输出：
-    1. (是否检测到连续小阳, 检测结果明细 dict)。
+    1. DetectionResult，matched 表示是否命中，metrics 含连阳与急跌段明细。
     用途：
     1. 从窗口尾部向前滑动搜索连续 m 根阳线。找到后若启用急跌检查，继续验证急跌段。
+    2. 可被筛选编排器和未来回测引擎独立调用。
     边界条件：
-    1. 数据不足 streak_len 时返回 False。
+    1. 数据不足 streak_len 时返回 matched=False。
     2. scan_bars 内任意位置的连阳均有效。
     3. 急跌偏移上限 = floor(selloff_start_pct × streak_len)。
     4. 急跌回撤基准 = z 根线最低收盘价 vs 连阳最高收盘价 / 连阳总涨幅。
     """
-    detail: dict[str, Any] = {"detected": False}
-
     scan_bars = int(params["scan_bars"])
     streak_len = int(params["streak_len"])
     bar_gain_max = float(params["bar_gain_max"])
@@ -213,8 +213,7 @@ def _detect_streak(
     selloff_bars = int(params["selloff_bars"])
 
     if len(code_frame) < streak_len:
-        detail["reason"] = "数据不足"
-        return False, detail
+        return DetectionResult(matched=False, metrics={"reason": "数据不足"})
 
     # 截取最新 scan_bars 根线
     window = code_frame.tail(scan_bars).reset_index(drop=True)
@@ -261,8 +260,14 @@ def _detect_streak(
 
         # 如果不启用急跌检查，直接命中
         if not selloff_enabled:
-            detail.update({"detected": True, **streak_detail})
-            return True, detail
+            return DetectionResult(
+                matched=True,
+                pattern_start_idx=int(start_idx),
+                pattern_end_idx=int(end_idx),
+                pattern_start_ts=streak_start_ts,
+                pattern_end_ts=streak_end_ts,
+                metrics=streak_detail,
+            )
 
         # 急跌段检查
         max_offset = int(math.floor(selloff_start_pct * streak_len))
@@ -295,14 +300,22 @@ def _detect_streak(
                     "selloff_drawdown": round(drawdown, 4),
                     "selloff_drawdown_ratio": round(drawdown_ratio, 4),
                 }
-                detail.update({"detected": True, **streak_detail, **selloff_detail})
-                return True, detail
+                return DetectionResult(
+                    matched=True,
+                    pattern_start_idx=int(start_idx),
+                    pattern_end_idx=int(sell_end),
+                    pattern_start_ts=streak_start_ts,
+                    pattern_end_ts=window.iloc[sell_end]["ts"],
+                    metrics={**streak_detail, **selloff_detail},
+                )
 
         # 连阳命中但急跌段未找到 → 继续搜索下一个连阳窗口
         continue
 
-    detail["reason"] = "未找到符合条件的连续小阳" + ("（含急跌段）" if selloff_enabled else "")
-    return False, detail
+    return DetectionResult(
+        matched=False,
+        metrics={"reason": "未找到符合条件的连续小阳" + ("（含急跌段）" if selloff_enabled else "")},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +350,53 @@ def _build_signal_label(hit_tfs: list[str], per_tf_detail: dict[str, dict[str, A
             label += f"+急跌{detail.get('selloff_drawdown_ratio', 0)*100:.0f}%"
         parts.append(label)
     return " + ".join(parts) if parts else STRATEGY_LABEL
+
+
+def build_consecutive_uptrends_payload(
+    *,
+    hit_tfs: list[str],
+    per_tf_detail: dict[str, dict[str, Any]],
+    tf_data: dict[str, pd.DataFrame],
+    all_params: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """根据各周期检测结果组装前端渲染 payload。
+
+    输入：
+    1. hit_tfs: 命中的周期 key 列表（至少有一个）。
+    2. per_tf_detail: 各周期检测明细（含未命中周期）。
+    3. tf_data: 各周期的 DataFrame。
+    4. all_params: 各周期的已规范化参数。
+    输出：
+    1. 符合图表渲染合同的 payload dict，包含 chart_interval、window、per_tf 等字段。
+    边界条件：
+    1. hit_tfs 不可为空（调用方应保证至少有一个命中周期）。
+    """
+    clock_tf = coarsest_tf(hit_tfs)
+    clock_detail = per_tf_detail[clock_tf]
+    clock_frame = tf_data[clock_tf]
+
+    # 展示窗口：从连阳起始到连阳（或急跌段）结束
+    window_start_ts = clock_detail["streak_start_ts"]
+    window_end_ts = clock_detail.get("selloff_end_ts", clock_detail["streak_end_ts"])
+
+    # 图表区间：取最粗命中周期最近 scan_bars 根线
+    scan_bars = int(all_params[clock_tf]["scan_bars"])
+    chart_start_idx = max(len(clock_frame) - scan_bars, 0)
+    chart_interval_start_ts = clock_frame.iloc[chart_start_idx]["ts"]
+    chart_interval_end_ts = clock_frame.iloc[-1]["ts"]
+
+    signal_label = _build_signal_label(hit_tfs, per_tf_detail)
+
+    return {
+        "window_start_ts": window_start_ts,
+        "window_end_ts": window_end_ts,
+        "chart_interval_start_ts": chart_interval_start_ts,
+        "chart_interval_end_ts": chart_interval_end_ts,
+        "anchor_day_ts": clock_detail.get("streak_end_ts", window_end_ts),
+        "hit_timeframes": hit_tfs,
+        "per_tf": per_tf_detail,
+        "signal_summary": signal_label,
+    }
 
 
 def _scan_one_code(
@@ -375,10 +435,10 @@ def _scan_one_code(
         if frame.empty:
             per_tf_detail[tf] = {"detected": False, "reason": "无数据"}
             continue
-        detected, detail = _detect_streak(frame, params)
-        detail["tf"] = tf
+        result = detect_streak(frame, params)
+        detail = {"detected": result.matched, "tf": tf, **result.metrics}
         per_tf_detail[tf] = detail
-        if detected:
+        if result.matched:
             hit_tfs.append(tf)
 
     stats["candidate"] = 1
@@ -393,41 +453,22 @@ def _scan_one_code(
 
     # 命中 → 生成 1 条合并信号
     stats["kept"] = 1
+    payload = build_consecutive_uptrends_payload(
+        hit_tfs=hit_tfs,
+        per_tf_detail=per_tf_detail,
+        tf_data=tf_data,
+        all_params=all_params,
+    )
     clock_tf = coarsest_tf(hit_tfs)
-    clock_detail = per_tf_detail[clock_tf]
-    clock_frame = tf_data[clock_tf]
-
-    # 展示窗口：从连阳起始到连阳（或急跌段）结束
-    window_start_ts = clock_detail["streak_start_ts"]
-    window_end_ts = clock_detail.get("selloff_end_ts", clock_detail["streak_end_ts"])
-
-    # 图表区间：取最粗命中周期最近 scan_bars 根线
-    scan_bars = int(all_params[clock_tf]["scan_bars"])
-    chart_start_idx = max(len(clock_frame) - scan_bars, 0)
-    chart_interval_start_ts = clock_frame.iloc[chart_start_idx]["ts"]
-    chart_interval_end_ts = clock_frame.iloc[-1]["ts"]
-
-    signal_label = _build_signal_label(hit_tfs, per_tf_detail)
-
-    payload: dict[str, Any] = {
-        "window_start_ts": window_start_ts,
-        "window_end_ts": window_end_ts,
-        "chart_interval_start_ts": chart_interval_start_ts,
-        "chart_interval_end_ts": chart_interval_end_ts,
-        "anchor_day_ts": clock_detail.get("streak_end_ts", window_end_ts),
-        "hit_timeframes": hit_tfs,
-        "per_tf": per_tf_detail,
-        "signal_summary": signal_label,
-    }
 
     signal = build_signal_dict(
         code=code,
         name=name,
-        signal_dt=window_end_ts,
+        signal_dt=payload["window_end_ts"],
         clock_tf=clock_tf,
         strategy_group_id=strategy_group_id,
         strategy_name=strategy_name,
-        signal_label=signal_label,
+        signal_label=payload["signal_summary"],
         payload=payload,
     )
 

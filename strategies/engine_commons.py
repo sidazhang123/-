@@ -13,7 +13,7 @@ Specialized engine 公共基础设施。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,28 @@ import duckdb
 # ---------------------------------------------------------------------------
 # 结果数据类型
 # ---------------------------------------------------------------------------
+
+@dataclass
+class DetectionResult:
+    """单周期检测结果（供三层架构中 detect_xxx 函数统一返回）。
+
+    输入：由各策略的 detect_xxx 函数创建并返回。
+    输出：matched 表示是否命中，metrics 携带策略特有指标。
+    用途：
+      1. 筛选模式：编排器根据 matched 决定是否调用 build_xxx_payload。
+      2. 回测模式：回测引擎滑窗调用 detect_xxx，收集 metrics 做收益分析。
+    边界条件：
+      1. matched=False 时，其余字段均可为 None / 空 dict。
+      2. pattern_start_idx / pattern_end_idx 为相对输入 bars 的行索引（0-based）。
+    """
+
+    matched: bool
+    pattern_start_idx: int | None = None
+    pattern_end_idx: int | None = None
+    pattern_start_ts: datetime | None = None
+    pattern_end_ts: datetime | None = None
+    metrics: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass
 class StockScanResult:
