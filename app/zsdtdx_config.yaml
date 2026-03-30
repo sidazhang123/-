@@ -64,6 +64,14 @@ pool:
   # 取值: true/false
   # 影响: true 可降低长时间空闲断连概率。
   heartbeat: true
+  # 首次连接前是否对地址池做 TCP 延迟探测，按延迟排序后优先连最快节点。
+  # 取值: true/false
+  # 影响: true 启动时多约 0.8s 探测耗时，但后续始终连接最快节点。
+  probe_on_init: true
+  # TCP 探测单个 host 的超时（秒）。
+  # 取值: 正浮点数（建议 0.5~2.0）
+  # 影响: 值越大能探测到更多高延迟 host，但首次连接等待更久。
+  probe_timeout: 0.8
 
 parallel:
   # 并行进程数倍率：推荐进程数 = max(2, int(物理核心数 * 该倍率))。

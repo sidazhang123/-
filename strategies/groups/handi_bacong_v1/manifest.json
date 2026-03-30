@@ -1,0 +1,161 @@
+{
+  "id": "handi_bacong_v1",
+  "name": "旱地拔葱 v1",
+  "description": "在日线/周线级别上搜索长期水平震荡箱体，并检测箱体末端向上突破且明显放量的信号。箱体上下沿通过分段分位数边界 + 线性回归拟合确定，要求斜率接近零以确认水平性。突破要求近1-3根K线收盘价超出上沿指定箱体振幅比例，同时成交量较箱体修剪均量显著放大。各周期独立检测，结果取交集（AND）。",
+  "module": "strategies.groups.handi_bacong_v1",
+  "engine": "specialized",
+  "execution": {
+    "requires_time_window": false,
+    "supports_intra_task_parallel": false,
+    "cache_scope": "none",
+    "required_timeframes": ["w", "d"],
+    "specialized_entry": "strategies.groups.handi_bacong_v1.engine:run_handi_bacong_v1_specialized"
+  },
+  "default_params": {
+    "global": {
+      "min_duration_weeks": 6
+    },
+    "weekly": {
+      "enabled": false,
+      "range_pct_min": 20,
+      "range_pct_max": 40,
+      "touch_tolerance_pct": 10,
+      "segment_count": 4,
+      "max_slope_pct": 3,
+      "breakout_range_pct": 100,
+      "breakout_volume_pct": 100
+    },
+    "daily": {
+      "enabled": true,
+      "range_pct_min": 20,
+      "range_pct_max": 40,
+      "touch_tolerance_pct": 10,
+      "segment_count": 4,
+      "max_slope_pct": 3,
+      "breakout_range_pct": 100,
+      "breakout_volume_pct": 100
+    },
+    "universe_filters": {
+      "concepts": {
+        "enabled": false,
+        "concept_terms": [],
+        "reason_terms": []
+      }
+    },
+    "filter_st": {
+      "enabled": true
+    },
+    "execution": {
+      "fallback_to_backtrader": false
+    }
+  },
+  "param_help": {
+    "_overview": [
+      "旱地拔葱策略：在日线/周线级别搜索长期水平震荡箱体后的向上突破放量信号。",
+      "箱体上下沿通过分段分位数边界 + 线性回归拟合确定，验证斜率接近零以确认水平性。",
+      "突破条件：近1-3根K线最高收盘价超出箱体上沿指定振幅比例，同时成交量较箱体修剪均量显著放大。",
+      "箱体平均成交量计算时去掉最高/最低各10%的数据后求平均。",
+      "多周期为交集关系（AND）：所有启用周期均需独立检测到箱体突破才产生信号。",
+      "高低沿的计算包括上下影线（使用 high/low 而非 close）。",
+      "命中结果在 K 线图上显示最粗命中周期，并画出识别的上下沿两条水平线。"
+    ],
+    "global": {
+      "_render": "inline_template",
+      "_label": "全局条件",
+      "_templates": [
+        {
+          "text": "横盘区间时长不得低于 {min_duration_weeks} 周",
+          "required": true,
+          "help": "横盘区间的最短持续时间（周），同时约束所有启用的周期。越大越严格"
+        }
+      ]
+    },
+    "weekly": {
+      "_render": "inline_template",
+      "_label": "周线",
+      "_tf_key": "w",
+      "_templates": [
+        {
+          "text": "区间上下沿的幅度处于 [{range_pct_min}%, {range_pct_max}%] 内",
+          "required": true,
+          "help": "上沿相对下沿的涨幅百分比，控制箱体宽窄"
+        },
+        {
+          "text": "触摸容差为区间幅度的 {touch_tolerance_pct}%",
+          "required": true,
+          "help": "距离上/下沿多近算触摸，以区间总幅度的百分比计算"
+        },
+        {
+          "text": "计算上下沿时分 {segment_count} 段",
+          "required": true,
+          "help": "用于构造上下沿分位数边界；越大越贴近局部波动，越小越平滑"
+        },
+        {
+          "text": "上下沿每月最大允许斜率 {max_slope_pct}%",
+          "required": true,
+          "help": "越小越要求严格水平"
+        },
+        {
+          "text": "近1-3根K线最高收盘价超出上沿 {breakout_range_pct}% 的箱体振幅",
+          "required": true,
+          "help": "箱体振幅 = 上沿 − 下沿。例如100%表示收盘价需超过上沿一倍箱体振幅距离"
+        },
+        {
+          "text": "突破成交量较箱体平均成交量放大 {breakout_volume_pct}%",
+          "required": true,
+          "help": "箱体平均成交量去掉最高/最低各10%后计算。近1-3根K线平均成交量需达到此放大比例"
+        }
+      ]
+    },
+    "daily": {
+      "_render": "inline_template",
+      "_label": "日线",
+      "_tf_key": "d",
+      "_templates": [
+        {
+          "text": "区间上下沿的幅度处于 [{range_pct_min}%, {range_pct_max}%] 内",
+          "required": true,
+          "help": "上沿相对下沿的涨幅百分比，控制箱体宽窄"
+        },
+        {
+          "text": "触摸容差为区间幅度的 {touch_tolerance_pct}%",
+          "required": true,
+          "help": "距离上/下沿多近算触摸，以区间总幅度的百分比计算"
+        },
+        {
+          "text": "计算上下沿时分 {segment_count} 段",
+          "required": true,
+          "help": "用于构造上下沿分位数边界；越大越贴近局部波动，越小越平滑"
+        },
+        {
+          "text": "上下沿每月最大允许斜率 {max_slope_pct}%",
+          "required": true,
+          "help": "越小越要求严格水平"
+        },
+        {
+          "text": "近1-3根K线最高收盘价超出上沿 {breakout_range_pct}% 的箱体振幅",
+          "required": true,
+          "help": "箱体振幅 = 上沿 − 下沿。例如100%表示收盘价需超过上沿一倍箱体振幅距离"
+        },
+        {
+          "text": "突破成交量较箱体平均成交量放大 {breakout_volume_pct}%",
+          "required": true,
+          "help": "箱体平均成交量去掉最高/最低各10%后计算。近1-3根K线平均成交量需达到此放大比例"
+        }
+      ]
+    },
+    "universe_filters": {
+      "concepts": {
+        "enabled": "是否启用概念预筛选。",
+        "concept_terms": "概念名称关键字列表，语义为 AND（全部命中才保留）。",
+        "reason_terms": "选股理由关键字列表，语义为 OR（任一命中即保留）。"
+      }
+    },
+    "filter_st": {
+      "enabled": "是否在筛选时排除名称包含 ST（不分大小写）的股票。默认开启。"
+    },
+    "execution": {
+      "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader，默认 false。"
+    }
+  }
+}
