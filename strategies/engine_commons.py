@@ -255,3 +255,32 @@ def coarsest_tf(tfs: list[str]) -> str:
         if tf in tfs:
             return tf
     return "d"
+
+
+# ---------------------------------------------------------------------------
+# Scope / pattern 参数分离工具
+# ---------------------------------------------------------------------------
+
+
+def get_scope_param_names(tf_section: dict[str, Any]) -> list[str]:
+    """读取周期参数段中声明的 scope_params 列表。
+
+    未声明时返回空列表（向后兼容）。
+    """
+    raw = tf_section.get("scope_params")
+    if isinstance(raw, list):
+        return [str(n) for n in raw]
+    return []
+
+
+def extract_scope_params(tf_section: dict[str, Any]) -> dict[str, Any]:
+    """从周期参数段中提取 scope_params 声明的参数名及其值。"""
+    names = get_scope_param_names(tf_section)
+    return {k: tf_section[k] for k in names if k in tf_section}
+
+
+def strip_scope_params(tf_section: dict[str, Any]) -> dict[str, Any]:
+    """移除周期参数段中的 scope 参数及 scope_params 列表本身，返回纯 pattern 参数副本。"""
+    names = set(get_scope_param_names(tf_section))
+    names.add("scope_params")
+    return {k: v for k, v in tf_section.items() if k not in names}

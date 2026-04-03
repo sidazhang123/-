@@ -11,6 +11,7 @@
     "required_timeframes": ["w", "d"],
     "specialized_entry": "strategies.groups.handi_bacong_v1.engine:run_handi_bacong_v1_specialized"
   },
+  "usage": ["screening", "backtest"],
   "default_params": {
     "global": {
       "min_duration_weeks": 6

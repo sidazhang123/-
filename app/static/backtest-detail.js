@@ -192,6 +192,25 @@
         backgroundColor: "rgba(13,17,23,0.92)",
         borderColor: "rgba(0,180,255,0.2)",
         textStyle: { color: "#e2e8f0" },
+        formatter: function (params) {
+          if (!params || !params.length) return "";
+          var dateLabel = params[0].axisValue;
+          var parts = ['<b>' + dateLabel + '</b>'];
+          for (var i = 0; i < params.length; i++) {
+            var p = params[i];
+            if (p.seriesName === "K线" && p.data && p.data.length >= 4) {
+              var open = p.value[1], close = p.value[2];
+              var chgPct = open === 0 ? 0 : ((close - open) / open * 100);
+              var color = chgPct >= 0 ? "#ef4444" : "#10b981";
+              parts.push(p.marker + ' 涨跌幅: <span style="color:' + color + ';font-weight:bold;">' + chgPct.toFixed(2) + '%</span>');
+              parts.push('　收盘: ' + close.toFixed(2));
+            } else if (p.seriesName === "成交量") {
+              var vol = typeof p.data === "object" ? p.data.value : p.data;
+              parts.push(p.marker + ' 成交量: ' + (vol >= 1e8 ? (vol / 1e8).toFixed(2) + '亿' : vol >= 1e4 ? (vol / 1e4).toFixed(0) + '万' : vol));
+            }
+          }
+          return parts.join('<br/>');
+        },
       },
       grid: [
         { left: "8%", right: "4%", top: 32, height: "58%" },
@@ -260,6 +279,8 @@
 
     // markArea for hit intervals (red highlight, no text)
     const markAreaData = [];
+    // markPoint for hit end positions (triangle markers)
+    const markPointData = [];
     for (const iv of intervals) {
       const sIdx = nearestIndex(timeMs, new Date(iv.start_ts).getTime());
       const eIdx = nearestIndex(timeMs, new Date(iv.end_ts).getTime());
@@ -268,6 +289,15 @@
         { xAxis: xData[Math.min(sIdx, eIdx)], itemStyle: { color: "rgba(239,68,68,0.15)" } },
         { xAxis: xData[Math.max(sIdx, eIdx)] },
       ]);
+      // 在命中区间结束位置标注三角形
+      markPointData.push({
+        coord: [xData[eIdx], kData[eIdx][1]],
+        symbol: "triangle",
+        symbolSize: 12,
+        symbolRotate: 180,
+        itemStyle: { color: "#f59e0b" },
+        label: { show: false },
+      });
     }
 
     state.chart.setOption({
@@ -277,6 +307,7 @@
           name: "K线",
           data: kData,
           markArea: { silent: true, data: markAreaData },
+          markPoint: { silent: true, data: markPointData },
         },
         { name: "成交量", data: vData },
       ],

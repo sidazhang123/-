@@ -281,9 +281,8 @@ def _check_slope(code_frame: pd.DataFrame, params: dict[str, Any]) -> tuple[bool
     slope_max = float(params["slope_max"])
     continuous = params["continuous_check"]
 
-    # 截取最新 n 根线的斜率
-    recent = code_frame.tail(n)
-    slopes = recent["slope_pct"].dropna()
+    # 数据窗口由调用方截取，此处直接使用
+    slopes = code_frame["slope_pct"].dropna()
 
     if slopes.empty:
         return False, [], "斜率数据不足"
@@ -637,7 +636,10 @@ def _scan_one_code(
     for tf in enabled_tfs:
         frame = tf_data.get(tf, pd.DataFrame())
         params = all_params[tf]
-        result = detect_multi_tf_ma_uptrend(frame, params, tf)
+        # 筛选模式：按 scope 参数截取数据窗口
+        n = int(params.get("n", len(frame)))
+        frame_window = frame.tail(n)
+        result = detect_multi_tf_ma_uptrend(frame_window, params, tf)
         detail = {"passed": result.matched, **result.metrics}
         per_tf_detail[tf] = detail
         if not result.matched:

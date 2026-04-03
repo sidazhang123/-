@@ -11,8 +11,10 @@
     "required_timeframes": ["w", "d", "60"],
     "specialized_entry": "strategies.groups.consecutive_uptrends_v1.engine:run_consecutive_uptrends_v1_specialized"
   },
+  "usage": ["screening", "backtest"],
   "default_params": {
     "weekly": {
+      "scope_params": ["scan_bars"],
       "enabled": false,
       "scan_bars": 20,
       "streak_len": 5,
@@ -23,6 +25,7 @@
       "selloff_bars": 3
     },
     "daily": {
+      "scope_params": ["scan_bars"],
       "enabled": true,
       "scan_bars": 20,
       "streak_len": 5,
@@ -33,6 +36,7 @@
       "selloff_bars": 3
     },
     "min60": {
+      "scope_params": ["scan_bars"],
       "enabled": false,
       "scan_bars": 20,
       "streak_len": 5,
@@ -70,7 +74,8 @@
       "_templates": [
         {
           "text": "在最新的 {scan_bars} 根K线中查找连续小阳",
-          "required": true
+          "required": true,
+          "help": "仅在筛选模式中生效"
         },
         {
           "text": "至少 {streak_len} 根连续阳线",
@@ -111,7 +116,8 @@
       "_templates": [
         {
           "text": "在最新的 {scan_bars} 根K线中查找连续小阳",
-          "required": true
+          "required": true,
+          "help": "仅在筛选模式中生效"
         },
         {
           "text": "至少 {streak_len} 根连续阳线",
@@ -152,7 +158,8 @@
       "_templates": [
         {
           "text": "在最新的 {scan_bars} 根K线中查找连续小阳",
-          "required": true
+          "required": true,
+          "help": "仅在筛选模式中生效"
         },
         {
           "text": "至少 {streak_len} 根连续阳线",

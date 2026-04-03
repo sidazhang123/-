@@ -5,6 +5,7 @@
  * 1. 列出所有筛选任务（分页）。
  * 2. 勾选终态任务批量删除（带二次确认弹窗）。
  * 3. 点击"参"查看任务参数快照（只读模态框）。
+ * 4. 列出回测任务，支持批量删除与参数快照查看。
  */
 const $ = (id) => document.getElementById(id);
 const escapeHtml = ParamRender.escapeHtml;
@@ -132,11 +133,13 @@ function showDeleteConfirm() {
   _pendingDeleteIds = ids;
   $("deleteConfirmText").textContent = `确定要删除选中的 ${ids.length} 个任务及其日志和结果吗？此操作不可撤销。`;
   $("deleteConfirmOverlay").hidden = false;
+  $("deleteConfirmYesBtn").dataset.target = "screening";
 }
 
 function hideDeleteConfirm() {
   $("deleteConfirmOverlay").hidden = true;
   _pendingDeleteIds = [];
+  _pendingBtDeleteIds = [];
 }
 
 async function executeDelete() {
@@ -230,6 +233,188 @@ function closeParamModal() {
   $("paramModalBody").innerHTML = "";
 }
 
+// ── Backtest task list ──
+
+const MODE_TEXT = { fixed: "固定参数", sweep: "参数扫描" };
+let btJobs = [];
+let btSelectedIds = new Set();
+
+async function loadBtJobs() {
+  const data = await getJSON("/api/backtests");
+  btJobs = data.jobs || [];
+  btSelectedIds.clear();
+  renderBtTable();
+  updateBtSelectionHint();
+}
+
+function renderBtTable() {
+  const tbody = $("btTaskTable").querySelector("tbody");
+  tbody.innerHTML = "";
+  const empty = $("btEmptyHint");
+  if (!btJobs.length) {
+    empty.hidden = false;
+    return;
+  }
+  empty.hidden = true;
+  for (const j of btJobs) {
+    const tr = document.createElement("tr");
+    const terminal = isTerminal(j.status);
+    const checked = btSelectedIds.has(j.job_id);
+    tr.innerHTML = `
+      <td><input type="checkbox" class="bt-row-check" data-id="${escapeHtml(j.job_id)}" ${terminal ? "" : "disabled"} ${checked ? "checked" : ""} /></td>
+      <td>${escapeHtml(j.strategy_group_id || "-")}</td>
+      <td>${escapeHtml(j.strategy_name || "-")}</td>
+      <td>${escapeHtml(MODE_TEXT[j.mode] || j.mode || "-")}</td>
+      <td><span class="status-badge status-${escapeHtml(j.status)}">${STATUS_TEXT[j.status] || j.status}</span></td>
+      <td>${Math.round((j.progress || 0) * 100)}%</td>
+      <td>${formatDateTime(j.created_at)}</td>
+      <td>${formatDateTime(j.finished_at)}</td>
+      <td><button type="button" class="param-badge-btn bt-view-params-btn" data-id="${escapeHtml(j.job_id)}" title="查看回测参数">参</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  tbody.querySelectorAll(".bt-row-check").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      if (cb.checked) btSelectedIds.add(cb.dataset.id);
+      else btSelectedIds.delete(cb.dataset.id);
+      updateBtSelectionHint();
+    });
+  });
+  tbody.querySelectorAll(".bt-view-params-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openBtParamModal(btn.dataset.id));
+  });
+}
+
+function updateBtSelectionHint() {
+  const btn = $("btDeleteSelectedBtn");
+  const hint = $("btSelectionHint");
+  const count = btSelectedIds.size;
+  btn.disabled = count === 0;
+  hint.textContent = count > 0 ? `已选 ${count} 个任务` : "";
+  const terminalCount = btJobs.filter((j) => isTerminal(j.status)).length;
+  const hcb = $("btHeaderCheckbox");
+  hcb.checked = terminalCount > 0 && count === terminalCount;
+  hcb.indeterminate = count > 0 && count < terminalCount;
+}
+
+function btSelectAllTerminal() {
+  btSelectedIds.clear();
+  for (const j of btJobs) {
+    if (isTerminal(j.status)) btSelectedIds.add(j.job_id);
+  }
+  renderBtTable();
+  updateBtSelectionHint();
+}
+
+function btDeselectAll() {
+  btSelectedIds.clear();
+  renderBtTable();
+  updateBtSelectionHint();
+}
+
+let _pendingBtDeleteIds = [];
+
+function showBtDeleteConfirm() {
+  const ids = Array.from(btSelectedIds);
+  if (!ids.length) return;
+  _pendingBtDeleteIds = ids;
+  $("deleteConfirmText").textContent = `确定要删除选中的 ${ids.length} 个回测任务及其日志和缓存吗？此操作不可撤销。`;
+  $("deleteConfirmOverlay").hidden = false;
+  // 标记当前删除目标为回测
+  $("deleteConfirmYesBtn").dataset.target = "backtest";
+}
+
+async function executeBtDelete() {
+  const ids = _pendingBtDeleteIds.slice();
+  hideDeleteConfirm();
+  if (!ids.length) return;
+  try {
+    const resp = await fetch("/api/backtests", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_ids: ids }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`删除失败(${resp.status})：${text}`);
+    }
+    const data = await resp.json();
+    alert(`已删除 ${data.deleted} 个回测任务。`);
+    await loadBtJobs();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+let _btParamCache = {};
+
+async function loadBtParams(jobId) {
+  if (_btParamCache[jobId]) return _btParamCache[jobId];
+  const data = await getJSON(`/api/backtests/${jobId}/params`);
+  _btParamCache[jobId] = data;
+  return data;
+}
+
+function renderBtParamMeta(data) {
+  const parts = [];
+  if (data.strategy_name) parts.push(escapeHtml(data.strategy_name));
+  const modeLabel = MODE_TEXT[data.mode] || data.mode || "";
+  if (modeLabel) parts.push(escapeHtml(modeLabel));
+  if (data.forward_bars && data.forward_bars.length === 3) {
+    parts.push(escapeHtml(`前瞻: ${data.forward_bars.join("/")} bar`));
+  }
+  if (data.slide_step) parts.push(escapeHtml(`步进: ${data.slide_step}`));
+  if (!parts.length) return "";
+  return `<div class="param-modal-meta">${parts.join(" · ")}</div>`;
+}
+
+function renderBtReadonlyParams(data) {
+  const groupParams = data.group_params;
+  const paramHelp = data.param_help;
+  if (!groupParams || !Object.keys(groupParams).length) {
+    return '<div class="param-modal-empty">无参数数据</div>';
+  }
+  const meta = renderBtParamMeta(data);
+  const overview = renderOverview(paramHelp);
+  const keys = Object.keys(groupParams);
+  const fields = keys.map((key) => {
+    const helpNode = paramHelp ? paramHelp[key] : null;
+    return ParamRender.renderParamField([key], groupParams[key], helpNode, key, 0, { readonly: true, hideScopeParams: true });
+  }).join("");
+  return meta + overview + fields;
+}
+
+/** sweep 模式下向只读参数字段旁注入 min/max/step 标签 */
+function injectReadonlyRanges(container, ranges) {
+  if (!ranges || !Object.keys(ranges).length) return;
+  for (const [path, r] of Object.entries(ranges)) {
+    const el = container.querySelector(`[data-param-path="${path}"]`);
+    if (!el) continue;
+    const badge = document.createElement("span");
+    badge.className = "bt-range-row";
+    badge.innerHTML =
+      `<label>min <span class="bt-rng-val">${r.min}</span></label>` +
+      `<label>max <span class="bt-rng-val">${r.max}</span></label>` +
+      `<label>step <span class="bt-rng-val">${r.step}</span></label>`;
+    el.insertAdjacentElement("afterend", badge);
+  }
+}
+
+function openBtParamModal(jobId) {
+  if (!jobId) return;
+  const overlay = $("paramModalOverlay");
+  const body = $("paramModalBody");
+  overlay.hidden = false;
+  body.innerHTML = '<div class="param-modal-loading">加载中…</div>';
+
+  loadBtParams(jobId).then((data) => {
+    body.innerHTML = renderBtReadonlyParams(data);
+    if (data.mode === "sweep") injectReadonlyRanges(body, data.param_ranges);
+  }).catch((err) => {
+    body.innerHTML = `<div class="param-modal-empty">加载失败: ${escapeHtml(err.message || "未知错误")}</div>`;
+  });
+}
+
 // ── Init ──
 
 function bindEvents() {
@@ -253,12 +438,29 @@ function bindEvents() {
     if (e.target === $("paramModalOverlay")) closeParamModal();
   });
 
-  // delete confirm
+  // delete confirm（共用弹窗，按 data-target 区分筛选/回测）
   $("deleteConfirmCancelBtn").addEventListener("click", hideDeleteConfirm);
   $("deleteConfirmNoBtn").addEventListener("click", hideDeleteConfirm);
-  $("deleteConfirmYesBtn").addEventListener("click", () => executeDelete().catch((e) => alert(e.message)));
+  $("deleteConfirmYesBtn").addEventListener("click", () => {
+    const target = $("deleteConfirmYesBtn").dataset.target;
+    if (target === "backtest") {
+      executeBtDelete().catch((e) => alert(e.message));
+    } else {
+      executeDelete().catch((e) => alert(e.message));
+    }
+  });
   $("deleteConfirmOverlay").addEventListener("click", (e) => {
     if (e.target === $("deleteConfirmOverlay")) hideDeleteConfirm();
+  });
+
+  // 回测任务列表事件
+  $("btRefreshBtn").addEventListener("click", () => loadBtJobs().catch((e) => alert(e.message)));
+  $("btSelectAllBtn").addEventListener("click", btSelectAllTerminal);
+  $("btDeselectAllBtn").addEventListener("click", btDeselectAll);
+  $("btDeleteSelectedBtn").addEventListener("click", showBtDeleteConfirm);
+  $("btHeaderCheckbox").addEventListener("change", (e) => {
+    if (e.target.checked) btSelectAllTerminal();
+    else btDeselectAll();
   });
 
   window.addEventListener("keydown", (e) => {
@@ -274,7 +476,7 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
-  await loadTasks();
+  await Promise.all([loadTasks(), loadBtJobs()]);
 }
 
 init().catch((err) => {

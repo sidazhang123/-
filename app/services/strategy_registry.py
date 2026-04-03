@@ -54,6 +54,7 @@ class StrategyGroupMeta:
     param_help: dict[str, Any] | None = None
     engine: str = "backtrader"
     execution: StrategyExecutionMeta = field(default_factory=StrategyExecutionMeta)
+    usage: list[str] = field(default_factory=lambda: ["screening", "backtest"])
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,14 @@ class StrategyRegistry:
         if param_help is not None and not isinstance(param_help, dict):
             raise StrategyRegistryError(f"策略组清单 param_help 必须是对象: {path}")
 
+        raw_usage = raw.get("usage")
+        if raw_usage is None:
+            usage = ["screening", "backtest"]
+        elif isinstance(raw_usage, list) and all(isinstance(u, str) for u in raw_usage):
+            usage = raw_usage
+        else:
+            raise StrategyRegistryError(f"策略组清单 usage 必须是字符串数组: {path}")
+
         cache_scope = str(execution_raw.get("cache_scope") or "none").strip().lower()
         if cache_scope not in self.VALID_CACHE_SCOPE:
             raise StrategyRegistryError(f"策略组清单 execution.cache_scope 不合法({cache_scope}): {path}")
@@ -257,6 +266,7 @@ class StrategyRegistry:
             ),
             default_params=default_params,
             param_help=param_help,
+            usage=usage,
         )
 
     def _all_meta(self) -> dict[str, StrategyGroupMeta]:
@@ -430,6 +440,7 @@ class StrategyRegistry:
             "name": meta.name,
             "description": meta.description,
             "engine": meta.engine,
+            "usage": list(meta.usage),
             "execution": {
                 "requires_time_window": meta.execution.requires_time_window,
                 "supports_intra_task_parallel": meta.execution.supports_intra_task_parallel,

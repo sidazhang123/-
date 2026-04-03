@@ -416,6 +416,15 @@ def _normalize_monitor_settings_payload(settings: dict[str, Any]) -> dict[str, A
         group_params = _parse_legacy_group_params(normalized.get("group_params_text"))
     normalized["group_params"] = group_params if isinstance(group_params, dict) else {}
     normalized.pop("group_params_text", None)
+    # 确保 per_strategy_params 始终返回
+    psp = normalized.get("per_strategy_params")
+    if not isinstance(psp, dict):
+        psp = {}
+    # 兼容: 如果 per_strategy_params 为空但 group_params 有值，回填当前策略
+    gid = normalized.get("strategy_group_id") or ""
+    if gid and group_params and gid not in psp:
+        psp[gid] = group_params
+    normalized["per_strategy_params"] = psp
     return normalized
 
 
@@ -585,6 +594,17 @@ def save_monitor_ui_settings(payload: MonitorFormSettingsPayload, request: Reque
 
     settings["strategy_group_id"] = group_id
     settings["group_params"] = group_params
+
+    # ── 同步维护 per_strategy_params ──
+    psp = settings.get("per_strategy_params")
+    if not isinstance(psp, dict):
+        existing = state_db.get_monitor_form_settings()
+        psp = existing.get("per_strategy_params") if isinstance(existing, dict) else {}
+        if not isinstance(psp, dict):
+            psp = {}
+    psp[group_id] = group_params
+    settings["per_strategy_params"] = psp
+
     state_db.set_monitor_form_settings(settings)
     return {"settings": settings}
 
@@ -1923,6 +1943,28 @@ async def task_status_stream(task_id: str, request: Request):
 def create_backtest_job(
     payload: BacktestCreateRequest, request: Request
 ) -> BacktestCreateResponse:
+    # ── 校验策略是否支持回测 ──
+    registry = request.app.state.strategy_registry
+    try:
+        meta = registry.get_group_meta(payload.strategy_group_id)
+    except (KeyError, Exception):
+        raise HTTPException(status_code=400, detail="策略组不存在")
+    if "backtest" not in meta.usage:
+        raise HTTPException(status_code=400, detail="该策略不支持回测")
+
+    # ── 校验 param_ranges 不含 scope 路径 ──
+    if payload.param_ranges and payload.group_params:
+        scope_paths: set[str] = set()
+        for section_key, section_val in payload.group_params.items():
+            if isinstance(section_val, dict):
+                for sp in section_val.get("scope_params", []):
+                    scope_paths.add(f"{section_key}.{sp}")
+        bad = [p for p in payload.param_ranges if p in scope_paths]
+        if bad:
+            raise HTTPException(
+                status_code=400,
+                detail=f"param_ranges 不得包含 scope 参数: {', '.join(bad)}",
+            )
     manager = request.app.state.backtest_manager
     try:
         job_id = manager.create_job(
@@ -1946,10 +1988,17 @@ def create_backtest_job(
 def list_backtest_jobs(request: Request) -> dict[str, Any]:
     """返回回测任务列表 (最近30条) + 当前运行中的任务。"""
     state_db = request.app.state.state_db
+    registry = request.app.state.strategy_registry
     jobs = state_db.list_backtest_jobs(limit=30)
     running = state_db.get_running_backtest_job()
+    # 增补 strategy_name 并格式化时间
     for j in jobs:
-        for k in ("created_at",):
+        gid = j.get("strategy_group_id") or ""
+        try:
+            j["strategy_name"] = registry.get_group_meta(gid).name if gid else ""
+        except (KeyError, Exception):
+            j["strategy_name"] = ""
+        for k in ("created_at", "finished_at"):
             if isinstance(j.get(k), datetime):
                 j[k] = j[k].isoformat()
     return {
@@ -1978,6 +2027,86 @@ def stop_backtest_job(job_id: str, request: Request) -> BacktestControlResponse:
     if not ok:
         raise HTTPException(status_code=404, detail="回测任务不存在或不可停止")
     return BacktestControlResponse(job_id=job_id, status="failed", message="回测任务已强制终止")
+
+
+@router.get("/backtests/{job_id}/params")
+def get_backtest_job_params(job_id: str, request: Request) -> dict[str, Any]:
+    """返回回测任务的参数快照（group_params + param_help + 回测专有参数）。
+
+    输入：
+    1. job_id: 回测任务 ID。
+    2. request: FastAPI 请求对象。
+    输出：
+    1. 包含 group_params、param_help、forward_bars、slide_step 等字段的字典。
+    用途：
+    1. "参" 按钮点击后展示回测任务参数快照。
+    边界条件：
+    1. param_help 从策略注册表兜底获取；策略组被删除时 param_help 为 None。
+    """
+    state_db = request.app.state.state_db
+    job = state_db.get_backtest_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"回测任务不存在: {job_id}")
+
+    strategy_group_id = job.get("strategy_group_id") or ""
+    param_help = None
+    strategy_name = ""
+    if strategy_group_id:
+        registry = request.app.state.strategy_registry
+        try:
+            meta = registry.get_group_meta(strategy_group_id)
+            param_help = meta.param_help
+            strategy_name = meta.name
+        except (KeyError, Exception):
+            pass
+
+    return {
+        "group_params": job.get("group_params") or {},
+        "param_help": param_help,
+        "strategy_group_id": strategy_group_id,
+        "strategy_name": strategy_name,
+        "mode": job.get("mode") or "fixed",
+        "forward_bars": job.get("forward_bars") or [2, 5, 7],
+        "slide_step": job.get("slide_step") or 1,
+        "param_ranges": job.get("param_ranges") or {},
+    }
+
+
+@router.delete("/backtests")
+def delete_backtest_jobs(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    """批量删除回测任务及其日志和缓存目录。
+
+    输入：
+    1. payload: { "job_ids": ["id1", "id2", ...] }。
+    输出：
+    1. { "deleted": 实际删除数 }。
+    用途：
+    1. 任务管理页批量删除回测任务。
+    边界条件：
+    1. 跳过正在运行的任务（queued / running / stopping）。
+    """
+    import shutil
+
+    job_ids = payload.get("job_ids") or []
+    if not job_ids:
+        return {"deleted": 0}
+
+    state_db = request.app.state.state_db
+    cache_dir = request.app.state.backtest_cache_dir
+    deleted = 0
+    for jid in job_ids:
+        job = state_db.get_backtest_job(jid)
+        if not job:
+            continue
+        if job["status"] in ("queued", "running", "stopping"):
+            continue
+        state_db.delete_backtest_job(jid)
+        # 清理缓存目录
+        job_cache = cache_dir / jid
+        if job_cache.exists():
+            shutil.rmtree(job_cache, ignore_errors=True)
+        deleted += 1
+    return {"deleted": deleted}
 
 
 @router.get("/backtests/{job_id}/status", response_model=BacktestStatusResponse)
@@ -2094,12 +2223,17 @@ def get_backtest_hits(
     finally:
         con.close()
 
+    # 兼容旧缓存: 盈利/回撤钳位 ≥ 0
+    for col in df.columns:
+        if col.startswith(("profit_", "drawdown_")) and col.endswith("_pct"):
+            df[col] = df[col].clip(lower=0)
+
     items = []
     for _, row in df.iterrows():
         items.append(BacktestHitRecord(
-            code=row.get("code", ""),
-            name=row.get("name", ""),
-            tf_key=row.get("tf_key", ""),
+            code=row.get("code") or "",
+            name=row.get("name") or "",
+            tf_key=row.get("tf_key") or "",
             pattern_start_ts=row.get("pattern_start_ts"),
             pattern_end_ts=row.get("pattern_end_ts"),
             buy_price=row.get("buy_price", 0),
@@ -2126,7 +2260,10 @@ def get_backtest_stats(job_id: str, request: Request) -> dict[str, Any]:
     if not json_path.exists():
         raise HTTPException(status_code=404, detail="统计结果不存在")
 
-    return json.loads(json_path.read_text(encoding="utf-8"))
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    # 兼容旧缓存: 盈利/回撤统计钳位 ≥ 0
+    _clamp_stats_per_forward(data)
+    return data
 
 
 @router.get("/backtests/{job_id}/sweep")
@@ -2141,6 +2278,73 @@ def get_backtest_sweep(job_id: str, request: Request) -> BacktestSweepResponse:
     data = json.loads(json_path.read_text(encoding="utf-8"))
     items = [BacktestSweepRow(**row) for row in data]
     return BacktestSweepResponse(combo_total=len(items), items=items)
+
+
+@router.get("/backtests/{job_id}/sweep-stats")
+def get_backtest_sweep_stats(job_id: str, request: Request) -> dict[str, Any]:
+    """返回 sweep 所有参数组合的详细统计（per-forward profit/drawdown/sharpe）。
+
+    读取每个 combo_*/stats.json，提取 mean/median/max 汇总指标，
+    供前端渲染参数组合对比表格和散点图。
+    """
+    cache_dir = request.app.state.backtest_cache_dir
+    job_dir = cache_dir / job_id
+
+    sweep_path = job_dir / "sweep_results.json"
+    if not sweep_path.exists():
+        raise HTTPException(status_code=404, detail="sweep 结果不存在")
+
+    sweep_rows = json.loads(sweep_path.read_text(encoding="utf-8"))
+
+    # 从任务记录获取 forward_bars 映射
+    state_db = request.app.state.state_db
+    job = state_db.get_backtest_job(job_id)
+    forward_bars = job.get("forward_bars", [2, 5, 7]) if job else [2, 5, 7]
+    labels = ["x", "y", "z"]
+    forward_labels = {str(fb): labels[i] for i, fb in enumerate(forward_bars) if i < 3}
+
+    combos: list[dict[str, Any]] = []
+    for row in sweep_rows:
+        combo_idx = row.get("combo_index", 0)
+        stats_path = job_dir / f"combo_{combo_idx}" / "stats.json"
+
+        entry: dict[str, Any] = {
+            "combo_index": combo_idx,
+            "param_combo": row.get("param_combo", {}),
+            "total_hits": row.get("total_hits", 0),
+        }
+
+        if stats_path.exists():
+            stats = json.loads(stats_path.read_text(encoding="utf-8"))
+            entry["unique_stocks"] = stats.get("unique_stocks", 0)
+            per_fwd: dict[str, Any] = {}
+            for fwd_key, fwd_data in (stats.get("per_forward") or {}).items():
+                profit = fwd_data.get("profit", {})
+                drawdown = fwd_data.get("drawdown", {})
+                sharpe = fwd_data.get("sharpe", {})
+                per_fwd[fwd_key] = {
+                    "profit_mean": max(profit.get("mean") or 0, 0),
+                    "profit_median": max(profit.get("median") or 0, 0),
+                    "profit_max": max(profit.get("max") or 0, 0),
+                    "drawdown_mean": max(drawdown.get("mean") or 0, 0),
+                    "drawdown_median": max(drawdown.get("median") or 0, 0),
+                    "drawdown_max": max(drawdown.get("max") or 0, 0),
+                    "sharpe_mean": sharpe.get("mean"),
+                    "sharpe_median": sharpe.get("median"),
+                    "win_rate": profit.get("win_rate"),
+                }
+            entry["per_forward"] = per_fwd
+        else:
+            entry["unique_stocks"] = 0
+            entry["per_forward"] = {}
+
+        combos.append(entry)
+
+    return {
+        "forward_bars": forward_bars,
+        "forward_labels": forward_labels,
+        "combos": combos,
+    }
 
 
 @router.get("/backtests/{job_id}/stock-chart")
@@ -2178,7 +2382,14 @@ def get_backtest_stock_chart(
 
     table_name = TIMEFRAME_TO_TABLE.get(tf_key, f"klines_{tf_key}")
     market_db = MarketDataDB(request.app.state.source_db_path)
-    candles = market_db.get_chart_klines(code=code, table_name=table_name)
+    candles = market_db.fetch_candles_for_chart(
+        code=code,
+        timeframe=tf_key,
+        start_ts=None,
+        end_ts=None,
+        center_ts=None,
+        window=800,
+    )
 
     intervals = []
     for _, row in hits_df.iterrows():
@@ -2198,7 +2409,18 @@ def get_backtest_stock_chart(
 @router.get("/ui-settings/backtest")
 def get_backtest_ui_settings(request: Request) -> dict[str, Any]:
     state_db = request.app.state.state_db
-    return {"settings": state_db.get_backtest_form_settings()}
+    raw = state_db.get_backtest_form_settings()
+    # 兼容旧格式: strategy_settings → per_strategy_sweep_ranges
+    if isinstance(raw, dict) and "strategy_settings" in raw and "per_strategy_sweep_ranges" not in raw:
+        old_ss = raw.pop("strategy_settings", {})
+        pssr: dict[str, Any] = {}
+        if isinstance(old_ss, dict):
+            for gid, val in old_ss.items():
+                if isinstance(val, dict) and "sweep_ranges" in val:
+                    pssr[gid] = val["sweep_ranges"]
+        raw["per_strategy_sweep_ranges"] = pssr
+        raw.pop("sweep_ranges", None)
+    return {"settings": raw}
 
 
 @router.post("/ui-settings/backtest")
@@ -2207,8 +2429,52 @@ def save_backtest_ui_settings(
 ) -> dict[str, Any]:
     state_db = request.app.state.state_db
     settings_data = payload.model_dump()
+
+    # ── 将 group_params 交叉同步到 monitor 的 per_strategy_params ──
+    group_id = (settings_data.get("strategy_group_id") or "").strip()
+    group_params = settings_data.get("group_params")
+    if group_id and isinstance(group_params, dict) and group_params:
+        monitor_raw = state_db.get_monitor_form_settings()
+        if not isinstance(monitor_raw, dict):
+            monitor_raw = {}
+        psp = monitor_raw.get("per_strategy_params")
+        if not isinstance(psp, dict):
+            psp = {}
+        psp[group_id] = group_params
+        monitor_raw["per_strategy_params"] = psp
+        # 如果 monitor 当前选中的也是同一策略，同步 group_params
+        if monitor_raw.get("strategy_group_id") == group_id:
+            monitor_raw["group_params"] = group_params
+        state_db.set_monitor_form_settings(monitor_raw)
+
+    # 不存储 group_params 到回测设置中（单一来源在 monitor）
+    settings_data.pop("group_params", None)
     state_db.set_backtest_form_settings(settings_data)
     return {"settings": settings_data}
+
+
+def _clamp_stats_per_forward(data: dict[str, Any]) -> None:
+    """兼容旧缓存: 将 per_forward 中 profit/drawdown 统计钳位至 ≥ 0。"""
+    _CLAMP_KEYS = {"mean", "median", "max", "min", "q25", "q75", "std"}
+    for _fwd_key, fwd_data in (data.get("per_forward") or {}).items():
+        for metric_name in ("profit", "drawdown"):
+            bucket = fwd_data.get(metric_name)
+            if not isinstance(bucket, dict):
+                continue
+            for k in _CLAMP_KEYS:
+                v = bucket.get(k)
+                if isinstance(v, (int, float)) and v < 0:
+                    bucket[k] = 0.0
+            # 直方图: 钳位 bin 下界及计数不受影响 (只是移除了负区间的意义)
+            hist = bucket.get("histogram")
+            if isinstance(hist, list):
+                bucket["histogram"] = [
+                    {**b, "bin_start": max(b.get("bin_start", 0), 0),
+                     "bin_end": max(b.get("bin_end", 0), 0)}
+                    if b.get("bin_start", 0) < 0 or b.get("bin_end", 0) < 0
+                    else b
+                    for b in hist
+                ]
 
 
 def _bt_safe_val(v: Any) -> float | None:

@@ -498,7 +498,7 @@ def _scan_tf_for_code(
     closes_all = code_frame["close"].values.astype(np.float64)
     n_total = len(code_frame)
 
-    search_recent_weeks = params["search_recent_weeks"]
+    search_recent_weeks = params.get("search_recent_weeks", 0)
     pattern_months_min = params["pattern_months_min"]
     pattern_months_max = params["pattern_months_max"]
     segment_count = params["segment_count"]
@@ -510,8 +510,12 @@ def _scan_tf_for_code(
     step = _TF_STEP[tf_key]
 
     # 搜索范围：t_e 的时间必须在 [T_latest - search_recent_weeks, T_latest]
+    # search_recent_weeks <= 0 表示不限制（回测模式下 scope 参数已剥离）
     latest_ts = pd.Timestamp(ts_arr[-1])
-    search_start_ts = latest_ts - pd.Timedelta(weeks=search_recent_weeks)
+    if search_recent_weeks > 0:
+        search_start_ts = latest_ts - pd.Timedelta(weeks=search_recent_weeks)
+    else:
+        search_start_ts = pd.Timestamp(ts_arr[0])
 
     # 月数换算常量
     days_per_month = 30.0
@@ -970,8 +974,10 @@ def run_converging_triangle_v1_specialized(
 # ---------------------------------------------------------------------------
 
 def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    params = _normalize_tf_params(group_params, section_key)
+    params.pop("search_recent_weeks", None)  # scope 参数不参与回测
     return {
-        "params": _normalize_tf_params(group_params, section_key),
+        "params": params,
         "tf_key": _PARAM_SECTION_TO_TF[section_key],
     }
 
@@ -1002,13 +1008,20 @@ def detect_converging_triangle_vectorized(
     ts_arr = code_frame["ts"].values
     n_total = len(code_frame)
 
-    search_recent_weeks = params["search_recent_weeks"]
+    search_recent_weeks = params.get("search_recent_weeks", 0)
 
     # 锚点步长: search_recent_weeks 对应的 bar 数（避免搜索窗口重叠）
-    if tf_key == "w":
-        anchor_step = max(search_recent_weeks, 1)
+    # 回测模式下 scope 参数已剥离，使用 pattern_months_min 推算默认步长
+    if search_recent_weeks > 0:
+        if tf_key == "w":
+            anchor_step = max(search_recent_weeks, 1)
+        else:
+            anchor_step = max(search_recent_weeks * 5, 1)
     else:
-        anchor_step = max(search_recent_weeks * 5, 1)  # 日线: 每周约5个交易日
+        if tf_key == "w":
+            anchor_step = max(int(pattern_months_min * 4.3), 1)
+        else:
+            anchor_step = max(int(pattern_months_min * 21), 1)
 
     # 最小有效锚点位置: pattern_months_min 对应的 bar 数 + segment_count
     pattern_months_min = params["pattern_months_min"]

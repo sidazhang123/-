@@ -5,6 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>任务管理 - 量价筛选系统</title>
   <link rel="stylesheet" href="/static/styles.css?v=20260322-task-manager" />
+  <style>
+    .bt-range-row { display:inline-flex; align-items:center; gap:6px; margin-left:8px; vertical-align:middle;
+                     border:1px solid rgba(255,159,10,0.45); border-radius:8px; padding:3px 8px;
+                     background:rgba(255,159,10,0.06); }
+    .bt-range-row label { font-size:.78rem; color:var(--color-text-secondary); white-space:nowrap;
+                          display:inline-flex; align-items:center; gap:2px; }
+    .bt-range-row .bt-rng-val { min-width:36px; padding:2px 6px; border:1px solid rgba(255,159,10,0.35);
+                                border-radius:6px; background:#fff; font-size:13px; text-align:center;
+                                color:#e67e00; font-weight:600; display:inline-block; }
+  </style>
 </head>
 <body>
   <div class="app-shell">
@@ -38,7 +48,7 @@
     <div class="main-content">
       <div class="page-header">
         <h1>任务管理</h1>
-        <p>查看筛选任务历史，批量删除已完成任务。</p>
+        <p>查看筛选/回测任务历史，批量删除已完成任务。</p>
       </div>
 
       <section class="panel">
@@ -69,6 +79,36 @@
           </table>
         </div>
         <div id="emptyHint" class="hint" hidden>暂无筛选任务。</div>
+      </section>
+
+      <section class="panel">
+        <h2>回测任务列表</h2>
+        <div class="task-mgr-toolbar">
+          <button id="btRefreshBtn" type="button">刷新</button>
+          <button id="btSelectAllBtn" type="button" class="ghost">全选</button>
+          <button id="btDeselectAllBtn" type="button" class="ghost">取消</button>
+          <button id="btDeleteSelectedBtn" type="button" class="danger" disabled>删除</button>
+          <span id="btSelectionHint" class="hint"></span>
+        </div>
+        <div class="table-wrap large">
+          <table id="btTaskTable" class="sticky-header">
+            <thead>
+              <tr>
+                <th style="width:36px"><input type="checkbox" id="btHeaderCheckbox" title="全选/取消" /></th>
+                <th>策略组</th>
+                <th>策略名称</th>
+                <th>模式</th>
+                <th>状态</th>
+                <th>进度</th>
+                <th>创建时间</th>
+                <th>完成时间</th>
+                <th>参数快照</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="btEmptyHint" class="hint" hidden>暂无回测任务。</div>
       </section>
     </div><!-- /.main-content -->
   </div><!-- /.app-shell -->

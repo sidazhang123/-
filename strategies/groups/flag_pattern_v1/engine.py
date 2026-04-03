@@ -286,7 +286,7 @@ def detect_flag(
     3. P1 所在 bar 必须在 P0 所在 bar 之后（上涨旗杆方向约束）。
     4. 找到第一个有效组合即返回，不继续搜索。
     """
-    scan_bars = int(params["scan_bars"])
+    scan_bars = int(params.get("scan_bars", 0))
     pole_len_min = int(params["pole_len_min"])
     pole_len_max = int(params["pole_len_max"])
     pole_return_min = float(params["pole_return_min"])
@@ -299,8 +299,8 @@ def detect_flag(
     if len(code_frame) < pole_len_min + 1:
         return DetectionResult(matched=False, metrics={"reason": "数据不足"})
 
-    # 截取最新 scan_bars 根线
-    window = code_frame.tail(scan_bars).reset_index(drop=True)
+    # 数据窗口由调用方截取，此处直接使用
+    window = code_frame.reset_index(drop=True)
     n = len(window)
 
     highs = window["high"].values
@@ -535,7 +535,10 @@ def _scan_one_code(
         if frame.empty:
             per_tf_detail[tf] = {"detected": False, "reason": "无数据"}
             continue
-        result = detect_flag(frame, params)
+        # 筛选模式：按 scope 参数截取数据窗口
+        scan_bars = int(params.get("scan_bars", len(frame)))
+        frame_window = frame.tail(scan_bars)
+        result = detect_flag(frame_window, params)
         detail = {"detected": result.matched, "tf": tf, **result.metrics}
         per_tf_detail[tf] = detail
         if result.matched:
@@ -740,12 +743,149 @@ def run_flag_pattern_v1_specialized(
 # ---------------------------------------------------------------------------
 
 def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
-    return {"params": _normalize_tf_params(group_params, section_key)}
+    params = _normalize_tf_params(group_params, section_key)
+    params.pop("scan_bars", None)
+    return {"params": params}
+
+
+def detect_flag_vectorized(
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+) -> list[DetectionResult]:
+    """在全量历史上正向扫描所有不重叠旗形命中点。
+
+    与 detect_flag 的区别：
+    - detect_flag 从尾部向前搜索第一个命中（筛选模式）。
+    - 本函数从头向尾正向扫描，收集所有不重叠命中（回测模式）。
+
+    输入：
+    1. code_frame: 单只股票完整 OHLCV DataFrame（已按 ts 排序）。
+    2. params: 已规范化的单周期参数（不含 scan_bars）。
+    输出：
+    1. DetectionResult 列表，每个元素对应一段命中。
+    边界条件：
+    1. 数据不足 pole_len_min + 1 时返回空列表。
+    2. 同一位置尝试最长旗杆+最长旗面优先。
+    """
+    pole_len_min = int(params["pole_len_min"])
+    pole_len_max = int(params["pole_len_max"])
+    pole_return_min = float(params["pole_return_min"])
+    pole_return_max = float(params["pole_return_max"])
+    flag_width_ratio_min = float(params["flag_width_ratio_min"])
+    flag_width_ratio_max = float(params["flag_width_ratio_max"])
+    flag_high_above_max = float(params["flag_high_above_max"])
+    flag_low_below_max = float(params["flag_low_below_max"])
+
+    if len(code_frame) < pole_len_min + 1:
+        return []
+
+    window = code_frame.reset_index(drop=True)
+    n = len(window)
+    highs = window["high"].values
+    lows = window["low"].values
+    closes = window["close"].values
+
+    results: list[DetectionResult] = []
+    cursor = 0
+
+    while cursor <= n - pole_len_min - 1:
+        best: DetectionResult | None = None
+
+        for pole_len in range(min(pole_len_max, n - cursor - 1), pole_len_min - 1, -1):
+            pole_start = cursor
+            pole_end = pole_start + pole_len - 1
+
+            pole_highs_seg = highs[pole_start: pole_end + 1]
+            pole_lows_seg = lows[pole_start: pole_end + 1]
+
+            p0 = float(pole_lows_seg[0])
+            if p0 > float(pole_lows_seg.min()):
+                continue
+
+            p1_local_idx = int(np.argmax(pole_highs_seg))
+            p1 = float(pole_highs_seg[p1_local_idx])
+            if p1_local_idx == 0:
+                continue
+
+            if p0 <= 0:
+                continue
+            pole_gain = p1 - p0
+            pole_return = pole_gain / p0
+            if pole_return < pole_return_min or pole_return > pole_return_max:
+                continue
+
+            flag_len_min_calc = max(1, int(math.floor(pole_len * flag_width_ratio_min)))
+            flag_len_max_calc = int(math.ceil(pole_len * flag_width_ratio_max))
+            flag_start = pole_end + 1
+            available_bars = n - flag_start
+            if available_bars < flag_len_min_calc:
+                continue
+
+            actual_flag_len_max = min(flag_len_max_calc, available_bars)
+
+            for flag_len in range(actual_flag_len_max, flag_len_min_calc - 1, -1):
+                flag_end = flag_start + flag_len - 1
+
+                flag_highs_seg = highs[flag_start: flag_end + 1]
+                flag_lows_seg = lows[flag_start: flag_end + 1]
+                flag_closes_seg = closes[flag_start: flag_end + 1]
+
+                flag_high = float(flag_highs_seg.max())
+                flag_low = float(flag_lows_seg.min())
+
+                if pole_gain <= 0:
+                    continue
+                high_above = (flag_high - p1) / pole_gain
+                low_below = (p1 - flag_low) / pole_gain
+                if high_above > flag_high_above_max or low_below > flag_low_below_max:
+                    continue
+
+                convergence_closes = np.concatenate([[closes[pole_end]], flag_closes_seg])
+                hv_ok, hv_slope_norm, _ = _check_hv_convergence(convergence_closes, params, flag_len)
+                if not hv_ok:
+                    continue
+
+                best = DetectionResult(
+                    matched=True,
+                    pattern_start_idx=int(pole_start),
+                    pattern_end_idx=int(flag_end),
+                    pattern_start_ts=window.iloc[pole_start]["ts"],
+                    pattern_end_ts=window.iloc[flag_end]["ts"],
+                    metrics={
+                        "pole_start_ts": window.iloc[pole_start]["ts"],
+                        "pole_end_ts": window.iloc[pole_end]["ts"],
+                        "flag_start_ts": window.iloc[flag_start]["ts"],
+                        "flag_end_ts": window.iloc[flag_end]["ts"],
+                        "pole_len": pole_len,
+                        "flag_len": flag_len,
+                        "p0": round(p0, 4),
+                        "p1": round(p1, 4),
+                        "pole_return": round(pole_return, 4),
+                        "pole_gain": round(pole_gain, 4),
+                        "flag_high": round(flag_high, 4),
+                        "flag_low": round(flag_low, 4),
+                        "high_above": round(high_above, 4),
+                        "low_below": round(low_below, 4),
+                        "hv_slope_norm": hv_slope_norm,
+                    },
+                )
+                break
+
+            if best:
+                break
+
+        if best:
+            results.append(best)
+            cursor = best.pattern_end_idx + 1
+        else:
+            cursor += 1
+
+    return results
 
 
 BACKTEST_HOOKS = {
     "detect": detect_flag,
-    "detect_vectorized": None,
+    "detect_vectorized": detect_flag_vectorized,
     "prepare": None,
     "normalize_params": _normalize_for_backtest,
     "tf_sections": {

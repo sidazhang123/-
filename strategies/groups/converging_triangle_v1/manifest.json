@@ -11,8 +11,10 @@
     "required_timeframes": ["w", "d"],
     "specialized_entry": "strategies.groups.converging_triangle_v1.engine:run_converging_triangle_v1_specialized"
   },
+  "usage": ["screening", "backtest"],
   "default_params": {
     "weekly": {
+      "scope_params": ["search_recent_weeks"],
       "enabled": true,
       "search_recent_weeks": 12,
       "pattern_months_min": 3,
@@ -29,6 +31,7 @@
       "lower_break_pct": 10
     },
     "daily": {
+      "scope_params": ["search_recent_weeks"],
       "enabled": true,
       "search_recent_weeks": 12,
       "pattern_months_min": 3,
@@ -72,7 +75,8 @@
       "_templates": [
         {
           "text": "搜索末端在最近 {search_recent_weeks} 周内的三角形",
-          "required": true
+          "required": true,
+          "help": "仅在筛选模式中生效"
         },
         {
           "text": "三角形持续 [{pattern_months_min}, {pattern_months_max}] 个月",
@@ -135,7 +139,8 @@
       "_templates": [
         {
           "text": "搜索末端在最近 {search_recent_weeks} 周内的三角形",
-          "required": true
+          "required": true,
+          "help": "仅在筛选模式中生效"
         },
         {
           "text": "三角形持续 [{pattern_months_min}, {pattern_months_max}] 个月",

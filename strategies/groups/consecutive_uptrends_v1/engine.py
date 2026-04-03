@@ -205,7 +205,7 @@ def detect_streak(
     3. 急跌偏移上限 = floor(selloff_start_pct × streak_len)。
     4. 急跌回撤基准 = z 根线最低收盘价 vs 连阳最高收盘价 / 连阳总涨幅。
     """
-    scan_bars = int(params["scan_bars"])
+    scan_bars = int(params.get("scan_bars", 0))
     streak_len = int(params["streak_len"])
     bar_gain_max = float(params["bar_gain_max"])
     selloff_enabled = bool(params["selloff_enabled"])
@@ -216,8 +216,8 @@ def detect_streak(
     if len(code_frame) < streak_len:
         return DetectionResult(matched=False, metrics={"reason": "数据不足"})
 
-    # 截取最新 scan_bars 根线
-    window = code_frame.tail(scan_bars).reset_index(drop=True)
+    # 数据窗口：调用方已按 scope 参数截取，此处直接使用
+    window = code_frame.reset_index(drop=True)
     n = len(window)
 
     opens = window["open"].values
@@ -558,7 +558,10 @@ def _scan_one_code(
         if frame.empty:
             per_tf_detail[tf] = {"detected": False, "reason": "无数据"}
             continue
-        result = detect_streak(frame, params)
+        # 筛选模式：按 scope 参数截断数据窗口
+        scan_bars = int(params.get("scan_bars", len(frame)))
+        frame_window = frame.tail(scan_bars)
+        result = detect_streak(frame_window, params)
         detail = {"detected": result.matched, "tf": tf, **result.metrics}
         per_tf_detail[tf] = detail
         if result.matched:
@@ -761,7 +764,9 @@ def run_consecutive_uptrends_v1_specialized(
 # ---------------------------------------------------------------------------
 
 def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
-    return {"params": _normalize_tf_params(group_params, section_key)}
+    params = _normalize_tf_params(group_params, section_key)
+    params.pop("scan_bars", None)
+    return {"params": params}
 
 
 BACKTEST_HOOKS = {

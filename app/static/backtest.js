@@ -80,9 +80,10 @@
   const state = {
     strategyGroups: [],
     groupParams: {},
-    monitorSettings: null, // cached monitor page settings
+    monitorPerStrategyParams: {}, // 服务端持久化的每策略参数 { groupId: params }
     sweepRanges: {},       // { "path.to.param": { min, max, step } }
-    strategySettings: {},  // { groupId: { group_params, sweep_ranges } }
+    perStrategySweepRanges: {},  // 服务端持久化 { groupId: {path: {min,max,step}} }
+    perStrategyBacktestParams: {},  // 服务端持久化 { groupId: { forward_bars, slide_step } }
     logCursor: { info: 0, error: 0 },
     currentJobId: null,
     currentMode: null,
@@ -102,12 +103,18 @@
     await tryReconnectJob();
   }
 
-  /** 从监控页持久化设置中读取已保存的 group_params，回测页启动时与 default_params 合并 */
+  /** 从监控页持久化设置中读取已保存的 per_strategy_params，回测页启动时与 default_params 合并 */
   async function loadMonitorParams() {
     try {
       const data = await getJSON("/api/ui-settings/monitor");
-      state.monitorSettings = data.settings || null;
-    } catch { state.monitorSettings = null; }
+      const s = data.settings || {};
+      // 存储每策略参数映射，而不仅是当前策略
+      state.monitorPerStrategyParams = (s.per_strategy_params && typeof s.per_strategy_params === "object")
+        ? s.per_strategy_params
+        : {};
+    } catch {
+      state.monitorPerStrategyParams = {};
+    }
   }
 
   function bindEvents() {
@@ -146,6 +153,9 @@
     $("btRefreshJobsBtn").addEventListener("click", () => loadBacktestJobs());
     $("btJobSelect").addEventListener("change", onJobSelectChange);
 
+    // 参数快照弹窗
+    bindBtParamModal();
+
     // Tab switching
     document.querySelectorAll(".bt-tab").forEach((tab) => {
       tab.addEventListener("click", () => {
@@ -166,7 +176,7 @@
   async function loadStrategyGroups() {
     const data = await getJSON("/api/strategy-groups");
     state.strategyGroups = (data.items || []).filter(
-      (g) => g && g.id !== "strategy_2"
+      (g) => g && (g.usage || []).includes("backtest")
     );
     const sel = $("btStrategySelect");
     sel.innerHTML = "";
@@ -178,6 +188,7 @@
     }
     if (state.strategyGroups.length) {
       sel.value = state.strategyGroups[0].id;
+      state._prevGroupId = state.strategyGroups[0].id;
       applyGroupParams(state.strategyGroups[0].id);
     }
   }
@@ -191,34 +202,51 @@
   }
 
   function onStrategyChange() {
-    applyGroupParams(selectedGroupId());
-  }
-
-  function getSavedStrategySettings(groupId) {
-    const all = state.strategySettings;
-    if (!all || typeof all !== "object") return null;
-    const item = all[groupId];
-    return item && typeof item === "object" ? item : null;
+    // 切换前先将当前策略的 btParams 快照到 state，避免丢失未保存的修改
+    if (state._prevGroupId) {
+      state.perStrategyBacktestParams[state._prevGroupId] = {
+        forward_bars: [
+          parseInt($("btFwdX").value) || 2,
+          parseInt($("btFwdY").value) || 5,
+          parseInt($("btFwdZ").value) || 7,
+        ],
+        slide_step: parseInt($("btSlideStep").value) || 1,
+      };
+    }
+    const newId = selectedGroupId();
+    state._prevGroupId = newId;
+    applyGroupParams(newId);
   }
 
   function applyGroupParams(groupId) {
     const group = findGroup(groupId);
     if (!group) return;
     const base = cloneValue(group.default_params || {});
-    // 如果监控页对同一策略组保存了自定义参数，合并到 default_params 上
-    const ms = state.monitorSettings;
-    if (ms && ms.strategy_group_id === groupId && ms.group_params && typeof ms.group_params === "object") {
-      deepMerge(base, ms.group_params);
-    }
-    const saved = getSavedStrategySettings(groupId);
-    if (saved && saved.group_params && typeof saved.group_params === "object") {
-      deepMerge(base, saved.group_params);
+    // 合并服务端持久化的该策略参数（单一来源）
+    const saved = (state.monitorPerStrategyParams || {})[groupId];
+    if (saved && typeof saved === "object") {
+      deepMerge(base, saved);
     }
     state.groupParams = base;
     renderFixedParams(group);
     renderSweepParams(group);
-    if (saved && saved.sweep_ranges && typeof saved.sweep_ranges === "object") {
-      applySavedSweepRanges(saved.sweep_ranges);
+    // 恢复该策略的 sweep ranges
+    const sweepRanges = (state.perStrategySweepRanges || {})[groupId];
+    if (sweepRanges && typeof sweepRanges === "object" && Object.keys(sweepRanges).length) {
+      applySavedSweepRanges(sweepRanges);
+    }
+    // 恢复该策略的回测参数（forward_bars / slide_step），无记录时重置为默认值
+    const btParams = (state.perStrategyBacktestParams || {})[groupId];
+    if (btParams && typeof btParams === "object") {
+      $("btFwdX").value = (btParams.forward_bars && btParams.forward_bars[0]) || 2;
+      $("btFwdY").value = (btParams.forward_bars && btParams.forward_bars[1]) || 5;
+      $("btFwdZ").value = (btParams.forward_bars && btParams.forward_bars[2]) || 7;
+      $("btSlideStep").value = btParams.slide_step || 1;
+    } else {
+      $("btFwdX").value = 2;
+      $("btFwdY").value = 5;
+      $("btFwdZ").value = 7;
+      $("btSlideStep").value = 1;
     }
   }
 
@@ -226,14 +254,14 @@
   function renderFixedParams(group) {
     const container = $("btParamsFixed");
     container.innerHTML = renderParamField(
-      [], state.groupParams, group.param_help || {}, "", 0, { readonly: true }
+      [], state.groupParams, group.param_help || {}, "", 0, { readonly: true, hideScopeParams: true }
     );
   }
 
   function renderSweepParams(group) {
     const container = $("btParamsSweep");
     container.innerHTML = renderParamField(
-      [], state.groupParams, group.param_help || {}, "", 0
+      [], state.groupParams, group.param_help || {}, "", 0, { hideScopeParams: true }
     );
     state.sweepRanges = {};
     injectRangeControls(container);
@@ -353,22 +381,16 @@
       const data = await getJSON("/api/ui-settings/backtest");
       const s = data.settings;
       if (!s) return;
-      state.strategySettings = (s.strategy_settings && typeof s.strategy_settings === "object")
-        ? cloneValue(s.strategy_settings)
+
+      state.perStrategySweepRanges = (s.per_strategy_sweep_ranges && typeof s.per_strategy_sweep_ranges === "object")
+        ? cloneValue(s.per_strategy_sweep_ranges)
         : {};
 
-      if (
-        s.strategy_group_id &&
-        s.group_params &&
-        typeof s.group_params === "object" &&
-        !state.strategySettings[s.strategy_group_id]
-      ) {
-        state.strategySettings[s.strategy_group_id] = {
-          group_params: cloneValue(s.group_params),
-          sweep_ranges: cloneValue(s.sweep_ranges || {}),
-        };
-      }
+      state.perStrategyBacktestParams = (s.per_strategy_backtest_params && typeof s.per_strategy_backtest_params === "object")
+        ? cloneValue(s.per_strategy_backtest_params)
+        : {};
 
+      // 全局 forward_bars / slide_step 仅作为无每策略记录时的兜底默认值
       if (s.forward_bars && s.forward_bars.length === 3) {
         $("btFwdX").value = s.forward_bars[0];
         $("btFwdY").value = s.forward_bars[1];
@@ -379,44 +401,63 @@
         const sel = $("btStrategySelect");
         if ([...sel.options].some((o) => o.value === s.strategy_group_id)) {
           sel.value = s.strategy_group_id;
+          state._prevGroupId = s.strategy_group_id;
           applyGroupParams(s.strategy_group_id);
         }
-      }
-      const currentSaved = getSavedStrategySettings(selectedGroupId());
-      if (currentSaved && currentSaved.group_params && Object.keys(currentSaved.group_params).length) {
-        state.groupParams = deepMerge(state.groupParams, currentSaved.group_params);
-        syncGroupParamsToUI();
-      }
-      if (currentSaved && currentSaved.sweep_ranges && Object.keys(currentSaved.sweep_ranges).length) {
-        applySavedSweepRanges(currentSaved.sweep_ranges);
       }
     } catch { /* ignore */ }
   }
 
   async function saveBacktestSettings() {
     const groupId = selectedGroupId();
-    const strategySettings = cloneValue(state.strategySettings || {});
-    strategySettings[groupId] = {
-      group_params: cloneValue(state.groupParams),
-      sweep_ranges: collectAllSweepRanges(),
-    };
 
-    const payload = {
+    // 收集当前 sweep ranges 并过滤掉 scope 路径
+    const allRanges = collectAllSweepRanges();
+    const group = findGroup(groupId);
+    const scopePathsForFilter = new Set();
+    if (group) {
+      const dp = group.default_params || {};
+      for (const [sKey, sec] of Object.entries(dp)) {
+        if (sec && typeof sec === "object" && Array.isArray(sec.scope_params)) {
+          sec.scope_params.forEach((n) => scopePathsForFilter.add(`${sKey}.${n}`));
+        }
+      }
+    }
+    const filteredRanges = {};
+    for (const [p, r] of Object.entries(allRanges)) {
+      if (!scopePathsForFilter.has(p)) filteredRanges[p] = r;
+    }
+
+    // 保存当前策略的 sweep ranges
+    const pssr = cloneValue(state.perStrategySweepRanges || {});
+    pssr[groupId] = filteredRanges;
+
+    // 保存当前策略的回测参数（forward_bars / slide_step）
+    const psbp = cloneValue(state.perStrategyBacktestParams || {});
+    const curBtParams = {
       forward_bars: [
         parseInt($("btFwdX").value) || 2,
         parseInt($("btFwdY").value) || 5,
         parseInt($("btFwdZ").value) || 7,
       ],
       slide_step: parseInt($("btSlideStep").value) || 1,
+    };
+    psbp[groupId] = curBtParams;
+
+    const payload = {
+      forward_bars: curBtParams.forward_bars,
+      slide_step: curBtParams.slide_step,
       strategy_group_id: groupId,
       group_params: cloneValue(state.groupParams),
-      sweep_ranges: cloneValue(strategySettings[groupId].sweep_ranges),
-      strategy_settings: strategySettings,
+      per_strategy_sweep_ranges: pssr,
+      per_strategy_backtest_params: psbp,
     };
-    return postJSON("/api/ui-settings/backtest", payload).then((resp) => {
-      state.strategySettings = cloneValue(strategySettings);
-      return resp;
-    });
+    const resp = await postJSON("/api/ui-settings/backtest", payload);
+    state.perStrategySweepRanges = cloneValue(pssr);
+    state.perStrategyBacktestParams = cloneValue(psbp);
+    // 同步更新本地 monitorPerStrategyParams（后端已交叉写入 monitor）
+    state.monitorPerStrategyParams[groupId] = cloneValue(state.groupParams);
+    return resp;
   }
 
   /** 将 state.groupParams 同步到 UI 输入控件 */
@@ -441,6 +482,24 @@
       cur = cur[k];
     }
     return cur;
+  }
+
+  /**
+   * 从 group_params 副本中移除所有周期 section 的 scope 参数及 scope_params 声明。
+   * 同时返回 scope 参数路径集合，用于过滤 sweepRanges / param_ranges。
+   */
+  function stripScopeFromParams(params) {
+    const stripped = cloneValue(params);
+    const scopePaths = new Set();
+    for (const [sectionKey, section] of Object.entries(stripped)) {
+      if (!section || typeof section !== "object" || !Array.isArray(section.scope_params)) continue;
+      for (const name of section.scope_params) {
+        scopePaths.add(`${sectionKey}.${name}`);
+        delete section[name];
+      }
+      delete section.scope_params;
+    }
+    return { params: stripped, scopePaths };
   }
 
   /** 加载回测任务列表并填充下拉框，返回 { jobs, running_job_id } */
@@ -482,6 +541,8 @@
   /** 任务下拉框切换 */
   async function onJobSelectChange() {
     const jobId = $("btJobSelect").value;
+    const paramsBtn = $("btShowParamsBtn");
+    if (paramsBtn) paramsBtn.disabled = !jobId;
     if (!jobId) {
       hidePanel("btStatusCard");
       hidePanel("btLogPanel");
@@ -550,17 +611,20 @@
     ];
     const slideStep = parseInt($("btSlideStep").value) || 1;
 
+    const { params: cleanParams, scopePaths } = stripScopeFromParams(state.groupParams);
+
     const payload = {
       strategy_group_id: groupId,
       mode: mode,
       forward_bars: fwdBars,
       slide_step: slideStep,
-      group_params: cloneValue(state.groupParams),
+      group_params: cleanParams,
       param_ranges: {},
     };
 
     if (mode === "sweep") {
       for (const [pathStr, range] of Object.entries(state.sweepRanges)) {
+        if (scopePaths.has(pathStr)) continue;
         payload.param_ranges[pathStr] = range;
       }
       if (!Object.keys(payload.param_ranges).length) {
@@ -653,15 +717,36 @@
     };
   }
 
+  /**
+   * 更新回测状态面板：进度百分比、已处理股票数、参数组合进度。
+   * sweep 模式：综合 combo 进度和 combo 内股票进度计算精细百分比，显示参数组合行。
+   * fixed 模式：仅显示股票级进度，隐藏参数组合行。
+   *
+   * 输入: d 后端回测状态对象 { status, progress, processed_stocks, total_stocks, combo_index, combo_total, mode }
+   * 输出: 更新 DOM 文本和进度条宽度
+   * 边界: combo_total 为 0 时隐藏组合行（fixed 模式）
+   */
   function updateStatus(d) {
     $("btStatusText").textContent = statusLabel(d.status);
-    $("btProgressText").textContent = (d.progress * 100).toFixed(1) + "%";
     $("btProcessedText").textContent = `${d.processed_stocks} / ${d.total_stocks}`;
-    $("btProgressBar").style.width = (d.progress * 100) + "%";
 
-    if (d.combo_total > 0) {
+    const isSweep = d.combo_total > 0;
+    if (isSweep) {
+      // sweep 模式：综合组合级进度 + 组合内股票进度
+      const comboBase = d.combo_index > 0 ? (d.combo_index - 1) / d.combo_total : 0;
+      const comboSlice = 1 / d.combo_total;
+      const stockFrac = d.total_stocks > 0 ? d.processed_stocks / d.total_stocks : 0;
+      const pct = Math.min((comboBase + comboSlice * stockFrac) * 100, 100);
+      $("btProgressText").textContent = pct.toFixed(1) + "%";
+      $("btProgressBar").style.width = pct + "%";
       $("btComboRow").style.display = "";
       $("btComboText").textContent = `${d.combo_index} / ${d.combo_total}`;
+    } else {
+      // fixed 模式：直接使用后端 progress
+      const pct = (d.progress * 100);
+      $("btProgressText").textContent = pct.toFixed(1) + "%";
+      $("btProgressBar").style.width = pct + "%";
+      $("btComboRow").style.display = "none";
     }
   }
 
@@ -733,6 +818,8 @@
         skewness: profit.skewness,
         kurtosis: profit.kurtosis,
         drawdown_mean: drawdown.mean,
+        drawdown_median: drawdown.median,
+        drawdown_std: drawdown.std,
         sharpe_mean: sharpe.mean,
       };
       // 正态检验
@@ -741,12 +828,19 @@
       else if (profit.normality_test === "dagostino") nt.dagostino = { p_value: profit.normality_p };
       if (profit.jb_p != null) nt.jarque_bera = { p_value: profit.jb_p };
       if (Object.keys(nt).length) flat.normality_tests = nt;
-      // 直方图
+      // 盈利直方图
       if (Array.isArray(profit.histogram) && profit.histogram.length) {
         const bw = profit.bin_width || 1;
         const bins = profit.histogram.map((h) => h.bin_start);
         bins.push(bins[bins.length - 1] + bw);
         flat.histogram = { bins, counts: profit.histogram.map((h) => h.freq) };
+      }
+      // 回撤直方图
+      if (Array.isArray(drawdown.histogram) && drawdown.histogram.length) {
+        const bw = drawdown.bin_width || 1;
+        const bins = drawdown.histogram.map((h) => h.bin_start);
+        bins.push(bins[bins.length - 1] + bw);
+        flat.drawdown_histogram = { bins, counts: drawdown.histogram.map((h) => h.freq) };
       }
       out.per_forward[fwdKey] = flat;
     }
@@ -789,6 +883,8 @@
         ["偏度", "skewness"],
         ["峰度", "kurtosis"],
         ["均值 (回撤%)", "drawdown_mean"],
+        ["中位数 (回撤%)", "drawdown_median"],
+        ["标准差 (回撤%)", "drawdown_std"],
         ["均值 (夏普)", "sharpe_mean"],
       ];
       for (const [lbl, key] of metrics) {
@@ -814,7 +910,7 @@
 
       container.appendChild(card);
 
-      // Histogram chart
+      // 盈利直方图
       if (fwdStats.histogram) {
         const chartCard = document.createElement("div");
         chartCard.className = "bt-stat-card";
@@ -823,7 +919,19 @@
         chartEl.className = "bt-chart-box";
         chartCard.appendChild(chartEl);
         container.appendChild(chartCard);
-        renderHistogram(chartEl, fwdStats.histogram, fwdStats);
+        renderHistogram(chartEl, fwdStats.histogram, fwdStats.profit_mean, "盈利%", "rgba(99,179,237,0.7)");
+      }
+
+      // 回撤直方图
+      if (fwdStats.drawdown_histogram) {
+        const chartCard = document.createElement("div");
+        chartCard.className = "bt-stat-card";
+        chartCard.innerHTML = `<h4>${label} - 回撤分布</h4>`;
+        const chartEl = document.createElement("div");
+        chartEl.className = "bt-chart-box";
+        chartCard.appendChild(chartEl);
+        container.appendChild(chartCard);
+        renderHistogram(chartEl, fwdStats.drawdown_histogram, fwdStats.drawdown_mean, "回撤%", "rgba(245,101,101,0.7)");
       }
     }
 
@@ -847,7 +955,7 @@
     return String(v);
   }
 
-  function renderHistogram(el, histogram, fwdStats) {
+  function renderHistogram(el, histogram, meanValue, axisName, barColor) {
     const chart = echarts.init(el, "dark");
     state.charts.push(chart);
 
@@ -867,16 +975,16 @@
         {
           type: "bar",
           data: counts,
-          itemStyle: { color: "rgba(99,179,237,0.7)" },
+          itemStyle: { color: barColor },
           barMaxWidth: 30,
         },
       ],
     };
 
-    // Add mean line
-    if (fwdStats.profit_mean != null) {
+    // 均值标记线
+    if (meanValue != null) {
       const meanIdx = bins.findIndex((b, i) =>
-        i < bins.length - 1 && fwdStats.profit_mean >= b && fwdStats.profit_mean < bins[i + 1]
+        i < bins.length - 1 && meanValue >= b && meanValue < bins[i + 1]
       );
       if (meanIdx >= 0) {
         option.series.push({
@@ -938,92 +1046,705 @@
   async function loadSweepResults() {
     if (!state.currentJobId) return;
     try {
-      const data = await getJSON(`/api/backtests/${state.currentJobId}/sweep`);
+      const data = await getJSON(`/api/backtests/${state.currentJobId}/sweep-stats`);
       showPanel("btSweepPanel");
-      renderSweepTable(data);
+      renderSweepStatsTable(data);
+      renderSweepCharts(data);
     } catch (err) {
       appendLogLine("btErrorLogs", "加载扫描结果失败: " + err.message);
     }
   }
 
-  function renderSweepTable(data) {
-    const items = data.items || [];
-    if (!items.length) {
+  // ── sweep 评分与可视化 ──
+
+  /**
+   * 计算单个参数组合的综合评分。
+   * 取最长可用前瞻周期的：中位盈利 - 中位回撤 + clamp(中位夏普, -10, 10)。
+   *
+   * 输入: combo (含 per_forward), fwdBars [x, y, z]
+   * 输出: number (综合评分)
+   * 边界: 全部前瞻缺失时返回 0
+   */
+  function computeComboScore(combo, fwdBars) {
+    const pf = combo.per_forward || {};
+    for (let i = fwdBars.length - 1; i >= 0; i--) {
+      const d = pf[String(fwdBars[i])];
+      if (!d) continue;
+      const pm = d.profit_median || 0;
+      const dm = d.drawdown_median || 0;
+      const sh = d.sharpe_median != null ? Math.max(-10, Math.min(10, d.sharpe_median)) : 0;
+      return pm - dm + sh;
+    }
+    return 0;
+  }
+
+  /**
+   * 从 combo 列表中提取真正被扫描的参数键（值在各组合间有变化）。
+   *
+   * 输入: combos (含 param_combo)
+   * 输出: string[] 被扫描的参数键
+   * 边界: 空列表返回 []
+   */
+  function extractSweepKeys(combos) {
+    if (!combos.length) return [];
+    const keys = Object.keys(combos[0].param_combo || {});
+    return keys.filter(k => {
+      const vals = new Set(combos.map(c => String((c.param_combo || {})[k])));
+      return vals.size > 1;
+    });
+  }
+
+  /**
+   * 将参数组合格式化为短标签，仅显示扫描参数的简短名+值。
+   *
+   * 输入: paramCombo { "section.param": value }, sweepKeys string[]
+   * 输出: 如 "min_vol=1.50 | candles=10"
+   * 边界: 空参数返回 "—"
+   */
+  function formatComboLabel(paramCombo, sweepKeys) {
+    if (!paramCombo || !sweepKeys || !sweepKeys.length) return "—";
+    return sweepKeys.map(k => {
+      const shortKey = k.split(".").pop();
+      const val = paramCombo[k];
+      const vStr = typeof val === "number"
+        ? (Number.isInteger(val) ? String(val) : val.toFixed(2))
+        : String(val);
+      return `${shortKey}=${vStr}`;
+    }).join(" | ");
+  }
+
+  /**
+   * 构建 sweep 汇总表：每个参数组合在各前瞻周期的中位盈利/中位回撤/中位夏普 + 综合评分。
+   * 参数值单独列明，默认按综合评分降序排列，最优行高亮。
+   *
+   * 输入: data { combos, forward_bars, forward_labels }
+   * 输出: 渲染到 DOM (#btSweepHead, #btSweepBody)
+   * 边界: combos 为空时显示 "无结果"
+   */
+  function renderSweepStatsTable(data) {
+    const combos = data.combos || [];
+    if (!combos.length) {
       $("btSweepBody").innerHTML = "<tr><td>无结果</td></tr>";
       return;
     }
 
-    // Determine columns: param keys + metric keys
-    const firstCombo = items[0].param_combo || {};
-    const paramKeys = Object.keys(firstCombo);
-    const metricKeys = [
-      "total_hits", "win_rate_x", "avg_profit_x", "avg_drawdown_x",
-      "win_rate_z", "avg_profit_z", "avg_drawdown_z",
+    const fwdBars = data.forward_bars || [];
+    const fwdLabels = data.forward_labels || {};
+    const sweepKeys = extractSweepKeys(combos);
+    const paramKeys = sweepKeys.length ? sweepKeys : Object.keys(combos[0].param_combo || {});
+
+    const scored = combos.map(c => ({ ...c, _score: computeComboScore(c, fwdBars) }));
+    scored.sort((a, b) => b._score - a._score);
+    const bestComboIdx = scored.length ? scored[0].combo_index : -1;
+
+    const metricDefs = [
+      { key: "profit_median", label: "中位盈利%", fn: pf => pf.profit_median },
+      { key: "drawdown_median", label: "中位回撤%", fn: pf => pf.drawdown_median },
+      { key: "sharpe_median", label: "中位夏普", fn: pf => pf.sharpe_median },
     ];
-    const metricLabels = {
-      total_hits: "命中数",
-      win_rate_x: "胜率x%", avg_profit_x: "平均盈利x%", avg_drawdown_x: "平均回撤x%",
-      win_rate_z: "胜率z%", avg_profit_z: "平均盈利z%", avg_drawdown_z: "平均回撤z%",
-    };
+    const metricsPerFwd = metricDefs.length;
 
-    // Thead
     const head = $("btSweepHead");
-    head.innerHTML = "<tr>" +
-      paramKeys.map((k) => `<th data-sort-key="param.${k}">${k}</th>`).join("") +
-      metricKeys.map((k) => `<th data-sort-key="metric.${k}">${metricLabels[k] || k}</th>`).join("") +
-      "<th>详情</th></tr>";
+    let row1 = "<tr>";
+    paramKeys.forEach(k => {
+      row1 += `<th rowspan="2" data-sort-key="param.${k}">${k.split(".").pop()}</th>`;
+    });
+    row1 += '<th rowspan="2" data-sort-key="flat.total_hits">命中</th>';
+    fwdBars.forEach(fb => {
+      const lbl = fwdLabels[String(fb)] || fb;
+      row1 += `<th colspan="${metricsPerFwd}" style="text-align:center;border-bottom:none;">前瞻 ${lbl} (${fb}bar)</th>`;
+    });
+    row1 += '<th rowspan="2" data-sort-key="flat._score">评分</th>';
+    row1 += '<th rowspan="2">详情</th></tr>';
 
-    let sortedItems = [...items];
+
+    let row2 = "<tr>";
+    fwdBars.forEach(() => {
+      metricDefs.forEach(md => {
+        row2 += `<th data-sort-key="metric.${md.key}" style="font-size:.75rem;">${md.label}</th>`;
+      });
+    });
+    row2 += "</tr>";
+    head.innerHTML = row1 + row2;
+
+    function flattenCombo(c) {
+      const flat = { _src: c, total_hits: c.total_hits, _score: c._score };
+      const pc = c.param_combo || {};
+      for (const k of paramKeys) flat[`param.${k}`] = pc[k];
+      for (const fb of fwdBars) {
+        const pf = (c.per_forward || {})[String(fb)] || {};
+        for (const md of metricDefs) flat[`${fb}.${md.key}`] = md.fn(pf);
+      }
+      return flat;
+    }
+
+    let sortedFlat = scored.map(flattenCombo);
+    let _lastSortFwd = null;
 
     function renderBody() {
       const body = $("btSweepBody");
       body.innerHTML = "";
-      for (const row of sortedItems) {
+      for (const flat of sortedFlat) {
+        const c = flat._src;
         const tr = document.createElement("tr");
-        const params = row.param_combo || {};
-        tr.innerHTML =
-          paramKeys.map((k) => `<td>${params[k] ?? "—"}</td>`).join("") +
-          metricKeys.map((k) => `<td>${fmtStat(row[k])}</td>`).join("") +
-          `<td><button class="bt-detail-btn" data-combo="${row.combo_index}">详情</button></td>`;
+        if (c.combo_index === bestComboIdx) tr.className = "bt-sweep-best-row";
+        const pc = c.param_combo || {};
+        let cells = paramKeys.map(k => `<td>${pc[k] ?? "—"}</td>`).join("");
+        cells += `<td>${c.total_hits}</td>`;
+        for (const fb of fwdBars) {
+          const pf = (c.per_forward || {})[String(fb)] || {};
+          for (const md of metricDefs) cells += `<td>${fmtStat(md.fn(pf))}</td>`;
+        }
+        const scoreColor = c._score >= 0 ? "#68d391" : "#fc8181";
+        cells += `<td style="font-weight:600;color:${scoreColor}">${c._score.toFixed(2)}</td>`;
+        cells += `<td><button class="bt-detail-btn" data-combo="${c.combo_index}">详情</button></td>`;
+        tr.innerHTML = cells;
         body.appendChild(tr);
       }
-      // Detail buttons
-      body.querySelectorAll(".bt-detail-btn").forEach((btn) => {
+      body.querySelectorAll(".bt-detail-btn").forEach(btn => {
         btn.addEventListener("click", () => {
-          const combo = btn.dataset.combo;
-          window.open(
-            `/backtest-detail?job_id=${state.currentJobId}&combo_index=${combo}`,
-            "_blank"
-          );
+          window.open(`/backtest-detail?job_id=${state.currentJobId}&combo_index=${btn.dataset.combo}`, "_blank");
         });
       });
     }
 
     renderBody();
 
-    // Sort on header click
     head.addEventListener("click", (e) => {
       const th = e.target.closest("th[data-sort-key]");
       if (!th) return;
-      const key = th.dataset.sortKey;
-      const [type, field] = key.split(".");
+      const sortKey = th.dataset.sortKey;
       const asc = th.dataset.sortDir !== "asc";
+      head.querySelectorAll("th[data-sort-key]").forEach(h => delete h.dataset.sortDir);
       th.dataset.sortDir = asc ? "asc" : "desc";
-
-      sortedItems.sort((a, b) => {
-        let va, vb;
-        if (type === "param") {
-          va = (a.param_combo || {})[field];
-          vb = (b.param_combo || {})[field];
-        } else {
-          va = a[field];
-          vb = b[field];
+      const [type, field] = sortKey.split(".");
+      let _sortFwd = _lastSortFwd;
+      if (type === "metric") {
+        const thIdx = [...head.querySelectorAll("th[data-sort-key]")].indexOf(th);
+        const paramColCount = paramKeys.length + 1;
+        if (thIdx >= paramColCount) {
+          const metricGlobalIdx = thIdx - paramColCount;
+          const fwdIdx = Math.floor(metricGlobalIdx / metricsPerFwd);
+          if (fwdIdx < fwdBars.length) _sortFwd = fwdBars[fwdIdx];
         }
+        _lastSortFwd = _sortFwd;
+      }
+      sortedFlat.sort((a, b) => {
+        let va, vb;
+        if (type === "param") { va = a[`param.${field}`]; vb = b[`param.${field}`]; }
+        else if (type === "flat") { va = a[field]; vb = b[field]; }
+        else { va = _sortFwd != null ? a[`${_sortFwd}.${field}`] : null; vb = _sortFwd != null ? b[`${_sortFwd}.${field}`] : null; }
         if (va == null) va = -Infinity;
         if (vb == null) vb = -Infinity;
         return asc ? va - vb : vb - va;
       });
       renderBody();
+    });
+  }
+
+  /**
+   * 渲染 sweep 全部图表：前瞻周期标签 + 散点图 + 评分排行 + 热力图。
+   * 缓存数据到 state._sweepChartData 用于切换前瞻周期时重绘散点图。
+   *
+   * 输入: data { combos, forward_bars, forward_labels }
+   * 输出: 渲染到 DOM
+   * 边界: 无 combo 或无 fwdBars 时隐藏整个图表区域
+   */
+  function renderSweepCharts(data) {
+    const combos = data.combos || [];
+    const fwdBars = data.forward_bars || [];
+    const fwdLabels = data.forward_labels || {};
+
+    if (!combos.length || !fwdBars.length) {
+      $("btSweepCharts").style.display = "none";
+      return;
+    }
+    $("btSweepCharts").style.display = "";
+
+    const sweepKeys = extractSweepKeys(combos);
+
+    const scored = combos.map(c => ({
+      ...c,
+      _score: computeComboScore(c, fwdBars),
+      _label: formatComboLabel(c.param_combo, sweepKeys),
+    }));
+    scored.sort((a, b) => b._score - a._score);
+
+    // 缓存用于前瞻周期切换
+    state._sweepChartData = { scored, fwdBars, fwdLabels, sweepKeys };
+
+    // 1. 前瞻周期切换标签
+    _renderFwdTabs(fwdBars, fwdLabels);
+
+    // 2. 散点图（默认最长前瞻周期）
+    _renderComboScatter(fwdBars[fwdBars.length - 1]);
+
+    // 3. 评分排行
+    _renderRankingChart(scored, sweepKeys);
+
+    // 4. 参数热力图（仅双参数扫描）
+    _renderSweepHeatmap(scored, sweepKeys);
+  }
+
+  /**
+   * 渲染前瞻周期切换标签行。点击切换时重绘散点图。
+   *
+   * 输入: fwdBars [x, y, z], fwdLabels { "2": "x", ... }
+   * 输出: 渲染到 #btSweepFwdTabs
+   * 边界: 单前瞻周期时仍显示（无需切换）
+   */
+  function _renderFwdTabs(fwdBars, fwdLabels) {
+    const container = $("btSweepFwdTabs");
+    if (!container) return;
+    container.innerHTML = '<span style="font-size:.85rem;color:var(--color-text-secondary);margin-right:8px;">前瞻周期:</span>';
+    fwdBars.forEach((fb, i) => {
+      const lbl = fwdLabels[String(fb)] || String(fb);
+      const btn = document.createElement("button");
+      btn.className = "bt-tab" + (i === fwdBars.length - 1 ? " active" : "");
+      btn.textContent = `${lbl} (${fb} bar)`;
+      btn.dataset.fwdBar = fb;
+      btn.addEventListener("click", () => {
+        container.querySelectorAll(".bt-tab").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        _renderComboScatter(fb);
+      });
+      container.appendChild(btn);
+    });
+  }
+
+  /**
+   * 渲染参数组合效果散点图。
+   * X 轴 = 中位盈利%，Y 轴 = 中位回撤%（越低越好），颜色 = 中位夏普，气泡大小 = 命中数。
+   * 每个气泡 = 一个参数组合，tooltip 显示具体参数值和全部指标。
+   * 理想区域在右下方（高盈利、低回撤）。
+   *
+   * 输入: fwdBar 当前选中的前瞻周期 bar 数
+   * 输出: 渲染到 #btSweepScatterMain
+   * 边界: _sweepChartData 不存在时跳过
+   */
+  function _renderComboScatter(fwdBar) {
+    const el = $("btSweepScatterMain");
+    if (!el || !state._sweepChartData) return;
+
+    const { scored, sweepKeys } = state._sweepChartData;
+    const fwdKey = String(fwdBar);
+
+    // 销毁此容器上的旧 chart
+    const oldChart = echarts.getInstanceByDom(el);
+    if (oldChart) {
+      const idx = state.charts.indexOf(oldChart);
+      if (idx >= 0) state.charts.splice(idx, 1);
+      oldChart.dispose();
+    }
+
+    const chart = echarts.init(el, "dark");
+    state.charts.push(chart);
+
+    // 组装散点数据: [profit_median, drawdown_median, sharpe_median, total_hits, comboObj]
+    const scatterData = [];
+    let maxHits = 1;
+    for (const c of scored) {
+      const pf = (c.per_forward || {})[fwdKey];
+      if (!pf) continue;
+      const profit = pf.profit_median ?? 0;
+      const dd = pf.drawdown_median ?? 0;
+      const sharpe = pf.sharpe_median;
+      const hits = c.total_hits || 1;
+      if (hits > maxHits) maxHits = hits;
+      scatterData.push({
+        value: [profit, dd, sharpe ?? 0, hits],
+        _combo: c,
+        _sharpe: sharpe,
+      });
+    }
+
+    // 气泡大小映射（命中数 → 8~40px）
+    const sizeMin = 8, sizeMax = 40;
+    function symbolSize(data) {
+      const hits = data[3];
+      if (maxHits <= 1) return 20;
+      const ratio = Math.sqrt(hits / maxHits);
+      return sizeMin + ratio * (sizeMax - sizeMin);
+    }
+
+    // 夏普范围（用于 visualMap 颜色映射）
+    const sharpeVals = scatterData.map(d => d.value[2]).filter(v => v != null);
+    const sharpeMin = sharpeVals.length ? Math.min(...sharpeVals) : -1;
+    const sharpeMax = sharpeVals.length ? Math.max(...sharpeVals) : 1;
+
+    chart.setOption({
+      backgroundColor: "transparent",
+      tooltip: {
+        trigger: "item",
+        formatter: function (params) {
+          const c = params.data._combo;
+          const pc = c.param_combo || {};
+          const paramStr = Object.entries(pc)
+            .map(([k, v]) => `<b>${k.split(".").pop()}</b>: ${typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v}`)
+            .join("<br/>");
+          const [profit, dd, sharpe] = params.data.value;
+          return `<div style="max-width:300px;"><b>参数组合 #${c.combo_index}</b><br/>`
+            + paramStr
+            + `<br/>─────<br/>`
+            + `命中: ${c.total_hits}<br/>`
+            + `中位盈利: <b>${fmtStat(profit)}%</b><br/>`
+            + `中位回撤: <b>${fmtStat(dd)}%</b><br/>`
+            + `中位夏普: <b>${fmtStat(params.data._sharpe)}</b><br/>`
+            + `综合评分: <b>${c._score.toFixed(2)}</b></div>`;
+        },
+      },
+      grid: { top: 20, bottom: 45, left: 55, right: 80 },
+      xAxis: {
+        type: "value",
+        name: "中位盈利 %",
+        nameLocation: "center",
+        nameGap: 30,
+        axisLabel: { fontSize: 10 },
+        min: function (value) { var pad = Math.max((value.max - value.min) * 0.1, 0.5); return +(value.min - pad).toFixed(2); },
+        max: function (value) { var pad = Math.max((value.max - value.min) * 0.1, 0.5); return +(value.max + pad).toFixed(2); },
+      },
+      yAxis: {
+        type: "value",
+        name: "中位回撤 %",
+        nameLocation: "center",
+        nameGap: 40,
+        axisLabel: { fontSize: 10 },
+        min: function (value) { var pad = Math.max((value.max - value.min) * 0.1, 0.5); return +(value.min - pad).toFixed(2); },
+        max: function (value) { var pad = Math.max((value.max - value.min) * 0.1, 0.5); return +(value.max + pad).toFixed(2); },
+      },
+      visualMap: {
+        min: sharpeMin === sharpeMax ? sharpeMin - 1 : sharpeMin,
+        max: sharpeMin === sharpeMax ? sharpeMax + 1 : sharpeMax,
+        dimension: 2,
+        calculable: true,
+        orient: "vertical",
+        right: 0,
+        top: 20,
+        text: ["夏普高", "夏普低"],
+        inRange: { color: ["#fc8181", "#fbd38d", "#68d391"] },
+        textStyle: { fontSize: 10, color: "#ccc" },
+      },
+      series: [{
+        type: "scatter",
+        data: scatterData,
+        symbolSize: function (data) { return symbolSize(data); },
+        emphasis: {
+          focus: "self",
+          itemStyle: { shadowBlur: 10, shadowColor: "rgba(255,255,255,0.3)" },
+        },
+        label: {
+          show: scatterData.length <= 30,
+          position: "top",
+          fontSize: 9,
+          color: "#aaa",
+          formatter: function (params) {
+            return params.data._combo._label;
+          },
+        },
+      }],
+    });
+  }
+
+  /**
+   * 渲染水平柱状图：展示每个参数组合的综合评分。
+   * Y 轴标签显示具体参数值，颜色红→黄→绿映射评分高低。
+   *
+   * 输入: scored 已排序的 combo 列表（含 _score, _label）, sweepKeys 扫描参数键
+   * 输出: 渲染到 #btSweepRankChart
+   * 边界: 超过 20 条时自动添加 dataZoom 滚动条
+   */
+  function _renderRankingChart(scored, sweepKeys) {
+    const el = $("btSweepRankChart");
+    if (!el) return;
+
+    const chartH = Math.max(300, Math.min(600, scored.length * 25 + 80));
+    el.style.height = chartH + "px";
+
+    const chart = echarts.init(el, "dark");
+    state.charts.push(chart);
+
+    // Y 轴从下到上，反转使最优在顶部
+    const reversed = [...scored].reverse();
+    const labels = reversed.map(c => c._label);
+    const values = reversed.map(c => c._score);
+
+    const allScores = scored.map(c => c._score);
+    const minScore = Math.min(...allScores);
+    const maxScore = Math.max(...allScores);
+
+    const option = {
+      backgroundColor: "transparent",
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        formatter: function (params) {
+          const idx = params[0].dataIndex;
+          const c = reversed[idx];
+          const pc = c.param_combo || {};
+          const paramStr = Object.entries(pc)
+            .map(([k, v]) => `<b>${k.split(".").pop()}</b>: ${typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v}`)
+            .join("<br/>");
+          return `<b>${c._label}</b><br/>${paramStr}<br/>命中: ${c.total_hits}<br/>综合评分: <b>${c._score.toFixed(2)}</b>`;
+        },
+      },
+      grid: { top: 15, bottom: 30, left: 10, right: 40, containLabel: true },
+      xAxis: {
+        type: "value",
+        name: "综合评分",
+        nameLocation: "end",
+        axisLabel: { fontSize: 10 },
+      },
+      yAxis: {
+        type: "category",
+        data: labels,
+        axisLabel: { fontSize: 10, width: 220, overflow: "truncate" },
+        axisTick: { show: false },
+      },
+      visualMap: {
+        show: false,
+        min: minScore === maxScore ? minScore - 1 : minScore,
+        max: minScore === maxScore ? maxScore + 1 : maxScore,
+        dimension: 0,
+        inRange: { color: ["#fc8181", "#fbd38d", "#68d391"] },
+      },
+      series: [{
+        type: "bar",
+        data: values,
+        barMaxWidth: 22,
+        label: {
+          show: true,
+          position: "right",
+          fontSize: 10,
+          formatter: ({ value }) => value.toFixed(1),
+        },
+      }],
+    };
+
+    if (scored.length > 20) {
+      option.dataZoom = [{
+        type: "slider",
+        yAxisIndex: 0,
+        start: 100 - (20 / scored.length) * 100,
+        end: 100,
+        width: 16,
+        right: 5,
+      }];
+      option.grid.right = 60;
+    }
+
+    chart.setOption(option);
+  }
+
+  /**
+   * 渲染参数热力图，仅在恰好两个扫描参数时显示。
+   * X 轴 = 参数 1 各值，Y 轴 = 参数 2 各值，颜色 = 综合评分。
+   *
+   * 输入: scored (含 _score, param_combo), sweepKeys string[]
+   * 输出: 渲染到 #btSweepHeatmap（或隐藏 #btSweepHeatmapCard）
+   * 边界: 非双参数时隐藏
+   */
+  function _renderSweepHeatmap(scored, sweepKeys) {
+    const card = $("btSweepHeatmapCard");
+    const el = $("btSweepHeatmap");
+    if (!card || !el) return;
+
+    if (sweepKeys.length !== 2) {
+      card.style.display = "none";
+      return;
+    }
+
+    card.style.display = "";
+    const chart = echarts.init(el, "dark");
+    state.charts.push(chart);
+
+    const [keyX, keyY] = sweepKeys;
+    const shortX = keyX.split(".").pop();
+    const shortY = keyY.split(".").pop();
+
+    const valsX = [...new Set(scored.map(c => (c.param_combo || {})[keyX]))].sort((a, b) => a - b);
+    const valsY = [...new Set(scored.map(c => (c.param_combo || {})[keyY]))].sort((a, b) => a - b);
+
+    const heatData = [];
+    const scoreMap = {};
+    for (const c of scored) {
+      const xVal = (c.param_combo || {})[keyX];
+      const yVal = (c.param_combo || {})[keyY];
+      const xi = valsX.indexOf(xVal);
+      const yi = valsY.indexOf(yVal);
+      if (xi >= 0 && yi >= 0) {
+        heatData.push([xi, yi, c._score]);
+        scoreMap[`${xi},${yi}`] = c;
+      }
+    }
+
+    const allScores = scored.map(c => c._score);
+    const minScore = Math.min(...allScores);
+    const maxScore = Math.max(...allScores);
+
+    chart.setOption({
+      backgroundColor: "transparent",
+      tooltip: {
+        formatter: function (params) {
+          const [xi, yi, score] = params.data;
+          const c = scoreMap[`${xi},${yi}`];
+          if (!c) return "";
+          return `<b>${shortX}=${valsX[xi]}, ${shortY}=${valsY[yi]}</b><br/>综合评分: <b>${score.toFixed(2)}</b><br/>命中: ${c.total_hits}`;
+        },
+      },
+      grid: { top: 10, bottom: 40, left: 80, right: 50 },
+      xAxis: {
+        type: "category",
+        data: valsX.map(v => typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v)),
+        name: shortX,
+        nameLocation: "center",
+        nameGap: 28,
+        splitArea: { show: true },
+        axisLabel: { fontSize: 10 },
+      },
+      yAxis: {
+        type: "category",
+        data: valsY.map(v => typeof v === "number" ? (Number.isInteger(v) ? String(v) : v.toFixed(2)) : String(v)),
+        name: shortY,
+        nameLocation: "center",
+        nameGap: 55,
+        splitArea: { show: true },
+        axisLabel: { fontSize: 10 },
+      },
+      visualMap: {
+        min: minScore === maxScore ? minScore - 1 : minScore,
+        max: minScore === maxScore ? maxScore + 1 : maxScore,
+        calculable: true,
+        orient: "vertical",
+        right: 0,
+        top: 10,
+        inRange: { color: ["#fc8181", "#fbd38d", "#68d391"] },
+        textStyle: { fontSize: 10 },
+      },
+      series: [{
+        type: "heatmap",
+        data: heatData,
+        label: {
+          show: valsX.length * valsY.length <= 100,
+          fontSize: 10,
+          formatter: ({ data }) => data[2].toFixed(1),
+        },
+        emphasis: {
+          itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.5)" },
+        },
+      }],
+    });
+  }
+
+  // ── 参数快照弹窗 ──
+  const _btParamCache = {};
+  const _BT_MODE_TEXT = { fixed: "固定参数", sweep: "参数扫描" };
+
+  async function loadBtJobParams(jobId) {
+    if (_btParamCache[jobId]) return _btParamCache[jobId];
+    const data = await getJSON(`/api/backtests/${jobId}/params`);
+    _btParamCache[jobId] = data;
+    return data;
+  }
+
+  function renderBtParamMeta(data) {
+    const esc = ParamRender.escapeHtml;
+    const parts = [];
+    if (data.strategy_name) parts.push(esc(data.strategy_name));
+    const modeLabel = _BT_MODE_TEXT[data.mode] || data.mode || "";
+    if (modeLabel) parts.push(esc(modeLabel));
+    if (data.forward_bars && data.forward_bars.length === 3) {
+      parts.push(esc(`前瞻: ${data.forward_bars.join("/")} bar`));
+    }
+    if (data.slide_step) parts.push(esc(`步进: ${data.slide_step}`));
+    if (!parts.length) return "";
+    return `<div class="param-modal-meta">${parts.join(" · ")}</div>`;
+  }
+
+  function renderBtOverview(paramHelp) {
+    if (!paramHelp || !paramHelp._overview) return "";
+    const text = ParamRender.helpTextFromNode({ _overview: paramHelp._overview });
+    if (!text) return "";
+    const lines = text.split("\n").map((l) => `<p>${ParamRender.escapeHtml(l)}</p>`).join("");
+    return `<div class="param-modal-overview">${lines}</div>`;
+  }
+
+  function renderBtReadonlyParams(data) {
+    const groupParams = data.group_params;
+    const paramHelp = data.param_help;
+    if (!groupParams || !Object.keys(groupParams).length) {
+      return '<div class="param-modal-empty">无参数数据</div>';
+    }
+    // 从当前 manifest 注入 scope_params 声明（向后兼容旧任务快照）
+    const group = findGroup(data.strategy_group_id);
+    if (group) {
+      const dp = group.default_params || {};
+      for (const [sKey, sec] of Object.entries(dp)) {
+        if (sec && typeof sec === "object" && Array.isArray(sec.scope_params)
+            && groupParams[sKey] && typeof groupParams[sKey] === "object") {
+          groupParams[sKey].scope_params = sec.scope_params;
+        }
+      }
+    }
+    const meta = renderBtParamMeta(data);
+    const overview = renderBtOverview(paramHelp);
+    const keys = Object.keys(groupParams);
+    const fields = keys.map((key) => {
+      const helpNode = paramHelp ? paramHelp[key] : null;
+      return ParamRender.renderParamField([key], groupParams[key], helpNode, key, 0, { readonly: true, hideScopeParams: true });
+    }).join("");
+    return meta + overview + fields;
+  }
+
+  /** sweep 模式下向只读参数字段旁注入 min/max/step 标签 */
+  function injectReadonlyRanges(container, ranges) {
+    if (!ranges || !Object.keys(ranges).length) return;
+    for (const [path, r] of Object.entries(ranges)) {
+      const el = container.querySelector(`[data-param-path="${path}"]`);
+      if (!el) continue;
+      const badge = document.createElement("span");
+      badge.className = "bt-range-row";
+      badge.innerHTML =
+        `<label>min <span class="bt-rng-val">${r.min}</span></label>` +
+        `<label>max <span class="bt-rng-val">${r.max}</span></label>` +
+        `<label>step <span class="bt-rng-val">${r.step}</span></label>`;
+      el.insertAdjacentElement("afterend", badge);
+    }
+  }
+
+  function openBtParamModal() {
+    const jobId = state.currentJobId || $("btJobSelect").value;
+    if (!jobId) return;
+    const overlay = $("btParamModalOverlay");
+    const body = $("btParamModalBody");
+    overlay.hidden = false;
+    body.innerHTML = '<div class="param-modal-loading">加载中…</div>';
+
+    loadBtJobParams(jobId).then((data) => {
+      body.innerHTML = renderBtReadonlyParams(data);
+      if (data.mode === "sweep") injectReadonlyRanges(body, data.param_ranges);
+    }).catch((err) => {
+      body.innerHTML = `<div class="param-modal-empty">加载失败: ${ParamRender.escapeHtml(err.message || "未知错误")}</div>`;
+    });
+  }
+
+  function closeBtParamModal() {
+    $("btParamModalOverlay").hidden = true;
+    $("btParamModalBody").innerHTML = "";
+  }
+
+  function bindBtParamModal() {
+    const btn = $("btShowParamsBtn");
+    if (btn) btn.addEventListener("click", openBtParamModal);
+    const closeBtn = $("btParamModalCloseBtn");
+    if (closeBtn) closeBtn.addEventListener("click", closeBtParamModal);
+    const overlay = $("btParamModalOverlay");
+    if (overlay) {
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) closeBtParamModal();
+      });
+    }
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && overlay && !overlay.hidden) closeBtParamModal();
     });
   }
 

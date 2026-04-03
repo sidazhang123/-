@@ -97,6 +97,7 @@ class MonitorFormSettingsPayload(BaseModel):
     sample_size: int = Field(default=20, ge=1, le=5000)
     strategy_group_id: str = ""
     group_params: dict[str, Any] = Field(default_factory=dict)
+    per_strategy_params: dict[str, Any] = Field(default_factory=dict)
 
 
 class MaintenanceCreateRequest(BaseModel):
@@ -252,6 +253,7 @@ class BacktestStatusResponse(BaseModel):
 
     job_id: str
     status: str
+    mode: str = "fixed"
     progress: float = 0.0
     total_stocks: int = 0
     processed_stocks: int = 0
@@ -321,7 +323,7 @@ class BacktestFormSettingsPayload(BaseModel):
     slide_step: int = Field(default=1, ge=1)
     strategy_group_id: str = ""
     group_params: dict[str, Any] = Field(default_factory=dict)
-    sweep_ranges: dict[str, Any] = Field(default_factory=dict)
-    strategy_settings: dict[str, Any] = Field(default_factory=dict)
+    per_strategy_sweep_ranges: dict[str, Any] = Field(default_factory=dict)
+    per_strategy_backtest_params: dict[str, Any] = Field(default_factory=dict)
     info_log_autoscroll: bool = True
     error_log_autoscroll: bool = True

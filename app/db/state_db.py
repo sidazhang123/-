@@ -693,7 +693,7 @@ class StateDB:
         def _op(con: duckdb.DuckDBPyConnection):
             return con.execute(
                 """
-                select job_id, created_at, status, strategy_group_id, mode,
+                select job_id, created_at, finished_at, status, strategy_group_id, mode,
                        forward_bars_json, progress, error_message
                 from backtest_jobs
                 order by created_at desc
@@ -707,12 +707,13 @@ class StateDB:
             {
                 "job_id": r[0],
                 "created_at": r[1],
-                "status": r[2],
-                "strategy_group_id": r[3],
-                "mode": r[4],
-                "forward_bars": json.loads(r[5]) if r[5] else [],
-                "progress": r[6],
-                "error_message": r[7],
+                "finished_at": r[2],
+                "status": r[3],
+                "strategy_group_id": r[4],
+                "mode": r[5],
+                "forward_bars": json.loads(r[6]) if r[6] else [],
+                "progress": r[7],
+                "error_message": r[8],
             }
             for r in rows
         ]
@@ -788,6 +789,24 @@ class StateDB:
         ph = ", ".join(["?"] * len(remove_ids))
         con.execute(f"delete from backtest_logs where job_id in ({ph})", remove_ids)
         con.execute(f"delete from backtest_jobs where job_id in ({ph})", remove_ids)
+
+    def delete_backtest_job(self, job_id: str) -> None:
+        """删除单个回测任务及其日志。
+
+        输入：
+        1. job_id: 回测任务 ID。
+        输出：
+        1. 无返回值。
+        用途：
+        1. 任务管理页批量删除回测任务时逐条调用。
+        边界条件：
+        1. job_id 不存在时静默跳过。
+        """
+        def _op(con: duckdb.DuckDBPyConnection) -> None:
+            con.execute("delete from backtest_logs where job_id = ?", [job_id])
+            con.execute("delete from backtest_jobs where job_id = ?", [job_id])
+
+        self._with_write_connection(_op)
 
     def get_maintenance_retry_tasks(
         self,

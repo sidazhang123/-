@@ -11,6 +11,7 @@
     "required_timeframes": ["d"],
     "specialized_entry": "strategies.groups.strategy_2.engine:run_strategy_2_specialized"
   },
+  "usage": [],
   "default_params": {
     "daily": {
       "example_param": 10

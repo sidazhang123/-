@@ -36,6 +36,9 @@
                           font-size:13px; text-align:center; color:#e67e00; font-weight:600; }
     .bt-range-row input:focus { outline:none; border-color:var(--color-warning);
                                 box-shadow:0 0 0 2px rgba(255,159,10,0.15); }
+    .bt-range-row .bt-rng-val { min-width:36px; padding:2px 6px; border:1px solid rgba(255,159,10,0.35);
+                                border-radius:6px; background:#fff; font-size:13px; text-align:center;
+                                color:#e67e00; font-weight:600; display:inline-block; }
 
     .bt-status-card { padding:12px 14px; background:#fff; border-radius:6px;
                       border:1px solid var(--color-border-heavy); margin-bottom:12px; }
@@ -60,6 +63,10 @@
 
     .bt-btn-row { display:flex; gap:8px; align-items:center; margin:10px 0; }
     .bt-combo-badge { font-size:.78rem; color:var(--color-text-secondary); margin-left:8px; }
+    .bt-sweep-best-row { background:rgba(104,211,145,0.1) !important; }
+    .bt-sweep-best-row td { border-bottom-color:rgba(104,211,145,0.3); }
+    .bt-sweep-fwd-tabs { display:flex; align-items:center; gap:4px; margin-bottom:12px; flex-wrap:wrap; }
+    .bt-sweep-fwd-tabs .bt-tab { padding:5px 14px; font-size:.85rem; }
   </style>
 </head>
 <body>
@@ -150,6 +157,7 @@
           <label class="field-grow">
             <select id="btJobSelect"><option value="">— 无任务 —</option></select>
           </label>
+          <button type="button" id="btShowParamsBtn" class="param-badge-btn" title="查看回测参数快照" disabled>参</button>
           <div class="button-cluster">
             <button id="btRefreshJobsBtn">刷新列表</button>
           </div>
@@ -189,9 +197,28 @@
         <div id="btStatsContent" class="bt-stats-grid"></div>
       </section>
 
-      <!-- ── Sweep 结果表格 ── -->
+      <!-- ── Sweep 结果 ── -->
       <section class="panel" id="btSweepPanel" style="display:none;">
         <h2>参数组合结果</h2>
+        <div id="btSweepCharts" style="display:none;">
+          <!-- 前瞻周期切换标签 -->
+          <div class="bt-sweep-fwd-tabs" id="btSweepFwdTabs"></div>
+          <!-- 主图：散点图 (盈利 vs 回撤, 颜色=夏普) -->
+          <div class="bt-stat-card" style="margin-bottom:12px;">
+            <h4>参数组合效果分布 <small style="font-weight:normal;color:var(--color-text-secondary);font-size:.78rem;">（右上=高盈利低回撤，颜色越绿=夏普越高，气泡越大=命中越多）</small></h4>
+            <div id="btSweepScatterMain" style="width:100%;height:420px;"></div>
+          </div>
+          <!-- 综合评分排行 -->
+          <div class="bt-stat-card" style="margin-bottom:12px;">
+            <h4>综合评分排行 <small style="font-weight:normal;color:var(--color-text-secondary);font-size:.78rem;">（中位盈利 − 中位回撤 + 夏普贡献）</small></h4>
+            <div id="btSweepRankChart" style="width:100%;min-height:320px;"></div>
+          </div>
+          <!-- 参数热力图（仅两参数扫描时显示） -->
+          <div class="bt-stat-card" id="btSweepHeatmapCard" style="margin-bottom:12px;display:none;">
+            <h4>参数热力图 <small style="font-weight:normal;color:var(--color-text-secondary);font-size:.78rem;">（颜色越绿评分越高）</small></h4>
+            <div id="btSweepHeatmap" style="width:100%;height:360px;"></div>
+          </div>
+        </div>
         <div class="bt-sweep-wrap">
           <table class="bt-sweep-table" id="btSweepTable">
             <thead id="btSweepHead"></thead>
@@ -203,9 +230,20 @@
     </div><!-- /.main-content -->
   </div><!-- /.app-shell -->
 
+  <!-- 回测参数快照弹窗 -->
+  <div id="btParamModalOverlay" class="param-modal-overlay" hidden>
+    <div class="param-modal-box">
+      <div class="param-modal-header">
+        <span class="param-modal-title">回测参数快照</span>
+        <button type="button" id="btParamModalCloseBtn" class="param-modal-close" title="关闭">&times;</button>
+      </div>
+      <div id="btParamModalBody" class="param-modal-body"></div>
+    </div>
+  </div>
+
   <script src="/static/vendor/lucide/lucide.min.js"></script>
   <script src="/static/param-render.js?v=20260322"></script>
-  <script src="/static/backtest.js?v=20260401c"></script>
+  <script src="/static/backtest.js?v=20260402-sweep-v3"></script>
   <script>lucide.createIcons();</script>
   <script>
     document.querySelectorAll('.log-tabs').forEach(bar => {

@@ -13,6 +13,8 @@ const state = {
   strategyGroups: [],
   settingsDirty: false,
   groupParams: {},
+  /** 服务端持久化的每策略参数缓存 { groupId: groupParams } */
+  perStrategyParams: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -266,18 +268,32 @@ function resetGroupParamsFromDefault(groupId) {
     if (desc) desc.textContent = "-";
     return;
   }
-  state.groupParams = cloneValue(group.default_params || {});
+  const base = cloneValue(group.default_params || {});
+  // 从服务端加载的 perStrategyParams 恢复已保存的参数
+  const saved = state.perStrategyParams[groupId];
+  console.log("[DBG reset]", groupId, "default=", cloneValue(base), "saved=", cloneValue(saved || null));
+  if (saved && typeof saved === "object") {
+    deepMerge(base, saved);
+  }
+  console.log("[DBG reset] merged=", cloneValue(base));
+  state.groupParams = base;
   updateStrategyGroupDescription(groupId);
   renderGroupParamsForm();
 }
 
 function collectMonitorSettings() {
+  // 先把当前策略的参数同步到 perStrategyParams
+  const gid = selectedGroupId();
+  if (gid && Object.keys(state.groupParams).length) {
+    state.perStrategyParams[gid] = cloneValue(state.groupParams);
+  }
   return {
     source_db: $("sourceDb")?.value || "",
     stocks_input: $("stocksInput")?.value || "",
     sample_size: getCurrentSampleSize(),
-    strategy_group_id: selectedGroupId(),
+    strategy_group_id: gid,
     group_params: cloneValue(state.groupParams),
+    per_strategy_params: cloneValue(state.perStrategyParams),
   };
 }
 
@@ -340,16 +356,25 @@ function applyMonitorSettings(settings) {
     sampleInput.value = String(normalizeSampleSize(settings.sample_size));
   }
 
+  // 加载服务端存储的每策略参数
+  const psp = settings.per_strategy_params;
+  if (psp && typeof psp === "object") {
+    state.perStrategyParams = cloneValue(psp);
+  }
+
   const savedGroupId = typeof settings.strategy_group_id === "string" ? settings.strategy_group_id : "";
   const savedGroup = savedGroupId ? findGroup(savedGroupId) : null;
   if (savedGroup) {
     $("strategyGroupSelect").value = savedGroupId;
     updateStrategyGroupDescription(savedGroupId);
     const base = cloneValue(savedGroup.default_params || {});
-    if (settings.group_params && typeof settings.group_params === "object") {
-      deepMerge(base, settings.group_params);
+    // 使用 perStrategyParams 中当前策略的参数
+    const saved = state.perStrategyParams[savedGroupId];
+    if (saved && typeof saved === "object") {
+      deepMerge(base, saved);
     }
     state.groupParams = base;
+    state._prevGroupId = savedGroupId;
     renderGroupParamsForm();
     return;
   }
@@ -372,7 +397,11 @@ async function saveMonitorSettings() {
   if (sampleInput) {
     sampleInput.value = String(payload.sample_size);
   }
-  await postJSON("/api/ui-settings/monitor", payload);
+  const resp = await postJSON("/api/ui-settings/monitor", payload);
+  // 服务端返回的 per_strategy_params 是权威数据，回写本地
+  if (resp.settings && resp.settings.per_strategy_params) {
+    state.perStrategyParams = cloneValue(resp.settings.per_strategy_params);
+  }
   markSettingsSaved();
 }
 
@@ -703,7 +732,7 @@ async function stopTask() {
 
 async function loadStrategyGroups() {
   const data = await getJSON("/api/strategy-groups");
-  state.strategyGroups = (data.items || []).filter((group) => group && group.id !== "strategy_2");
+  state.strategyGroups = (data.items || []).filter((group) => group && (group.usage || []).includes("screening"));
   const select = $("strategyGroupSelect");
   select.innerHTML = "";
 
@@ -722,6 +751,7 @@ async function loadStrategyGroups() {
 
   const first = state.strategyGroups[0];
   select.value = first.id;
+  state._prevGroupId = first.id;
   resetGroupParamsFromDefault(first.id);
 }
 
@@ -776,8 +806,19 @@ function bindEvents() {
   });
 
   $("strategyGroupSelect").addEventListener("change", (event) => {
-    resetGroupParamsFromDefault(event.target.value);
-    markSettingsDirty();
+    // 切换前：将当前策略参数写入 perStrategyParams
+    const prevId = state._prevGroupId;
+    console.log("[DBG switch] prevId=", prevId, "groupParams=", cloneValue(state.groupParams));
+    if (prevId && Object.keys(state.groupParams).length) {
+      state.perStrategyParams[prevId] = cloneValue(state.groupParams);
+      console.log("[DBG switch] saved perStrategyParams[", prevId, "]=", cloneValue(state.perStrategyParams[prevId]));
+    } else {
+      console.warn("[DBG switch] SKIP save — prevId=", prevId, "keys=", Object.keys(state.groupParams).length);
+    }
+    const newId = event.target.value;
+    console.log("[DBG switch] newId=", newId, "perStrategyParams[newId]=", cloneValue(state.perStrategyParams[newId] || null));
+    resetGroupParamsFromDefault(newId);
+    state._prevGroupId = newId;
   });
 
   ["sourceDb", "stocksInput", "skipCoverageFilter", "sampleSize"].forEach((id) => {

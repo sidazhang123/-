@@ -236,7 +236,11 @@ def _detect_hits_for_codes(
                         "pattern_end_ts": p_end_ts,
                     })
         else:
-            # ── 原始滑窗路径 ──
+            # ── 原始滑窗路径（已弃用，仅作 fallback） ──
+            logger.warning(
+                "策略 %s section=%s 缺少 detect_vectorized，使用已弃用的滑窗路径",
+                hooks_module_path, section_key,
+            )
             n = len(code_df)
             pos = slide_step  # 从第 slide_step 个bar开始
 
@@ -431,8 +435,10 @@ def resolve_hit_metrics(
         for n, label in [(x, "x"), (y, "y"), (z, "z")]:
             max_high_col = f"fwd_{n}_max_high"
             min_low_col = f"fwd_{n}_min_low"
-            df[f"profit_{label}_pct"] = (df[max_high_col] - df["buy_price"]) / df["buy_price"] * 100
-            df[f"drawdown_{label}_pct"] = (df["buy_price"] - df[min_low_col]) / df["buy_price"] * 100
+            # 盈利仅衡量收益，买入后未涨过买入价的情况钳位为 0
+            df[f"profit_{label}_pct"] = ((df[max_high_col] - df["buy_price"]) / df["buy_price"] * 100).clip(lower=0)
+            # 回撤仅衡量风险（亏损），买入后未跌破买入价的情况钳位为 0
+            df[f"drawdown_{label}_pct"] = ((df["buy_price"] - df[min_low_col]) / df["buy_price"] * 100).clip(lower=0)
 
     finally:
         con.close()

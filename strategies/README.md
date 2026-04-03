@@ -86,11 +86,32 @@ strategies/
 | `name` | 前端展示名，建议含版本号 |
 | `description` | 一句话描述策略逻辑 |
 | `module` | 固定写成 `strategies.groups.<id>` |
+| `usage` | 用途列表，可选值 `"screening"`, `"backtest"`。默认 `["screening", "backtest"]`。模板策略设 `[]`，仅筛选策略设 `["screening"]` |
 | `engine` | 新策略应为 `"specialized"` |
 | `execution.required_timeframes` | 只声明你实际会读取的周期 |
 | `execution.specialized_entry` | 必须指向 `engine.py` 中真实函数，格式 `module:function` |
 | `default_params` | 默认参数，前端可以覆盖 |
 | `param_help` | 给前端和 AI 阅读的说明文本，必须和参数结构同步 |
+
+#### scope_params 声明
+
+`default_params` 中每个周期 section 可声明 `"scope_params": ["param_name"]`，表示该参数仅在筛选模式下生效（控制数据窗口宽度），不参与回测模式的参数配置、sweep 组合和展示。
+
+```jsonc
+"default_params": {
+  "daily": {
+    "scope_params": ["scan_bars"],   // 仅筛选模式
+    "scan_bars": 30,                 // 数据窗口（scope）
+    "streak_len": 5                  // 形态参数（pattern）
+  }
+}
+```
+
+规则：
+1. `scope_params` 列出的参数仍需在 section 中声明默认值。
+2. 回测前端自动隐藏 scope 参数的输入控件和 sweep range 控件。
+3. 各策略 `_normalize_for_backtest()` 负责从传给 detect 的参数中剔除 scope 参数。
+4. 无 scope 参数的 section 可省略 `scope_params` 或设为 `[]`。
 
 推荐写法示例：
 

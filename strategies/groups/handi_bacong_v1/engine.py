@@ -977,9 +977,157 @@ def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> d
     }
 
 
+def detect_handi_bacong_vectorized(
+    code_frame: pd.DataFrame,
+    tf_params: dict[str, Any],
+    global_params: dict[str, Any],
+    tf_key: str,
+) -> list[DetectionResult]:
+    """在全量历史上正向扫描所有不重叠箱体突破命中点。
+
+    与 detect_handi_bacong 的区别：
+    - detect_handi_bacong 仅检测尾部最新一次箱体突破（筛选模式）。
+    - 本函数从头到尾扫描，收集所有不重叠命中（回测模式）。
+
+    输入：
+    1. code_frame: 单只股票完整 OHLCV DataFrame（已按 ts 排序）。
+    2. tf_params: 已规范化的单周期参数。
+    3. global_params: 已规范化的全局参数。
+    4. tf_key: 周期 key（"w" / "d"）。
+    输出：
+    1. DetectionResult 列表，每个元素对应一段命中。
+    边界条件：
+    1. 数据不足 segment_count + 1 时返回空列表。
+    2. 正向遍历每个候选 pattern_end 位置，首次命中后跳过已匹配区域。
+    """
+    bars_per_month = _TF_BARS_PER_MONTH.get(tf_key, 22)
+    min_duration_weeks = global_params["min_duration_weeks"]
+    segment_count = tf_params["segment_count"]
+    max_slope_pct = tf_params["max_slope_pct"]
+    range_pct_min = tf_params["range_pct_min"]
+    range_pct_max = tf_params["range_pct_max"]
+    breakout_range_pct = tf_params["breakout_range_pct"]
+    breakout_volume_pct = tf_params["breakout_volume_pct"]
+
+    n = len(code_frame)
+    if n < segment_count + 1:
+        return []
+
+    window = code_frame.reset_index(drop=True)
+    ts_arr = window["ts"].values
+    highs = window["high"].values.astype(np.float64)
+    lows = window["low"].values.astype(np.float64)
+    volumes = window["volume"].values.astype(np.float64)
+
+    results: list[DetectionResult] = []
+    skip_until = 0  # 非重叠：pattern_end 必须 >= skip_until
+
+    for e_idx in range(segment_count + 1, n):
+        if e_idx < skip_until:
+            continue
+
+        best: tuple[int, int, int, ChannelResult, BreakoutResult] | None = None
+
+        for nb in range(1, _MAX_BREAKOUT_BARS + 1):
+            e_box = e_idx - nb
+            if e_box < skip_until + segment_count - 1:
+                continue
+            if e_box < segment_count - 1:
+                continue
+
+            latest_ts = pd.Timestamp(ts_arr[e_box])
+
+            channel_found: tuple[ChannelResult, int] | None = None
+            for s_idx in range(skip_until, e_box):
+                ts_start = pd.Timestamp(ts_arr[s_idx])
+                window_weeks = (latest_ts - ts_start).days / _DAYS_PER_WEEK
+                if window_weeks < min_duration_weeks:
+                    break
+
+                window_len = e_box - s_idx + 1
+                if window_len < segment_count:
+                    continue
+
+                channel = _evaluate_channel(
+                    highs=highs[s_idx: e_box + 1],
+                    lows=lows[s_idx: e_box + 1],
+                    segment_count=segment_count,
+                    max_slope_pct=max_slope_pct,
+                    range_pct_min=range_pct_min,
+                    range_pct_max=range_pct_max,
+                    bars_per_month=bars_per_month,
+                )
+                if channel is not None:
+                    channel_found = (channel, s_idx)
+                    break
+
+            if channel_found is None:
+                continue
+
+            channel, s_idx = channel_found
+
+            breakout_frame = window.iloc[e_box + 1: e_idx + 1]
+            box_volumes = volumes[s_idx: e_box + 1]
+
+            breakout = _check_breakout(
+                box_volumes=box_volumes,
+                breakout_frame=breakout_frame,
+                channel=channel,
+                breakout_range_pct=breakout_range_pct,
+                breakout_volume_pct=breakout_volume_pct,
+            )
+            if breakout is None:
+                continue
+
+            box_len = e_box - s_idx + 1
+            if best is None or box_len > (best[1] - best[0] + 1):
+                best = (s_idx, e_box, nb, channel, breakout)
+
+        if best is not None:
+            s_idx, e_box, nb, channel, breakout = best
+            ts_s = window.iloc[s_idx]["ts"]
+            ts_e = window.iloc[e_idx]["ts"]
+            duration_weeks = round(
+                (pd.Timestamp(ts_e) - pd.Timestamp(ts_s)).days / _DAYS_PER_WEEK, 1
+            )
+            results.append(DetectionResult(
+                matched=True,
+                pattern_start_idx=s_idx,
+                pattern_end_idx=e_idx,
+                pattern_start_ts=ts_s,
+                pattern_end_ts=ts_e,
+                metrics={
+                    "tf_key": tf_key,
+                    "tf_label": _TF_LABEL.get(tf_key, tf_key),
+                    "duration_weeks": duration_weeks,
+                    "box_bars": e_box - s_idx + 1,
+                    "breakout_bars": nb,
+                    "channel": {
+                        "upper_level": channel.upper_level,
+                        "lower_level": channel.lower_level,
+                        "range_pct": channel.range_pct,
+                        "upper_slope_unit": channel.upper_slope_unit,
+                        "lower_slope_unit": channel.lower_slope_unit,
+                        "fit_error": channel.fit_error,
+                    },
+                    "breakout": {
+                        "breakout_bars": breakout.breakout_bars,
+                        "max_close": breakout.max_close,
+                        "breakout_threshold": breakout.breakout_threshold,
+                        "avg_breakout_volume": breakout.avg_breakout_volume,
+                        "trimmed_avg_box_volume": breakout.trimmed_avg_box_volume,
+                        "volume_ratio": breakout.volume_ratio,
+                    },
+                },
+            ))
+            skip_until = e_idx + 1
+
+    return results
+
+
 BACKTEST_HOOKS = {
     "detect": detect_handi_bacong,
-    "detect_vectorized": None,
+    "detect_vectorized": detect_handi_bacong_vectorized,
     "prepare": None,
     "normalize_params": _normalize_for_backtest,
     "tf_sections": {

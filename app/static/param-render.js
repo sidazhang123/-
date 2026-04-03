@@ -104,15 +104,21 @@ const ParamRender = (() => {
     }
 
     if (value && typeof value === "object") {
+      // scope_params 是元数据，不作为参数字段渲染；hideScopeParams 时连其声明的参数一并隐藏
+      const _scopeSkip = new Set(["scope_params"]);
+      if (opts.hideScopeParams && Array.isArray(value.scope_params)) {
+        value.scope_params.forEach((k) => _scopeSkip.add(k));
+      }
+
       if (helpNode && helpNode._render === "inline_template") {
         return renderInlineTemplateSection(path, value, helpNode, opts);
       }
       const lastKey = path.length ? path[path.length - 1] : "";
       if (_UNWRAP_SECTIONS.has(lastKey)) {
-        const childKeys = Object.keys(value);
+        const childKeys = Object.keys(value).filter((k) => !_scopeSkip.has(k));
         return childKeys.map((key) => renderParamField(path.concat(key), value[key], helpNode?.[key], key, depth, opts)).join("");
       }
-      const childKeys = Object.keys(value);
+      const childKeys = Object.keys(value).filter((k) => !_scopeSkip.has(k));
       if (readonly && childKeys.includes("enabled") && value.enabled === false) return "";
       const hasEnabled = childKeys.includes("enabled");
       const singleBoolKey = (!hasEnabled && depth > 0 && childKeys.length === 1 && typeof value[childKeys[0]] === "boolean") ? childKeys[0] : null;
@@ -227,7 +233,7 @@ const ParamRender = (() => {
           <label class="param-field">
             <span class="param-label">${escapeHtml(labelText)}</span>
             ${helpText ? `<span class="param-help">${escapeHtml(helpText)}</span>` : ""}
-            <span class="param-readonly-value">${escapeHtml(String(value))}</span>
+            <span class="param-readonly-value" data-param-path="${escapeHtml(pathKey)}">${escapeHtml(String(value))}</span>
           </label>
         `;
       }
@@ -303,8 +309,19 @@ const ParamRender = (() => {
     }
 
     let rowsHtml = "";
+    // hideScopeParams 时跳过引用了 scope 参数的模板行
+    const _scopeSet = (opts.hideScopeParams && Array.isArray(sectionValue.scope_params))
+      ? new Set(sectionValue.scope_params) : null;
+
     for (const tpl of templates) {
       const text = tpl.text || "";
+
+      // 跳过引用 scope 参数的模板行
+      if (_scopeSet) {
+        const _fields = text.match(/\{(\w+)\}/g);
+        if (_fields && _fields.some((f) => _scopeSet.has(f.slice(1, -1)))) continue;
+      }
+
       const isRequired = tpl.required === true;
       const toggleField = tpl.toggle || null;
       const followToggleField = tpl.follow_toggle || null;
@@ -323,7 +340,7 @@ const ParamRender = (() => {
           const fieldKey = pathToString(fieldPath);
           const fieldVal = sectionValue[fieldName];
           if (readonly) {
-            lineHtml += `<span class="param-readonly-value">${escapeHtml(String(fieldVal ?? ""))}</span>`;
+            lineHtml += `<span class="param-readonly-value" data-param-path="${escapeHtml(fieldKey)}">${escapeHtml(String(fieldVal ?? ""))}</span>`;
           } else if (typeof fieldVal === "number") {
             const step = Number.isInteger(fieldVal) ? "1" : "any";
             const kind = Number.isInteger(fieldVal) ? "int" : "float";

@@ -11,6 +11,7 @@
     "required_timeframes": ["w"],
     "specialized_entry": "strategies.groups.weekly_sideways_v1.engine:run_weekly_sideways_v1_specialized"
   },
+  "usage": ["screening"],
   "default_params": {
     "weekly": {
       "min_duration_months": 12,

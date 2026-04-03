@@ -353,23 +353,21 @@ class TestConsecutiveUptrendsVectorized:
             "volume": [1000] * n,
         })
 
-    def test_no_selloff_superset_of_sliding(self, cu_module):
-        """无急跌模式：vectorized 命中集应包含 slide_step=1 的滑窗命中集。"""
-        # 构造数据：先平坦再出现两段连续阳线（每根涨幅 ≤ 2%）
-        np.random.seed(100)
-        base = 10.0
+    def test_no_selloff_finds_known_streaks(self, cu_module):
+        """无急跌模式：vectorized 应找到构造数据中的已知连阳段。"""
+        # 构造数据：在 [20,25) 和 [60,65) 区间放入确定性小阳（涨 1%），
+        # 其余区间全部构造为阴线（open > close）以确保不产生额外连阳。
+        n = 80
         closes = []
         opens_list = []
-        for i in range(120):
+        base = 10.0
+        for i in range(n):
             if 20 <= i < 25 or 60 <= i < 65:
-                # 小阳段：涨 ~1%
                 base *= 1.01
                 o = base / 1.01
             else:
-                # 随机波动（部分阴线）
-                delta = np.random.uniform(-0.3, 0.15)
-                base = max(base + delta, 5.0)
-                o = base + np.random.uniform(-0.1, 0.4)  # 有些阴线
+                # 阴线：open > close
+                o = base + 0.5
             closes.append(round(base, 4))
             opens_list.append(round(o, 4))
 
@@ -384,33 +382,33 @@ class TestConsecutiveUptrendsVectorized:
             "selloff_bars": 3,
         }
 
-        sliding_hits = _sliding_window_detect(df, cu_module.detect_streak, {"params": params})
         vec_results = cu_module.detect_streak_vectorized(df, params)
-        vec_hits = [r.pattern_end_idx for r in vec_results]
+        vec_ends = [r.pattern_end_idx for r in vec_results]
+        vec_starts = [r.pattern_start_idx for r in vec_results]
 
-        assert set(sliding_hits).issubset(set(vec_hits)), (
-            f"滑窗命中 {sliding_hits} 不是 vectorized 命中 {vec_hits} 的子集"
-        )
+        # 应恰好找到两段连阳：[20,24] 和 [60,64]
+        assert len(vec_results) == 2, f"期望 2 段命中，实际 {len(vec_results)}: ends={vec_ends}"
+        assert vec_starts[0] == 20 and vec_ends[0] == 24
+        assert vec_starts[1] == 60 and vec_ends[1] == 64
+        for r in vec_results:
+            assert r.matched is True
 
-    def test_selloff_superset_of_sliding(self, cu_module):
-        """急跌模式：vectorized 命中集应包含 slide_step=1 的滑窗命中集。"""
-        np.random.seed(200)
-        base = 20.0
+    def test_selloff_finds_known_pattern(self, cu_module):
+        """急跌模式：vectorized 应找到连阳 + 急跌段的已知组合。"""
+        # 构造数据：[30,35) 5 根小阳（涨 ~1.5%），[36,39) 3 根急跌，其余阴线。
+        n = 60
         closes = []
         opens_list = []
-        for i in range(100):
+        base = 20.0
+        for i in range(n):
             if 30 <= i < 35:
-                # 5 根小阳
                 base *= 1.015
                 o = base / 1.015
             elif 36 <= i < 39:
-                # 急跌段（3根）
                 base *= 0.97
                 o = base / 0.97
             else:
-                delta = np.random.uniform(-0.2, 0.2)
-                base = max(base + delta, 5.0)
-                o = base + np.random.uniform(-0.2, 0.3)
+                o = base + 0.5  # 阴线
             closes.append(round(base, 4))
             opens_list.append(round(o, 4))
 
@@ -420,18 +418,19 @@ class TestConsecutiveUptrendsVectorized:
             "streak_len": 5,
             "bar_gain_max": 0.02,
             "selloff_enabled": True,
-            "selloff_start_pct": 0.5,
-            "selloff_return_pct": 0.3,
+            "selloff_start_pct": 0.5,       # 偏移上限 = floor(0.5 * 5) = 2
+            "selloff_return_pct": 0.3,       # 回撤 >= 30% 总涨幅
             "selloff_bars": 3,
         }
 
-        sliding_hits = _sliding_window_detect(df, cu_module.detect_streak, {"params": params})
         vec_results = cu_module.detect_streak_vectorized(df, params)
-        vec_hits = [r.pattern_end_idx for r in vec_results]
 
-        assert set(sliding_hits).issubset(set(vec_hits)), (
-            f"滑窗命中 {sliding_hits} 不是 vectorized 命中 {vec_hits} 的子集"
-        )
+        # 连阳段 [30,34]，急跌搜索从 35 开始，selloff_bars=3 → sell_end=37
+        assert len(vec_results) >= 1, f"期望至少 1 段命中，实际 {len(vec_results)}"
+        r = vec_results[0]
+        assert r.matched is True
+        assert r.pattern_start_idx == 30
+        assert r.pattern_end_idx == 37, f"期望 end=37，实际 {r.pattern_end_idx}"
 
     def test_empty_returns_empty(self, cu_module):
         """空数据返回空列表。"""

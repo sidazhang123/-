@@ -11,8 +11,10 @@
     "required_timeframes": ["w", "d", "15"],
     "specialized_entry": "strategies.groups.flag_pattern_v1.engine:run_flag_pattern_v1_specialized"
   },
+  "usage": ["screening", "backtest"],
   "default_params": {
     "weekly": {
+      "scope_params": ["scan_bars"],
       "enabled": false,
       "scan_bars": 30,
       "pole_len_min": 2,
@@ -28,6 +30,7 @@
       "hv_slope_norm_max": -0.2
     },
     "daily": {
+      "scope_params": ["scan_bars"],
       "enabled": true,
       "scan_bars": 30,
       "pole_len_min": 2,
@@ -43,6 +46,7 @@
       "hv_slope_norm_max": -0.2
     },
     "min15": {
+      "scope_params": ["scan_bars"],
       "enabled": false,
       "scan_bars": 30,
       "pole_len_min": 2,
@@ -87,7 +91,8 @@
       "_templates": [
         {
           "text": "在最新的 {scan_bars} 根K线中查找旗形",
-          "required": true
+          "required": true,
+          "help": "仅在筛选模式中生效"
         },
         {
           "text": "旗杆长度范围 [{pole_len_min}, {pole_len_max}] 根K线",
@@ -102,11 +107,11 @@
           "required": true
         },
         {
-          "text": "旗面最高点超过旗杆顶端的上限 {flag_high_above_max}%（相对旗杆涨幅比例）",
+          "text": "旗面最高点不得超过旗杆顶端 {flag_high_above_max}%（相对旗杆涨幅比例）",
           "required": true
         },
         {
-          "text": "旗面最低点低于旗杆顶端的上限 {flag_low_below_max}%（相对旗杆涨幅比例）",
+          "text": "旗面最低点不得低于旗杆顶端 {flag_low_below_max}%（相对旗杆涨幅比例）",
           "required": true
         },
         {
@@ -132,7 +137,8 @@
       "_templates": [
         {
           "text": "在最新的 {scan_bars} 根K线中查找旗形",
-          "required": true
+          "required": true,
+          "help": "仅在筛选模式中生效"
         },
         {
           "text": "旗杆长度范围 [{pole_len_min}, {pole_len_max}] 根K线",
@@ -147,11 +153,11 @@
           "required": true
         },
         {
-          "text": "旗面最高点超过旗杆顶端的上限 {flag_high_above_max}%（相对旗杆涨幅比例）",
+          "text": "旗面最高点不得超过旗杆顶端 {flag_high_above_max}%（相对旗杆涨幅比例）",
           "required": true
         },
         {
-          "text": "旗面最低点低于旗杆顶端的上限 {flag_low_below_max}%（相对旗杆涨幅比例）",
+          "text": "旗面最低点不得低于旗杆顶端 {flag_low_below_max}%（相对旗杆涨幅比例）",
           "required": true
         },
         {
@@ -177,7 +183,8 @@
       "_templates": [
         {
           "text": "在最新的 {scan_bars} 根K线中查找旗形",
-          "required": true
+          "required": true,
+          "help": "仅在筛选模式中生效"
         },
         {
           "text": "旗杆长度范围 [{pole_len_min}, {pole_len_max}] 根K线",
@@ -192,11 +199,11 @@
           "required": true
         },
         {
-          "text": "旗面最高点超过旗杆顶端的上限 {flag_high_above_max}%（相对旗杆涨幅比例）",
+          "text": "旗面最高点不得超过旗杆顶端 {flag_high_above_max}%（相对旗杆涨幅比例）",
           "required": true
         },
         {
-          "text": "旗面最低点低于旗杆顶端的上限 {flag_low_below_max}%（相对旗杆涨幅比例）",
+          "text": "旗面最低点不得低于旗杆顶端 {flag_low_below_max}%（相对旗杆涨幅比例）",
           "required": true
         },
         {
