@@ -24,6 +24,8 @@ from strategies.groups.converging_triangle_v1.engine import (
     _normalize_tf_params,
     _scan_one_code,
     _scan_tf_for_code,
+    detect_converging_triangle,
+    detect_converging_triangle_vectorized,
 )
 
 
@@ -710,3 +712,133 @@ class TestLowerBreakCheck:
             "daily",
         )
         assert abs(result["lower_break_pct"] - 0.15) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# detect_converging_triangle_vectorized 测试
+# ---------------------------------------------------------------------------
+
+
+def _relaxed_params() -> dict[str, Any]:
+    """返回一组宽松的规范化参数（适合合成数据）。"""
+    return {
+        "enabled": True,
+        "search_recent_weeks": 12,
+        "pattern_months_min": 1,
+        "pattern_months_max": 24,
+        "converging_speed_min": 0.001,
+        "slope_symmetry_tolerance": 0.99,
+        "contraction_ratio_max": 0.99,
+        "apex_progress_min": 0.05,
+        "segment_count": 3,
+        "upper_edge_zone_ratio": 0.50,
+        "lower_edge_zone_ratio": 0.50,
+        "min_upper_touch_count": 0,
+        "min_lower_touch_count": 0,
+        "lower_break_pct": 0.50,
+    }
+
+
+class TestDetectConvergingTriangleVectorized:
+    """测试回测 vectorized 检测路径。"""
+
+    def test_empty_frame_returns_empty(self) -> None:
+        """空 DataFrame 返回空列表。"""
+        results = detect_converging_triangle_vectorized(
+            pd.DataFrame(), params=_relaxed_params(), tf_key="d",
+        )
+        assert results == []
+
+    def test_disabled_tf_returns_empty(self) -> None:
+        """周期未启用时返回空列表。"""
+        frame = _make_code_frame(n_bars=150, tf_key="d")
+        params = _relaxed_params()
+        params["enabled"] = False
+        results = detect_converging_triangle_vectorized(frame, params=params, tf_key="d")
+        assert results == []
+
+    def test_single_triangle_detected(self) -> None:
+        """含一个收敛三角的合成数据应检测到至少一个命中。"""
+        frame = _make_code_frame(
+            n_bars=200, start_date="2024-01-01", tf_key="d",
+            start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.2,
+        )
+        results = detect_converging_triangle_vectorized(
+            frame, params=_relaxed_params(), tf_key="d",
+        )
+        assert len(results) >= 1
+        for r in results:
+            assert r.matched is True
+            assert r.pattern_start_idx is not None
+            assert r.pattern_end_idx is not None
+            assert r.pattern_start_ts is not None
+            assert r.pattern_end_ts is not None
+            assert r.pattern_start_idx < r.pattern_end_idx
+
+    def test_vectorized_consistent_with_detect(self) -> None:
+        """vectorized 在尾部搜索窗口的命中应与单次 detect 一致（或被更早命中覆盖）。"""
+        frame = _make_code_frame(
+            n_bars=200, start_date="2024-01-01", tf_key="d",
+            start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.2,
+        )
+        params = _relaxed_params()
+
+        # 单次 detect：只搜索尾部
+        single = detect_converging_triangle(frame, params=params, tf_key="d")
+
+        # vectorized：搜索全历史
+        vec_results = detect_converging_triangle_vectorized(
+            frame, params=params, tf_key="d",
+        )
+
+        if single.matched:
+            # vectorized 应满足以下条件之一：
+            # a) 存在一个与单次 detect 的 pattern_end_ts 匹配的命中
+            # b) 存在一个更早的命中其 end_idx 覆盖了单次 detect 的 start_idx
+            #    （贪心前扫导致该区域已被占用）
+            single_end_ts = single.pattern_end_ts
+            single_start_idx = single.pattern_start_idx
+            vec_end_ts_set = {r.pattern_end_ts for r in vec_results}
+
+            covered_by_earlier = any(
+                r.pattern_end_idx >= single_start_idx
+                for r in vec_results
+                if r.pattern_end_ts != single_end_ts
+            )
+            assert single_end_ts in vec_end_ts_set or covered_by_earlier, (
+                f"单次 detect 命中 end_ts={single_end_ts} 未出现在 vectorized 结果中，"
+                f"且未被更早命中覆盖"
+            )
+
+    def test_no_overlapping_hits(self) -> None:
+        """vectorized 结果中不应有重叠区间。"""
+        frame = _make_code_frame(
+            n_bars=300, start_date="2023-06-01", tf_key="d",
+            start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.2,
+        )
+        results = detect_converging_triangle_vectorized(
+            frame, params=_relaxed_params(), tf_key="d",
+        )
+        for i in range(1, len(results)):
+            assert results[i].pattern_start_idx >= results[i - 1].pattern_end_idx, (
+                f"命中 {i} 的 start_idx={results[i].pattern_start_idx} "
+                f"< 前一命中 end_idx={results[i - 1].pattern_end_idx}"
+            )
+
+    def test_weekly_vectorized(self) -> None:
+        """周线数据上的 vectorized 检测应正常工作。"""
+        frame = _make_code_frame(
+            n_bars=60, start_date="2024-01-01", tf_key="w",
+            start_high=20.0, start_low=10.0,
+            end_high=16.0, end_low=14.0, noise=0.2,
+        )
+        results = detect_converging_triangle_vectorized(
+            frame, params=_relaxed_params(), tf_key="w",
+        )
+        # 不要求必须命中，但不应抛异常
+        assert isinstance(results, list)
+        for r in results:
+            assert r.matched is True

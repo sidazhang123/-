@@ -209,3 +209,119 @@ class ResultStockConceptsResponse(BaseModel):
     formula: dict[str, Any] = Field(default_factory=dict)
     top_concepts: list[ResultTopConceptSummary] = Field(default_factory=list)
     items: dict[str, list[ResultStockConceptEntry]] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# 回测 (Backtest)
+# ---------------------------------------------------------------------------
+
+
+class ParamRange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min: float
+    max: float
+    step: float = Field(gt=0)
+
+
+class BacktestCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_group_id: str = Field(min_length=1)
+    mode: Literal["fixed", "sweep"] = "fixed"
+    forward_bars: list[int] = Field(min_length=3, max_length=3, description="前瞻K线数 [x, y, z]")
+    slide_step: int = Field(default=1, ge=1, description="滑动步长")
+    group_params: dict[str, Any] = Field(default_factory=dict, description="策略参数（fixed模式可选，默认取监控页保存参数）")
+    param_ranges: dict[str, ParamRange] = Field(
+        default_factory=dict,
+        description="sweep模式：参数路径 → 扫描范围。路径格式: 'section.param_name'",
+    )
+
+
+class BacktestCreateResponse(BaseModel):
+    job_id: str
+
+
+class BacktestStatusResponse(BaseModel):
+    class BacktestSummaryPayload(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+        total_hits: int = 0
+        total_errors: int = 0
+        duration_seconds: float = 0.0
+
+    job_id: str
+    status: str
+    progress: float = 0.0
+    total_stocks: int = 0
+    processed_stocks: int = 0
+    combo_index: int = 0
+    combo_total: int = 0
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+    summary: BacktestSummaryPayload = Field(default_factory=BacktestSummaryPayload)
+
+
+class BacktestControlResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
+class BacktestLogsResponse(BaseModel):
+    items: list[LogItem]
+    next_after_log_id: int | None = None
+
+
+class BacktestHitRecord(BaseModel):
+    code: str
+    name: str
+    tf_key: str
+    pattern_start_ts: datetime
+    pattern_end_ts: datetime
+    buy_price: float
+    profit_x_pct: float | None = None
+    drawdown_x_pct: float | None = None
+    sharpe_x: float | None = None
+    profit_y_pct: float | None = None
+    drawdown_y_pct: float | None = None
+    sharpe_y: float | None = None
+    profit_z_pct: float | None = None
+    drawdown_z_pct: float | None = None
+    sharpe_z: float | None = None
+
+
+class BacktestHitsResponse(BaseModel):
+    total_count: int
+    items: list[BacktestHitRecord]
+
+
+class BacktestSweepRow(BaseModel):
+    combo_index: int
+    param_combo: dict[str, Any]
+    total_hits: int = 0
+    win_rate_x: float | None = None
+    avg_profit_x: float | None = None
+    avg_drawdown_x: float | None = None
+    win_rate_z: float | None = None
+    avg_profit_z: float | None = None
+    avg_drawdown_z: float | None = None
+
+
+class BacktestSweepResponse(BaseModel):
+    combo_total: int
+    items: list[BacktestSweepRow]
+
+
+class BacktestFormSettingsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    forward_bars: list[int] = Field(default_factory=lambda: [2, 5, 7], min_length=3, max_length=3)
+    slide_step: int = Field(default=1, ge=1)
+    strategy_group_id: str = ""
+    group_params: dict[str, Any] = Field(default_factory=dict)
+    sweep_ranges: dict[str, Any] = Field(default_factory=dict)
+    strategy_settings: dict[str, Any] = Field(default_factory=dict)
+    info_log_autoscroll: bool = True
+    error_log_autoscroll: bool = True

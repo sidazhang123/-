@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from strategies.engine_commons import (
@@ -441,7 +442,102 @@ def detect_multi_tf_ma_uptrend(
     )
 
 
+def detect_multi_tf_ma_uptrend_vectorized(
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+    tf_key: str,
+) -> list[DetectionResult]:
+    """在单只股票的完整历史上一次性检测所有均线向上命中点。
 
+    与 detect_multi_tf_ma_uptrend 的区别：
+    - detect_multi_tf_ma_uptrend 只检查最新 n 根线的条件，
+      供筛选模式和回测外层滑窗使用。
+    - 本函数对全部K线做列式运算，收集所有命中记录，
+      回测引擎无需再用外层 while 滑窗逐 bar 推进。
+
+    输入：
+    1. code_frame: 单只股票完整特征 DataFrame（已按 ts 排序，含 ma/slope_pct/ma_dev 列）。
+    2. params: 已规范化的单周期参数。
+    3. tf_key: 周期标识。
+    输出：
+    1. DetectionResult 列表，每个元素含 pattern_start/end idx/ts。
+    边界条件：
+    1. code_frame 必须已包含 ma/slope_pct/ma_dev 列（由 prepare_multi_tf_ma_features 预计算）。
+    2. 空数据或禁用时返回空列表。
+    """
+    if code_frame.empty or not params.get("enabled", True):
+        return []
+
+    n_param = int(params["n"])
+    slope_gap = int(params["slope_gap"])
+    slope_min = float(params["slope_min"])
+    slope_max = float(params["slope_max"])
+    continuous = params["continuous_check"]
+
+    ts_values = code_frame["ts"].values
+    slope_values = code_frame["slope_pct"].values.astype(np.float64)
+    n_total = len(code_frame)
+
+    # ── 斜率条件 ──
+    slope_in_range = (~np.isnan(slope_values)
+                      & (slope_values >= slope_min)
+                      & (slope_values <= slope_max))
+
+    if continuous:
+        window_count = max(n_param // slope_gap, 1)
+        # 对每个 bar，检查它及之前 (window_count-1)*slope_gap 间隔处的斜率是否全部在范围内
+        slope_ok_series = pd.Series(slope_in_range)
+        cond_slope = slope_ok_series.copy()
+        for k in range(1, window_count):
+            shifted = slope_ok_series.shift(k * slope_gap)
+            cond_slope = cond_slope & shifted.where(shifted.notna(), False)
+        cond_slope = cond_slope.values.astype(bool)
+    else:
+        cond_slope = slope_in_range
+
+    # ── 收盘偏离条件 ──
+    if params["close_deviation_enabled"]:
+        closes = code_frame["close"].values.astype(np.float64)
+        ma_dev_values = code_frame["ma_dev"].values.astype(np.float64)
+        limit_pct = float(params["close_deviation_pct"])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            dev_pct = np.abs(closes - ma_dev_values) / ma_dev_values * 100.0
+        cond_dev = (~np.isnan(ma_dev_values)
+                    & (ma_dev_values > 0)
+                    & (dev_pct <= limit_pct))
+    else:
+        cond_dev = np.ones(n_total, dtype=bool)
+
+    # ── 收敛震荡条件 ──
+    if params["consolidation_enabled"]:
+        p = int(params["consolidation_bars"])
+        amp_limit = float(params["consolidation_max_amp_pct"])
+        highs = code_frame["high"].values.astype(np.float64)
+        lows = code_frame["low"].values.astype(np.float64)
+        rolling_max_h = pd.Series(highs).rolling(p, min_periods=p).max().values
+        rolling_min_l = pd.Series(lows).rolling(p, min_periods=p).min().values
+        safe_min_l = np.where(rolling_min_l > 0, rolling_min_l, np.nan)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            amp_pct = (rolling_max_h - rolling_min_l) / safe_min_l * 100.0
+        cond_cons = (~np.isnan(amp_pct)) & (amp_pct < amp_limit)
+    else:
+        cond_cons = np.ones(n_total, dtype=bool)
+
+    matched = cond_slope & cond_dev & cond_cons
+
+    hit_indices = np.where(matched)[0]
+    results: list[DetectionResult] = []
+    for i in hit_indices:
+        start_idx = max(int(i) - n_param + 1, 0)
+        results.append(DetectionResult(
+            matched=True,
+            pattern_start_idx=start_idx,
+            pattern_end_idx=int(i),
+            pattern_start_ts=ts_values[start_idx],
+            pattern_end_ts=ts_values[i],
+            metrics={"tf": tf_key},
+        ))
+    return results
 
 
 def _build_signal_label(enabled_tfs: list[str], per_tf_detail: dict[str, dict[str, Any]], all_params: dict[str, dict[str, Any]]) -> str:
@@ -744,3 +840,29 @@ def run_multi_tf_ma_uptrend_v1_specialized(
     base_metrics["codes_with_signal"] = sum(1 for r in result_map.values() if r.signal_count > 0)
 
     return result_map, base_metrics
+
+
+# ---------------------------------------------------------------------------
+# 回测钩子
+# ---------------------------------------------------------------------------
+
+def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    return {
+        "params": _normalize_tf_params(group_params, section_key),
+        "tf_key": _PARAM_SECTION_TO_TF[section_key],
+    }
+
+
+BACKTEST_HOOKS = {
+    "detect": detect_multi_tf_ma_uptrend,
+    "detect_vectorized": detect_multi_tf_ma_uptrend_vectorized,
+    "prepare": prepare_multi_tf_ma_features,
+    "normalize_params": _normalize_for_backtest,
+    "tf_sections": {
+        "weekly": {"tf_key": "w", "table": "klines_w"},
+        "daily": {"tf_key": "d", "table": "klines_d"},
+        "min60": {"tf_key": "60", "table": "klines_60"},
+        "min15": {"tf_key": "15", "table": "klines_15"},
+    },
+    "tf_logic": "and",
+}

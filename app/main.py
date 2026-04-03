@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as api_router
 from app.db.state_db import StateDB
+from app.services.backtest_manager import BacktestManager
 from app.services.concept_manager import ConceptManager
 from app.services.maintenance_manager import MaintenanceManager
 from app.services.maintenance_logger import compact_maintenance_detail_for_app_log
@@ -36,9 +37,11 @@ from app.settings import (
     APP_DIR,
     APP_SHUTDOWN_GRACE_SECONDS,
     APP_STARTUP_PREWARM_PARALLEL_FETCHER_ENABLED,
+    BACKTEST_CACHE_DIR,
     LOG_DIR,
     LOG_FILE,
     MAINTENANCE_LOG_APP_COMPACT_ENABLED,
+    SOURCE_DB_PATH,
     SPECIALIZED_ENGINE_MAX_WORKERS,
     STATE_DB_PATH,
     STATIC_DIR,
@@ -145,12 +148,16 @@ strategy_registry = StrategyRegistry()
 task_manager = TaskManager(state_db=state_db, app_logger=logger, strategy_registry=strategy_registry)
 maintenance_manager = MaintenanceManager(state_db=state_db, app_logger=logger)
 concept_manager = ConceptManager(state_db=state_db, app_logger=logger)
+backtest_manager = BacktestManager(state_db=state_db, app_logger=logger)
 app.state.state_db = state_db
 app.state.task_manager = task_manager
 app.state.maintenance_manager = maintenance_manager
 app.state.concept_manager = concept_manager
+app.state.backtest_manager = backtest_manager
 app.state.strategy_registry = strategy_registry
 app.state.app_logger = logger
+app.state.source_db_path = SOURCE_DB_PATH
+app.state.backtest_cache_dir = BACKTEST_CACHE_DIR
 
 app.include_router(api_router)
 
@@ -283,6 +290,16 @@ def task_manager_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "task-manager.html")
 
 
+@app.get("/backtest")
+def backtest_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "backtest.html")
+
+
+@app.get("/backtest-detail")
+def backtest_detail_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "backtest-detail.html")
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> Response:
     """
@@ -310,6 +327,11 @@ def on_shutdown() -> None:
     边界条件：
     1. 各清理步骤都做异常兜底，避免单个清理失败阻断整体停机流程。
     """
+    try:
+        backtest_manager.shutdown()
+    except Exception as exc:
+        logger.exception("backtest_manager shutdown 失败: %s", exc)
+
     try:
         maintenance_manager.shutdown(
             grace_seconds=APP_SHUTDOWN_GRACE_SECONDS,

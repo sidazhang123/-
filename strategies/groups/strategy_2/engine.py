@@ -156,7 +156,7 @@ def _load_daily_bars(
             """
             select
                 t.code,
-                t.datetime as day_ts,
+                t.datetime as ts,
                 t.open,
                 t.high,
                 t.low,
@@ -235,11 +235,11 @@ def build_strategy_2_payload(
     # 示例：从 pattern 索引提取时间窗口
     # s_idx = result.pattern_start_idx or 0
     # e_idx = result.pattern_end_idx or (len(daily_frame) - 1)
-    # window_start_ts = daily_frame.iloc[s_idx]["day_ts"]
-    # window_end_ts = daily_frame.iloc[e_idx]["day_ts"]
+    # window_start_ts = daily_frame.iloc[s_idx]["ts"]
+    # window_end_ts = daily_frame.iloc[e_idx]["ts"]
 
     last_row = daily_frame.iloc[-1]
-    signal_dt = last_row["day_ts"]
+    signal_dt = last_row["ts"]
 
     return build_signal_dict(
         code=code,
@@ -463,3 +463,43 @@ def run_strategy_2_specialized(
         "execution_fallback_to_backtrader": execution_params["fallback_to_backtrader"],
     }
     return result_map, metrics
+
+
+# ---------------------------------------------------------------------------
+# 回测钩子
+# ---------------------------------------------------------------------------
+
+def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    """将前端传入的 group_params 规范化为 detect 函数所需的参数格式。
+
+    TODO: 复制模板后，按实际检测函数签名调整返回值。
+    """
+    return {
+        "params": _normalize_daily_params(group_params),
+        "tf_key": "d",
+    }
+
+
+# ---------------------------------------------------------------------------
+# BACKTEST_HOOKS 告诉回测引擎如何调用本策略的检测逻辑。
+#
+# 结构说明：
+#   detect            — 核心检测函数，签名: (df, *, params, tf_key, ...) → DetectionResult
+#   detect_vectorized — 批量检测入口（可选，暂留 None）
+#   prepare           — 预计算指标函数（可选，签名: (df, params) → df），无需时设为 None
+#   normalize_params  — 将前端 group_params + section_key 转换为 detect 函数的 kwargs
+#   tf_sections       — 回测覆盖的周期分段及其对应K线表名
+#   tf_logic          — 多周期命中逻辑: "and"（全部命中）/ "or"（任一命中）
+#
+# TODO: 复制模板后，替换 detect / prepare / tf_sections 为实际函数和周期配置。
+# ---------------------------------------------------------------------------
+BACKTEST_HOOKS = {
+    "detect": detect_strategy_2,
+    "detect_vectorized": None,
+    "prepare": None,
+    "normalize_params": _normalize_for_backtest,
+    "tf_sections": {
+        "daily": {"tf_key": "d", "table": "klines_d"},
+    },
+    "tf_logic": "or",
+}

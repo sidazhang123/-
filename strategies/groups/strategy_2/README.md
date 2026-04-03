@@ -197,7 +197,40 @@ default_params.universe_filters.concepts
 4. `xianren_zhilu_v1`：w/d 双周期 OR 逻辑 + K线形态检测。
 5. `converging_triangle_v1`：w/d 双周期 OR 逻辑 + 几何三角形检测 + overlay_lines 辅助线。
 
-## 十、通用工具（engine_commons.py）
+## 十、回测钩子（BACKTEST_HOOKS）
+
+模板已在 `engine.py` 末尾预置了 `BACKTEST_HOOKS` 字典，回测引擎通过此钩子调用策略的检测逻辑。
+
+### 结构说明
+
+```python
+BACKTEST_HOOKS = {
+    "detect":            detect_strategy_2,       # 核心检测函数，签名: (df, *, params, tf_key, ...) → DetectionResult
+    "detect_vectorized": None,                    # 批量检测入口（可选，暂留 None）
+    "prepare":           None,                    # 预计算指标函数（可选，签名: (df, params) → df）
+    "normalize_params":  _normalize_for_backtest, # 将 group_params + section_key 转换为 detect 的 kwargs
+    "tf_sections": {                              # 回测覆盖的周期分段及其对应 K 线表名
+        "daily": {"tf_key": "d", "table": "klines_d"},
+    },
+    "tf_logic": "or",                             # 多周期命中逻辑: "and" / "or"
+}
+```
+
+### 复制模板后需要修改的部分
+
+1. `detect` — 替换为你的实际检测函数。
+2. `prepare` — 如果策略需要预计算指标（均线、布林带等），设为对应的 prepare 函数。
+3. `normalize_params` — 按实际 detect 函数签名调整返回的 kwargs。
+4. `tf_sections` — 按策略实际使用的周期填写，多周期策略需补充 `weekly`/`min60`/`min15` 等。
+5. `tf_logic` — 多周期策略选 `"and"`（全部命中）或 `"or"`（任一命中）。
+
+### 参考
+
+- 单周期 OR：`weekly_oversold_rsi_v1`（仅 weekly）
+- 双周期 OR：`xianren_zhilu_v1`（w + d）
+- 四周期 AND：`multi_tf_ma_uptrend_v1`（w + d + 60 + 15）
+
+## 十一、通用工具（engine_commons.py）
 
 以下函数已提取到 `strategies/engine_commons.py`，新策略直接 import 即可：
 

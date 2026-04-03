@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>策略回测 - 量价筛选系统</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260401-backtest" />
+  <script src="/static/vendor/echarts/echarts.min.js"></script>
+  <style>
+    /* ── Backtest-specific styles ── */
+    .bt-tabs { display:flex; gap:4px; margin-bottom:12px; }
+    .bt-tab { padding:6px 18px; border:1px solid var(--color-border-heavy); border-radius:6px 6px 0 0;
+              background:#fff; cursor:pointer; font-size:.9rem; color:var(--color-text-secondary); }
+    .bt-tab.active { background:#f5f5f7; border-bottom-color:#f5f5f7; color:var(--color-text); font-weight:600; }
+    .bt-tab-pane { display:none; }
+    .bt-tab-pane.active { display:block; }
+
+    .bt-inline-desc { padding:10px 14px; margin-bottom:12px; background:#fff;
+                      border-radius:6px; border:1px solid var(--color-border-heavy); font-size:.92rem;
+                      color:var(--color-text-secondary); line-height:1.7; }
+    .bt-inline-desc input[type="number"] { width:52px; text-align:center; border:1px solid rgba(0,113,227,0.25);
+                      border-radius:4px; padding:2px 4px; font-size:.9rem; background:#fff; color:var(--color-accent);
+                      font-weight:600; }
+    .bt-inline-desc .bt-fwd-group { display:inline-flex; align-items:center; gap:3px; }
+
+    .bt-params-readonly { pointer-events:none; opacity:.85; }
+    .bt-params-readonly input,
+    .bt-params-readonly select { background:#f5f5f7; }
+
+    .bt-range-row { display:inline-flex; align-items:center; gap:6px; margin-left:8px; vertical-align:middle;
+                     border:1px solid rgba(255,159,10,0.45); border-radius:8px; padding:3px 8px;
+                     background:rgba(255,159,10,0.06); }
+    .bt-range-row label { font-size:.78rem; color:var(--color-text-secondary); white-space:nowrap; display:inline-flex; align-items:center; gap:2px; }
+    .bt-range-row input { width:58px; min-width:48px; max-width:80px; padding:2px 6px;
+                          border:1px solid rgba(255,159,10,0.35); border-radius:6px; background:#fff;
+                          font-size:13px; text-align:center; color:#e67e00; font-weight:600; }
+    .bt-range-row input:focus { outline:none; border-color:var(--color-warning);
+                                box-shadow:0 0 0 2px rgba(255,159,10,0.15); }
+
+    .bt-status-card { padding:12px 14px; background:#fff; border-radius:6px;
+                      border:1px solid var(--color-border-heavy); margin-bottom:12px; }
+    .bt-status-card .progress-bar { height:6px; margin-top:8px; }
+    .bt-status-row { display:flex; flex-wrap:wrap; gap:12px 24px; font-size:.88rem; margin-bottom:4px; }
+    .bt-status-row strong { color:var(--color-text); }
+
+    .bt-stats-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:12px; }
+    .bt-stat-card { background:#fff; border:1px solid var(--color-border-heavy); border-radius:6px; padding:10px; }
+    .bt-stat-card h4 { margin:0 0 6px; font-size:.88rem; }
+    .bt-stat-table { width:100%; font-size:.82rem; border-collapse:collapse; }
+    .bt-stat-table td { padding:3px 6px; border-bottom:1px solid var(--color-border-heavy); }
+    .bt-stat-table td:first-child { color:var(--color-text-secondary); width:40%; }
+
+    .bt-chart-box { width:100%; height:280px; }
+
+    .bt-sweep-table { width:100%; font-size:.82rem; border-collapse:collapse; }
+    .bt-sweep-table th, .bt-sweep-table td { padding:5px 8px; text-align:left; border-bottom:1px solid var(--color-border-heavy); }
+    .bt-sweep-table th { cursor:pointer; user-select:none; background:#fff; position:sticky; top:0; }
+    .bt-sweep-table th:hover { color:var(--color-accent); }
+    .bt-sweep-wrap { max-height:420px; overflow:auto; }
+
+    .bt-btn-row { display:flex; gap:8px; align-items:center; margin:10px 0; }
+    .bt-combo-badge { font-size:.78rem; color:var(--color-text-secondary); margin-left:8px; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <nav class="topnav">
+      <div class="topnav-inner">
+        <a href="/" class="topnav-brand">
+          <div class="brand-icon">量</div>
+          <span>量价筛选</span>
+        </a>
+        <ul class="topnav-links">
+          <li><a href="/"><i data-lucide="activity" class="nav-icon"></i><span>任务监控</span></a></li>
+          <li><a href="/maintenance"><i data-lucide="database" class="nav-icon"></i><span>数据维护</span></a></li>
+          <li><a href="/results"><i data-lucide="bar-chart-3" class="nav-icon"></i><span>筛选结果</span></a></li>
+          <li><a href="/backtest" class="active"><i data-lucide="flask-conical" class="nav-icon"></i><span>策略回测</span></a></li>
+          <li><a href="/task-manager"><i data-lucide="trash-2" class="nav-icon"></i><span>任务管理</span></a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <nav class="mobile-nav">
+      <a href="/"><i data-lucide="activity" class="nav-icon"></i>监控</a>
+      <a href="/maintenance"><i data-lucide="database" class="nav-icon"></i>维护</a>
+      <a href="/results"><i data-lucide="bar-chart-3" class="nav-icon"></i>结果</a>
+      <a href="/backtest" class="active"><i data-lucide="flask-conical" class="nav-icon"></i>回测</a>
+      <a href="/task-manager"><i data-lucide="trash-2" class="nav-icon"></i>管理</a>
+    </nav>
+
+    <div class="main-content page-backtest">
+      <div class="page-header">
+        <h1>策略回测</h1>
+        <p>基于历史数据验证策略胜率，评估盈利/回撤/夏普分布。</p>
+      </div>
+
+      <!-- ── 策略选择 ── -->
+      <section class="panel">
+        <h2>回测设置</h2>
+        <div class="grid-four">
+          <label>
+            策略组
+            <select id="btStrategySelect"></select>
+          </label>
+        </div>
+
+        <!-- 前瞻描述行 -->
+        <div class="bt-inline-desc" id="btInlineDesc">
+          假设命中时买入，每
+          <span class="bt-fwd-group"><input type="number" id="btSlideStep" min="1" value="1" /></span>
+          根K线步进一次，在
+          <span class="bt-fwd-group"><input type="number" id="btFwdX" min="1" value="2" /></span> /
+          <span class="bt-fwd-group"><input type="number" id="btFwdY" min="1" value="5" /></span> /
+          <span class="bt-fwd-group"><input type="number" id="btFwdZ" min="1" value="7" /></span>
+          根K线内的最大盈利、最大回撤、夏普比率
+        </div>
+
+        <!-- Tab 切换 -->
+        <div class="bt-tabs">
+          <button class="bt-tab active" data-bt-tab="fixedPane">按指定参数回测</button>
+          <button class="bt-tab" data-bt-tab="sweepPane">动态调参回测</button>
+        </div>
+
+        <!-- Tab1: 固定参数 -->
+        <div id="fixedPane" class="bt-tab-pane active">
+          <div id="btParamsFixed" class="bt-params-readonly"></div>
+          <div class="bt-btn-row">
+            <button id="btRunFixedBtn">开始回测</button>
+            <button id="btStopBtn" class="danger" disabled>停止</button>
+            <button id="btSaveParamsBtn" style="margin-left:auto;">保存参数</button>
+          </div>
+        </div>
+
+        <!-- Tab2: 动态调参 -->
+        <div id="sweepPane" class="bt-tab-pane">
+          <div id="btParamsSweep"></div>
+          <div class="bt-btn-row">
+            <button id="btRunSweepBtn">开始扫描</button>
+            <button id="btStopSweepBtn" class="danger" disabled>停止</button>
+            <span class="bt-combo-badge" id="btComboCount"></span>
+            <button id="btSaveParamsSweepBtn" style="margin-left:auto;">保存参数</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 历史任务 + 运行状态 ── -->
+      <section class="panel" id="btStatusPanel">
+        <h2>回测任务</h2>
+        <div class="task-toolbar">
+          <label class="field-grow">
+            <select id="btJobSelect"><option value="">— 无任务 —</option></select>
+          </label>
+          <div class="button-cluster">
+            <button id="btRefreshJobsBtn">刷新列表</button>
+          </div>
+        </div>
+        <div class="bt-status-card" id="btStatusCard" style="display:none;">
+          <div class="bt-status-row">
+            <div>状态: <strong id="btStatusText">-</strong></div>
+            <div>进度: <strong id="btProgressText">0%</strong></div>
+            <div>已处理: <strong id="btProcessedText">0 / 0</strong></div>
+            <div id="btComboRow" style="display:none;">参数组合: <strong id="btComboText">0 / 0</strong></div>
+          </div>
+          <div class="progress-bar"><div id="btProgressBar"></div></div>
+        </div>
+      </section>
+
+      <!-- ── 日志面板 ── -->
+      <section class="panel" id="btLogPanel" style="display:none;">
+        <h2>运行日志</h2>
+        <div class="log-tabs">
+          <button class="log-tab active" data-log-target="btInfoPane">信息日志</button>
+          <button class="log-tab error-tab" data-log-target="btErrorPane">错误日志</button>
+        </div>
+        <div id="btInfoPane" class="log-tab-pane active">
+          <pre id="btInfoLogs" class="log-box"></pre>
+        </div>
+        <div id="btErrorPane" class="log-tab-pane">
+          <pre id="btErrorLogs" class="log-box error"></pre>
+        </div>
+      </section>
+
+      <!-- ── 统计结果 (固定模式) ── -->
+      <section class="panel" id="btStatsPanel" style="display:none;">
+        <h2>统计分析</h2>
+        <div class="bt-btn-row">
+          <button id="btViewDetailBtn">查看命中详情 →</button>
+        </div>
+        <div id="btStatsContent" class="bt-stats-grid"></div>
+      </section>
+
+      <!-- ── Sweep 结果表格 ── -->
+      <section class="panel" id="btSweepPanel" style="display:none;">
+        <h2>参数组合结果</h2>
+        <div class="bt-sweep-wrap">
+          <table class="bt-sweep-table" id="btSweepTable">
+            <thead id="btSweepHead"></thead>
+            <tbody id="btSweepBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+    </div><!-- /.main-content -->
+  </div><!-- /.app-shell -->
+
+  <script src="/static/vendor/lucide/lucide.min.js"></script>
+  <script src="/static/param-render.js?v=20260322"></script>
+  <script src="/static/backtest.js?v=20260401c"></script>
+  <script>lucide.createIcons();</script>
+  <script>
+    document.querySelectorAll('.log-tabs').forEach(bar => {
+      bar.addEventListener('click', e => {
+        const btn = e.target.closest('.log-tab');
+        if (!btn) return;
+        const panel = bar.closest('.panel');
+        panel.querySelectorAll('.log-tab').forEach(t => t.classList.remove('active'));
+        panel.querySelectorAll('.log-tab-pane').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(btn.dataset.logTarget).classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>

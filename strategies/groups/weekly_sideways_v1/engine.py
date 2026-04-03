@@ -972,3 +972,23 @@ def run_weekly_sideways_v1_specialized(
     base_metrics["codes_with_signal"] = sum(1 for r in result_map.values() if r.signal_count > 0)
 
     return result_map, base_metrics
+
+
+# ---------------------------------------------------------------------------
+# 回测钩子
+# ---------------------------------------------------------------------------
+
+def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    return {"params": _normalize_weekly_params(group_params)}
+
+
+BACKTEST_HOOKS = {
+    "detect": detect_weekly_sideways,
+    "detect_vectorized": None,
+    "prepare": None,
+    "normalize_params": _normalize_for_backtest,
+    "tf_sections": {
+        "weekly": {"tf_key": "w", "table": "klines_w"},
+    },
+    "tf_logic": "or",
+}

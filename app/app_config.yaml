@@ -233,3 +233,29 @@ app:
   # 应用优雅停机等待时间（秒）。
   # 约束：>= 1
   shutdown_grace_seconds: 15
+
+backtest:
+  # 回测缓存目录根路径。
+  cache_dir: "cache/backtest"
+
+  # 前瞻指标 Parquet 缓存目录。
+  fwd_cache_dir: "cache/backtest/fwd_metrics"
+
+  # 回测并行工作进程数。
+  # 约束：>= 1
+  max_workers: 4
+
+  # 默认前瞻K线数 [x, y, z]。
+  # 恰好3个正整数。
+  default_forward_bars:
+    - 2
+    - 5
+    - 7
+
+  # 默认滑动步长。
+  # 约束：>= 1
+  default_slide_step: 1
+
+  # 单分片内存上限参考值（MB）。
+  # 约束：>= 64
+  shard_memory_limit_mb: 512

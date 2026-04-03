@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>回测详情 - 量价筛选系统</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260322-backtest" />
+  <script src="/static/vendor/echarts/echarts.min.js"></script>
+  <style>
+    .bd-layout { display:grid; grid-template-columns:1fr 1fr; gap:12px; min-height:calc(100vh - 120px); }
+    @media (max-width:960px) { .bd-layout { grid-template-columns:1fr; } }
+
+    .bd-table-wrap { overflow:auto; max-height:calc(100vh - 160px); }
+    .bd-table { width:100%; font-size:.82rem; border-collapse:collapse; white-space:nowrap; }
+    .bd-table th, .bd-table td { padding:5px 8px; text-align:right; border-bottom:1px solid var(--color-border-heavy); }
+    .bd-table th { cursor:pointer; user-select:none; background:#fff; position:sticky; top:0; z-index:1; }
+    .bd-table th:hover { color:var(--color-accent); }
+    .bd-table td:first-child, .bd-table th:first-child { text-align:left; }
+    .bd-table tr.bd-active { background:rgba(0,180,255,0.12); }
+    .bd-table tr:hover { background:rgba(255,255,255,0.04); cursor:pointer; }
+
+    .bd-chart-area { position:sticky; top:80px; }
+    .bd-chart-box { width:100%; height:500px; }
+    .bd-chart-info { font-size:.85rem; color:var(--color-text-secondary); margin-bottom:6px; }
+    .bd-tf-tabs { display:flex; gap:4px; margin-bottom:8px; }
+    .bd-tf-tab { padding:4px 12px; border:1px solid var(--color-border-heavy); border-radius:4px; cursor:pointer;
+                 font-size:.82rem; background:#fff; color:var(--color-text-secondary); }
+    .bd-tf-tab.active { background:var(--color-accent); color:#fff; border-color:var(--color-accent); }
+
+    .bd-summary { font-size:.85rem; color:var(--color-text-secondary); margin-bottom:8px; }
+    .bd-back { font-size:.85rem; margin-bottom:8px; }
+    .bd-back a { color:var(--color-accent); text-decoration:none; }
+
+    .bd-positive { color:#ef4444; }
+    .bd-negative { color:#10b981; }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <nav class="topnav">
+      <div class="topnav-inner">
+        <a href="/" class="topnav-brand">
+          <div class="brand-icon">量</div>
+          <span>量价筛选</span>
+        </a>
+        <ul class="topnav-links">
+          <li><a href="/"><i data-lucide="activity" class="nav-icon"></i><span>任务监控</span></a></li>
+          <li><a href="/maintenance"><i data-lucide="database" class="nav-icon"></i><span>数据维护</span></a></li>
+          <li><a href="/results"><i data-lucide="bar-chart-3" class="nav-icon"></i><span>筛选结果</span></a></li>
+          <li><a href="/backtest" class="active"><i data-lucide="flask-conical" class="nav-icon"></i><span>策略回测</span></a></li>
+          <li><a href="/task-manager"><i data-lucide="trash-2" class="nav-icon"></i><span>任务管理</span></a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <nav class="mobile-nav">
+      <a href="/"><i data-lucide="activity" class="nav-icon"></i>监控</a>
+      <a href="/maintenance"><i data-lucide="database" class="nav-icon"></i>维护</a>
+      <a href="/results"><i data-lucide="bar-chart-3" class="nav-icon"></i>结果</a>
+      <a href="/backtest" class="active"><i data-lucide="flask-conical" class="nav-icon"></i>回测</a>
+      <a href="/task-manager"><i data-lucide="trash-2" class="nav-icon"></i>管理</a>
+    </nav>
+
+    <div class="main-content">
+      <div class="bd-back">
+        <a href="/backtest">← 返回回测主页</a>
+      </div>
+      <div class="bd-summary" id="bdSummary">加载中…</div>
+
+      <div class="bd-layout">
+        <!-- Left: hit table -->
+        <div>
+          <div class="bd-table-wrap">
+            <table class="bd-table" id="bdTable">
+              <thead id="bdHead"></thead>
+              <tbody id="bdBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Right: K-line chart -->
+        <div class="bd-chart-area">
+          <div class="bd-chart-info" id="bdChartInfo">选择一条记录查看K线图</div>
+          <div class="bd-tf-tabs" id="bdTfTabs"></div>
+          <div class="bd-chart-box" id="bdChart"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/lucide/lucide.min.js"></script>
+  <script src="/static/backtest-detail.js?v=20260322"></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>

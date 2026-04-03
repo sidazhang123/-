@@ -522,14 +522,23 @@ class MaintenanceManager:
                 maint_logger.info("维护任务停止完成（重建已完成）")
                 return
 
+            finished_ts = datetime.now()
             self.state_db.update_maintenance_job_fields(
                 job_id,
                 status="completed",
                 phase="done",
                 progress=100.0,
-                finished_at=datetime.now(),
+                finished_at=finished_ts,
                 summary_json=json.dumps(dataclasses.asdict(summary), ensure_ascii=False, default=str),
             )
+            # 写版本戳供回测前瞻缓存校验
+            try:
+                self.state_db.set_meta_value(
+                    "backtest.source_data_version",
+                    f"{job_id}_{finished_ts.isoformat()}",
+                )
+            except Exception:
+                pass
             maint_logger.info("维护任务完成")
         except MaintenanceStopRequested:
             self._wait_stop_watchdog_done(job_id, force_only=True)

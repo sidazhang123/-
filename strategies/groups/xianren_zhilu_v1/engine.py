@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from strategies.engine_commons import (
@@ -278,6 +279,93 @@ def detect_xianren_zhilu(
         pattern_end_ts=current["ts"],
         metrics=metrics,
     )
+
+
+def detect_xianren_zhilu_vectorized(
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+) -> list[DetectionResult]:
+    """在单只股票的完整历史上一次性检测所有仙人指路命中点。
+
+    与 detect_xianren_zhilu 的区别：
+    - detect_xianren_zhilu 只检查最新一根K线，供筛选模式和回测外层滑窗使用。
+    - 本函数对全部K线做列式布尔运算，收集所有命中记录，
+      回测引擎无需再用外层 while 滑窗逐 bar 推进。
+
+    输入：
+    1. code_frame: 单只股票完整 OHLCV DataFrame（已按 ts 排序，含 ma 列）。
+    2. params: 已规范化的单周期参数。
+    输出：
+    1. DetectionResult 列表，每个元素对应一根命中K线。
+    边界条件：
+    1. code_frame 必须已包含 ma 列（由 prepare_xianren_zhilu_features 预计算）。
+    2. 数据不足 lookback_bars + ma_period 根时返回空列表。
+    """
+    if code_frame.empty:
+        return []
+
+    shadow_ratio_threshold = float(params["shadow_ratio"])
+    volume_multiplier = float(params["volume_multiplier"])
+    lookback_bars = int(params["lookback_bars"])
+    ma_period = int(params["ma_period"])
+    price_decline_ratio = float(params["price_decline_ratio"])
+    min_bars = lookback_bars + ma_period
+
+    n = len(code_frame)
+    if n < min_bars:
+        return []
+
+    opens = code_frame["open"].values.astype(np.float64)
+    closes = code_frame["close"].values.astype(np.float64)
+    highs = code_frame["high"].values.astype(np.float64)
+    volumes = code_frame["volume"].values.astype(np.float64)
+    mas = code_frame["ma"].values.astype(np.float64)
+    ts_values = code_frame["ts"].values
+
+    # 条件1：阳线且有上影线
+    body = closes - opens
+    shadow = highs - closes
+    is_bull = body > 0
+    has_shadow = shadow > 0
+
+    # 条件2：上影线 / 实体 >= shadow_ratio（body > 0 已由 is_bull 保证）
+    safe_body = np.where(body > 0, body, 1.0)
+    cond_shadow = (shadow / safe_body) >= shadow_ratio_threshold
+
+    # 条件3：放量（volume >= 前3根均量 × multiplier）
+    avg_vol_3 = pd.Series(volumes).rolling(3, min_periods=3).mean().shift(1).values
+    cond_volume = volumes >= avg_vol_3 * volume_multiplier
+
+    # 条件4：前期均线下降（ma[i - lookback_bars] >= ma[i] * price_decline_ratio）
+    ma_lookback = pd.Series(mas).shift(lookback_bars).values
+    cond_ma = (~np.isnan(mas) & ~np.isnan(ma_lookback)
+               & (mas > 0)
+               & (ma_lookback >= mas * price_decline_ratio))
+
+    # 数据充足性
+    indices = np.arange(n)
+    cond_data = indices >= max(min_bars - 1, 3)
+
+    matched = is_bull & has_shadow & cond_shadow & cond_volume & cond_ma & cond_data
+
+    hit_indices = np.where(matched)[0]
+    results: list[DetectionResult] = []
+    for i in hit_indices:
+        results.append(DetectionResult(
+            matched=True,
+            pattern_start_idx=int(i),
+            pattern_end_idx=int(i),
+            pattern_start_ts=ts_values[i],
+            pattern_end_ts=ts_values[i],
+            metrics={
+                "shadow_ratio": round(float(shadow[i] / body[i]), 3),
+                "volume_ratio": round(float(volumes[i] / avg_vol_3[i]), 2),
+                "ma_current": round(float(mas[i]), 2),
+                "ma_lookback": round(float(ma_lookback[i]), 2),
+                "ma_decline_ratio": round(float(ma_lookback[i] / mas[i]), 2),
+            },
+        ))
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -541,3 +629,24 @@ def run_xianren_zhilu_v1_specialized(
     base_metrics["codes_with_signal"] = sum(1 for r in result_map.values() if r.signal_count > 0)
 
     return result_map, base_metrics
+
+
+# ---------------------------------------------------------------------------
+# 回测钩子
+# ---------------------------------------------------------------------------
+
+def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    return {"params": _normalize_tf_params(group_params, section_key)}
+
+
+BACKTEST_HOOKS = {
+    "detect": detect_xianren_zhilu,
+    "detect_vectorized": detect_xianren_zhilu_vectorized,
+    "prepare": prepare_xianren_zhilu_features,
+    "normalize_params": _normalize_for_backtest,
+    "tf_sections": {
+        "weekly": {"tf_key": "w", "table": "klines_w"},
+        "daily": {"tf_key": "d", "table": "klines_d"},
+    },
+    "tf_logic": "or",
+}

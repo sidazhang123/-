@@ -109,6 +109,14 @@ _DEFAULT_CONFIG: dict[str, Any] = {
         "startup_prewarm_parallel_fetcher_enabled": True,
         "shutdown_grace_seconds": 15,
     },
+    "backtest": {
+        "cache_dir": "cache/backtest",
+        "fwd_cache_dir": "cache/backtest/fwd_metrics",
+        "max_workers": 4,
+        "default_forward_bars": [2, 5, 7],
+        "default_slide_step": 1,
+        "shard_memory_limit_mb": 512,
+    },
 }
 
 
@@ -281,6 +289,17 @@ def _expect_string_list(value: Any, key_path: str) -> list[str]:
             raise ValueError(f"{key_path}[{index}] 必须是非空字符串")
         normalized.append(item.strip())
     return normalized
+
+
+def _expect_int_list(value: Any, key_path: str) -> list[int]:
+    if not isinstance(value, list):
+        raise ValueError(f"{key_path} 必须是整数列表")
+    result: list[int] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, int) or isinstance(item, bool):
+            raise ValueError(f"{key_path}[{index}] 必须是整数")
+        result.append(item)
+    return result
 
 
 def _resolve_project_path(raw_path: str, key_path: str) -> Path:
@@ -552,6 +571,37 @@ def _build_runtime_settings(raw_config: dict[str, Any]) -> dict[str, Any]:
         "app.shutdown_grace_seconds",
         minimum=1,
     )
+    backtest_cfg = _expect_mapping(merged.get("backtest"), "backtest")
+    backtest_cache_dir = _resolve_project_path(
+        backtest_cfg.get("cache_dir"), "backtest.cache_dir"
+    )
+    backtest_fwd_cache_dir = _resolve_project_path(
+        backtest_cfg.get("fwd_cache_dir"), "backtest.fwd_cache_dir"
+    )
+    backtest_max_workers = _expect_int(
+        backtest_cfg.get("max_workers"),
+        "backtest.max_workers",
+        minimum=1,
+    )
+    backtest_default_forward_bars = _expect_int_list(
+        backtest_cfg.get("default_forward_bars"),
+        "backtest.default_forward_bars",
+    )
+    if len(backtest_default_forward_bars) != 3:
+        raise ValueError("backtest.default_forward_bars 必须恰好包含3个整数 (x, y, z)")
+    for v in backtest_default_forward_bars:
+        if v < 1:
+            raise ValueError("backtest.default_forward_bars 中每个值必须 >= 1")
+    backtest_default_slide_step = _expect_int(
+        backtest_cfg.get("default_slide_step"),
+        "backtest.default_slide_step",
+        minimum=1,
+    )
+    backtest_shard_memory_limit_mb = _expect_int(
+        backtest_cfg.get("shard_memory_limit_mb"),
+        "backtest.shard_memory_limit_mb",
+        minimum=64,
+    )
 
     return {
         "SOURCE_DB_PATH": source_db_path,
@@ -609,6 +659,12 @@ def _build_runtime_settings(raw_config: dict[str, Any]) -> dict[str, Any]:
         "CONCEPT_EXCLUDE_BOARD_NAMES": concept_exclude_board_names,
         "LOG_KEEP_JOBS_PER_CATEGORY": log_keep_jobs_per_category,
         "APP_STARTUP_PREWARM_PARALLEL_FETCHER_ENABLED": app_startup_prewarm_parallel_fetcher_enabled,
+        "BACKTEST_CACHE_DIR": backtest_cache_dir,
+        "BACKTEST_FWD_CACHE_DIR": backtest_fwd_cache_dir,
+        "BACKTEST_MAX_WORKERS": backtest_max_workers,
+        "BACKTEST_DEFAULT_FORWARD_BARS": tuple(backtest_default_forward_bars),
+        "BACKTEST_DEFAULT_SLIDE_STEP": backtest_default_slide_step,
+        "BACKTEST_SHARD_MEMORY_LIMIT_MB": backtest_shard_memory_limit_mb,
     }
 
 
@@ -673,3 +729,9 @@ CONCEPT_MAX_WORKERS = _RUNTIME_SETTINGS["CONCEPT_MAX_WORKERS"]
 CONCEPT_RETRY_COUNT = _RUNTIME_SETTINGS["CONCEPT_RETRY_COUNT"]
 CONCEPT_EXCLUDE_BOARD_NAMES = _RUNTIME_SETTINGS["CONCEPT_EXCLUDE_BOARD_NAMES"]
 LOG_KEEP_JOBS_PER_CATEGORY = _RUNTIME_SETTINGS["LOG_KEEP_JOBS_PER_CATEGORY"]
+BACKTEST_CACHE_DIR = _RUNTIME_SETTINGS["BACKTEST_CACHE_DIR"]
+BACKTEST_FWD_CACHE_DIR = _RUNTIME_SETTINGS["BACKTEST_FWD_CACHE_DIR"]
+BACKTEST_MAX_WORKERS = _RUNTIME_SETTINGS["BACKTEST_MAX_WORKERS"]
+BACKTEST_DEFAULT_FORWARD_BARS = _RUNTIME_SETTINGS["BACKTEST_DEFAULT_FORWARD_BARS"]
+BACKTEST_DEFAULT_SLIDE_STEP = _RUNTIME_SETTINGS["BACKTEST_DEFAULT_SLIDE_STEP"]
+BACKTEST_SHARD_MEMORY_LIMIT_MB = _RUNTIME_SETTINGS["BACKTEST_SHARD_MEMORY_LIMIT_MB"]

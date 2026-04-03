@@ -23,6 +23,16 @@ from fastapi.responses import StreamingResponse
 
 from app.db.market_data import MarketDataDB
 from app.models.api_models import (
+    BacktestControlResponse,
+    BacktestCreateRequest,
+    BacktestCreateResponse,
+    BacktestFormSettingsPayload,
+    BacktestHitRecord,
+    BacktestHitsResponse,
+    BacktestLogsResponse,
+    BacktestStatusResponse,
+    BacktestSweepResponse,
+    BacktestSweepRow,
     ConceptControlResponse,
     ConceptCreateResponse,
     ConceptLogsResponse,
@@ -1902,3 +1912,312 @@ async def task_status_stream(task_id: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# 回测 (Backtest)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/backtests", response_model=BacktestCreateResponse)
+def create_backtest_job(
+    payload: BacktestCreateRequest, request: Request
+) -> BacktestCreateResponse:
+    manager = request.app.state.backtest_manager
+    try:
+        job_id = manager.create_job(
+            strategy_group_id=payload.strategy_group_id,
+            mode=payload.mode,
+            forward_bars=tuple(payload.forward_bars),
+            slide_step=payload.slide_step,
+            group_params=payload.group_params,
+            param_ranges={
+                k: v.model_dump() for k, v in payload.param_ranges.items()
+            } if payload.param_ranges else {},
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return BacktestCreateResponse(job_id=job_id)
+
+
+@router.get("/backtests")
+def list_backtest_jobs(request: Request) -> dict[str, Any]:
+    """返回回测任务列表 (最近30条) + 当前运行中的任务。"""
+    state_db = request.app.state.state_db
+    jobs = state_db.list_backtest_jobs(limit=30)
+    running = state_db.get_running_backtest_job()
+    for j in jobs:
+        for k in ("created_at",):
+            if isinstance(j.get(k), datetime):
+                j[k] = j[k].isoformat()
+    return {
+        "jobs": jobs,
+        "running_job_id": running["job_id"] if running else None,
+    }
+
+
+@router.get("/backtests/{job_id}/logs")
+def get_backtest_logs(
+    job_id: str,
+    request: Request,
+    level: str = Query(default="info", description="info/error"),
+    after_log_id: int = Query(default=0, description="增量游标"),
+) -> dict[str, Any]:
+    """非 SSE 日志查询 (用于刷新后恢复)。"""
+    manager = request.app.state.backtest_manager
+    logs = manager.get_logs(job_id, level, after_log_id)
+    return {"items": logs}
+
+
+@router.post("/backtests/{job_id}/stop", response_model=BacktestControlResponse)
+def stop_backtest_job(job_id: str, request: Request) -> BacktestControlResponse:
+    manager = request.app.state.backtest_manager
+    ok = manager.stop_job(job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="回测任务不存在或不可停止")
+    return BacktestControlResponse(job_id=job_id, status="failed", message="回测任务已强制终止")
+
+
+@router.get("/backtests/{job_id}/status", response_model=BacktestStatusResponse)
+def get_backtest_status(job_id: str, request: Request) -> BacktestStatusResponse:
+    manager = request.app.state.backtest_manager
+    status = manager.get_job_status(job_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="回测任务不存在")
+    return BacktestStatusResponse(**status)
+
+
+@router.get("/backtests/{job_id}/stream")
+async def backtest_event_stream(job_id: str, request: Request):
+    """SSE 推送: 回测任务状态 + 增量日志。"""
+    manager = request.app.state.backtest_manager
+    info_after_log_id = 0
+    error_after_log_id = 0
+    try:
+        info_after_log_id = max(0, int(request.query_params.get("info_after_log_id", "0")))
+    except (TypeError, ValueError):
+        info_after_log_id = 0
+    try:
+        error_after_log_id = max(0, int(request.query_params.get("error_after_log_id", "0")))
+    except (TypeError, ValueError):
+        error_after_log_id = 0
+
+    async def generate():
+        info_cursor = info_after_log_id
+        error_cursor = error_after_log_id
+        last_status_key: tuple | None = None
+
+        yield _sse_event("connected", {"job_id": job_id})
+
+        while True:
+            if await request.is_disconnected():
+                return
+
+            status = await asyncio.to_thread(manager.get_job_status, job_id)
+            if not status:
+                yield _sse_event("stream-error", {"message": "任务不存在"})
+                return
+
+            status_key = (
+                status["status"], status["progress"],
+                status["processed_stocks"], status["combo_index"],
+            )
+            if status_key != last_status_key:
+                last_status_key = status_key
+                yield _sse_event("job-status", status)
+
+            info_items = await asyncio.to_thread(
+                manager.get_logs, job_id, "info", info_cursor
+            )
+            if info_items:
+                info_cursor = info_items[-1]["log_id"]
+                yield _sse_event("logs-info", info_items)
+
+            error_items = await asyncio.to_thread(
+                manager.get_logs, job_id, "error", error_cursor
+            )
+            if error_items:
+                error_cursor = error_items[-1]["log_id"]
+                yield _sse_event("logs-error", error_items)
+
+            if status["status"] in ("completed", "failed", "stopped"):
+                yield _sse_event("done", {"status": status["status"]})
+                return
+
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/backtests/{job_id}/hits")
+def get_backtest_hits(
+    job_id: str,
+    request: Request,
+    sort_by: str = Query(default="profit_z_pct", description="排序字段"),
+    sort_order: str = Query(default="desc", description="asc/desc"),
+    combo_index: int = Query(default=-1, description="sweep 组合索引 (-1=非sweep)"),
+) -> BacktestHitsResponse:
+    """返回命中记录 (从 CSV 读取)。"""
+    import duckdb
+
+    cache_dir = request.app.state.backtest_cache_dir
+    if combo_index >= 0:
+        csv_path = cache_dir / job_id / f"combo_{combo_index}" / "hits.csv"
+    else:
+        csv_path = cache_dir / job_id / "hits.csv"
+
+    if not csv_path.exists():
+        return BacktestHitsResponse(total_count=0, items=[])
+
+    con = duckdb.connect()
+    try:
+        order = "DESC" if sort_order.lower() == "desc" else "ASC"
+        allowed_cols = {
+            "code", "name", "tf_key", "pattern_start_ts", "pattern_end_ts",
+            "buy_price", "profit_x_pct", "drawdown_x_pct", "sharpe_x",
+            "profit_y_pct", "drawdown_y_pct", "sharpe_y",
+            "profit_z_pct", "drawdown_z_pct", "sharpe_z",
+        }
+        if sort_by not in allowed_cols:
+            sort_by = "profit_z_pct"
+
+        df = con.execute(
+            f"SELECT * FROM read_csv_auto('{csv_path.as_posix()}') "
+            f"ORDER BY \"{sort_by}\" {order} NULLS LAST"
+        ).fetchdf()
+    finally:
+        con.close()
+
+    items = []
+    for _, row in df.iterrows():
+        items.append(BacktestHitRecord(
+            code=row.get("code", ""),
+            name=row.get("name", ""),
+            tf_key=row.get("tf_key", ""),
+            pattern_start_ts=row.get("pattern_start_ts"),
+            pattern_end_ts=row.get("pattern_end_ts"),
+            buy_price=row.get("buy_price", 0),
+            profit_x_pct=_bt_safe_val(row.get("profit_x_pct")),
+            drawdown_x_pct=_bt_safe_val(row.get("drawdown_x_pct")),
+            sharpe_x=_bt_safe_val(row.get("sharpe_x")),
+            profit_y_pct=_bt_safe_val(row.get("profit_y_pct")),
+            drawdown_y_pct=_bt_safe_val(row.get("drawdown_y_pct")),
+            sharpe_y=_bt_safe_val(row.get("sharpe_y")),
+            profit_z_pct=_bt_safe_val(row.get("profit_z_pct")),
+            drawdown_z_pct=_bt_safe_val(row.get("drawdown_z_pct")),
+            sharpe_z=_bt_safe_val(row.get("sharpe_z")),
+        ))
+
+    return BacktestHitsResponse(total_count=len(items), items=items)
+
+
+@router.get("/backtests/{job_id}/stats")
+def get_backtest_stats(job_id: str, request: Request) -> dict[str, Any]:
+    """返回统计分析结果。"""
+    cache_dir = request.app.state.backtest_cache_dir
+    json_path = cache_dir / job_id / "stats.json"
+
+    if not json_path.exists():
+        raise HTTPException(status_code=404, detail="统计结果不存在")
+
+    return json.loads(json_path.read_text(encoding="utf-8"))
+
+
+@router.get("/backtests/{job_id}/sweep")
+def get_backtest_sweep(job_id: str, request: Request) -> BacktestSweepResponse:
+    """返回 sweep 参数组合结果表。"""
+    cache_dir = request.app.state.backtest_cache_dir
+    json_path = cache_dir / job_id / "sweep_results.json"
+
+    if not json_path.exists():
+        raise HTTPException(status_code=404, detail="sweep 结果不存在")
+
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    items = [BacktestSweepRow(**row) for row in data]
+    return BacktestSweepResponse(combo_total=len(items), items=items)
+
+
+@router.get("/backtests/{job_id}/stock-chart")
+def get_backtest_stock_chart(
+    job_id: str,
+    request: Request,
+    code: str = Query(..., description="股票代码"),
+    tf_key: str = Query(default="d", description="周期"),
+    combo_index: int = Query(default=-1, description="sweep 组合索引 (-1=非sweep)"),
+) -> dict[str, Any]:
+    """返回 K线 + 命中高亮区间。"""
+    cache_dir = request.app.state.backtest_cache_dir
+
+    if combo_index >= 0:
+        csv_path = cache_dir / job_id / f"combo_{combo_index}" / "hits.csv"
+    else:
+        csv_path = cache_dir / job_id / "hits.csv"
+
+    if not csv_path.exists():
+        raise HTTPException(status_code=404, detail="命中数据不存在")
+
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        hits_df = con.execute(
+            f"SELECT pattern_start_ts, pattern_end_ts "
+            f"FROM read_csv_auto('{csv_path.as_posix()}') "
+            f"WHERE code = ? AND tf_key = ? "
+            f"ORDER BY pattern_start_ts",
+            [code, tf_key],
+        ).fetchdf()
+    finally:
+        con.close()
+
+    table_name = TIMEFRAME_TO_TABLE.get(tf_key, f"klines_{tf_key}")
+    market_db = MarketDataDB(request.app.state.source_db_path)
+    candles = market_db.get_chart_klines(code=code, table_name=table_name)
+
+    intervals = []
+    for _, row in hits_df.iterrows():
+        intervals.append({
+            "start_ts": str(row["pattern_start_ts"]),
+            "end_ts": str(row["pattern_end_ts"]),
+        })
+
+    return {
+        "code": code,
+        "tf_key": tf_key,
+        "candles": candles,
+        "hit_intervals": intervals,
+    }
+
+
+@router.get("/ui-settings/backtest")
+def get_backtest_ui_settings(request: Request) -> dict[str, Any]:
+    state_db = request.app.state.state_db
+    return {"settings": state_db.get_backtest_form_settings()}
+
+
+@router.post("/ui-settings/backtest")
+def save_backtest_ui_settings(
+    payload: BacktestFormSettingsPayload, request: Request
+) -> dict[str, Any]:
+    state_db = request.app.state.state_db
+    settings_data = payload.model_dump()
+    state_db.set_backtest_form_settings(settings_data)
+    return {"settings": settings_data}
+
+
+def _bt_safe_val(v: Any) -> float | None:
+    """NaN → None 转换 (回测专用)。"""
+    if v is None:
+        return None
+    try:
+        import math
+        f = float(v)
+        return None if math.isnan(f) or math.isinf(f) else f
+    except (TypeError, ValueError):
+        return None

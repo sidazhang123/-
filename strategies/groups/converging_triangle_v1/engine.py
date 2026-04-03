@@ -963,3 +963,117 @@ def run_converging_triangle_v1_specialized(
     base_metrics["codes_with_signal"] = sum(1 for r in result_map.values() if r.signal_count > 0)
 
     return result_map, base_metrics
+
+
+# ---------------------------------------------------------------------------
+# 回测钩子
+# ---------------------------------------------------------------------------
+
+def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    return {
+        "params": _normalize_tf_params(group_params, section_key),
+        "tf_key": _PARAM_SECTION_TO_TF[section_key],
+    }
+
+
+def detect_converging_triangle_vectorized(
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+    tf_key: str,
+) -> list[DetectionResult]:
+    """在单只股票的完整历史上一次性检测所有大三角收敛形态。
+
+    与 detect_converging_triangle 的区别：
+    - detect_converging_triangle 只搜索尾部 search_recent_weeks 范围内的最佳三角，
+      供筛选模式和回测外层滑窗使用。
+    - 本函数以 search_recent_weeks 对应的 bar 数为锚点步长，在完整历史上滑动搜索，
+      收集所有不重叠的命中记录，回测引擎无需再用外层 while 滑窗逐 bar 推进。
+
+    输入：
+    1. code_frame: 单只股票完整历史的 OHLCV DataFrame（已按 ts 排序）。
+    2. params: 已规范化的单周期参数。
+    3. tf_key: 周期标识。
+    输出：
+    1. DetectionResult 列表，每个元素含 pattern_start/end idx/ts。
+    """
+    if code_frame.empty or not params.get("enabled", True):
+        return []
+
+    ts_arr = code_frame["ts"].values
+    n_total = len(code_frame)
+
+    search_recent_weeks = params["search_recent_weeks"]
+
+    # 锚点步长: search_recent_weeks 对应的 bar 数（避免搜索窗口重叠）
+    if tf_key == "w":
+        anchor_step = max(search_recent_weeks, 1)
+    else:
+        anchor_step = max(search_recent_weeks * 5, 1)  # 日线: 每周约5个交易日
+
+    # 最小有效锚点位置: pattern_months_min 对应的 bar 数 + segment_count
+    pattern_months_min = params["pattern_months_min"]
+    if tf_key == "w":
+        min_bars_needed = max(int(pattern_months_min * 4.3), params["segment_count"])
+    else:
+        min_bars_needed = max(int(pattern_months_min * 21), params["segment_count"])
+
+    all_hits: list[DetectionResult] = []
+    last_hit_end_idx = -1  # 用于去重：跳过与上一个命中重叠的区间
+
+    # 从历史最远端向最新端滑动锚点
+    anchor = min_bars_needed
+    while anchor < n_total:
+        # 用 code_frame[:anchor+1] 作为"当前可见数据"调用 _scan_tf_for_code
+        sub_frame = code_frame.iloc[: anchor + 1]
+        tri = _scan_tf_for_code(code_frame=sub_frame, params=params, tf_key=tf_key)
+
+        if tri is not None and tri.start_idx > last_hit_end_idx:
+            all_hits.append(DetectionResult(
+                matched=True,
+                pattern_start_idx=tri.start_idx,
+                pattern_end_idx=tri.end_idx,
+                pattern_start_ts=code_frame.iloc[tri.start_idx]["ts"],
+                pattern_end_ts=code_frame.iloc[tri.end_idx]["ts"],
+                metrics={
+                    "score": tri.score,
+                    "window_bars": tri.window_bars,
+                },
+            ))
+            # 下一个锚点跳到当前命中的 end_idx 之后
+            last_hit_end_idx = tri.end_idx
+            anchor = tri.end_idx + anchor_step
+        else:
+            anchor += anchor_step
+
+    # ---- 尾部补扫：确保最后一根K线也被覆盖 ----
+    tail_anchor = n_total - 1
+    if tail_anchor >= min_bars_needed:
+        sub_frame = code_frame.iloc[: tail_anchor + 1]
+        tri = _scan_tf_for_code(code_frame=sub_frame, params=params, tf_key=tf_key)
+        if tri is not None and tri.start_idx > last_hit_end_idx:
+            all_hits.append(DetectionResult(
+                matched=True,
+                pattern_start_idx=tri.start_idx,
+                pattern_end_idx=tri.end_idx,
+                pattern_start_ts=code_frame.iloc[tri.start_idx]["ts"],
+                pattern_end_ts=code_frame.iloc[tri.end_idx]["ts"],
+                metrics={
+                    "score": tri.score,
+                    "window_bars": tri.window_bars,
+                },
+            ))
+
+    return all_hits
+
+
+BACKTEST_HOOKS = {
+    "detect": detect_converging_triangle,
+    "detect_vectorized": detect_converging_triangle_vectorized,
+    "prepare": None,
+    "normalize_params": _normalize_for_backtest,
+    "tf_sections": {
+        "weekly": {"tf_key": "w", "table": "klines_w"},
+        "daily": {"tf_key": "d", "table": "klines_d"},
+    },
+    "tf_logic": "or",
+}

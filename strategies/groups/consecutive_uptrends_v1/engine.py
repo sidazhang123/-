@@ -25,6 +25,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from strategies.engine_commons import (
@@ -318,12 +319,134 @@ def detect_streak(
     )
 
 
+def detect_streak_vectorized(
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+) -> list[DetectionResult]:
+    """在单只股票的完整历史上一次性检测所有连续小阳（含可选急跌段）命中点。
+
+    与 detect_streak 的区别：
+    - detect_streak 只在 tail(scan_bars) 中从尾部向前搜索第一个命中，
+      供筛选模式和回测外层滑窗使用。
+    - 本函数遍历全量历史，定位所有不重叠的连续小阳段，
+      回测引擎无需再用外层 while 滑窗逐 bar 推进。
+
+    输入：
+    1. code_frame: 单只股票完整 OHLCV DataFrame（已按 ts 排序）。
+    2. params: 已规范化的单周期参数。
+    输出：
+    1. DetectionResult 列表，每个元素对应一段命中。
+    边界条件：
+    1. 数据不足 streak_len 时返回空列表。
+    2. 急跌模式下，连阳总涨幅 ≤ 0 的连阳段跳过。
+    3. 不重叠：下一段搜索从上一段 pattern_end_idx + 1 开始。
+    """
+    streak_len = int(params["streak_len"])
+    bar_gain_max = float(params["bar_gain_max"])
+    selloff_enabled = bool(params["selloff_enabled"])
+    selloff_start_pct = float(params["selloff_start_pct"])
+    selloff_return_pct = float(params["selloff_return_pct"])
+    selloff_bars = int(params["selloff_bars"])
+
+    n = len(code_frame)
+    if n < streak_len:
+        return []
+
+    opens = code_frame["open"].values.astype(np.float64)
+    closes = code_frame["close"].values.astype(np.float64)
+    ts_values = code_frame["ts"].values
+
+    # 预计算合格阳线掩码
+    safe_opens = np.where(opens > 0, opens, 1.0)
+    gains = (closes - opens) / safe_opens
+    is_qualified = (closes > opens) & (opens > 0) & (gains <= bar_gain_max)
+
+    # 计算每个位置为止的连续合格阳线长度 (run length)
+    run_len = np.zeros(n, dtype=np.int32)
+    if is_qualified[0]:
+        run_len[0] = 1
+    for i in range(1, n):
+        run_len[i] = (run_len[i - 1] + 1) if is_qualified[i] else 0
+
+    # run_len[i] >= streak_len 的位置是一段连续小阳的末尾
+    results: list[DetectionResult] = []
+    last_end = -1  # 去重：跳过与上一个命中重叠的区间
+
+    i = streak_len - 1
+    while i < n:
+        if run_len[i] < streak_len:
+            i += 1
+            continue
+
+        # 找到一段连续段：end_idx = i, start_idx = i - streak_len + 1
+        end_idx = i
+        start_idx = end_idx - streak_len + 1
+
+        if start_idx <= last_end:
+            i += 1
+            continue
+
+        streak_closes = closes[start_idx: end_idx + 1]
+        streak_max_close = float(np.max(streak_closes))
+        streak_start_close = float(closes[start_idx])
+        streak_total_gain = streak_max_close - streak_start_close
+
+        if not selloff_enabled:
+            # 无急跌：直接命中
+            results.append(DetectionResult(
+                matched=True,
+                pattern_start_idx=start_idx,
+                pattern_end_idx=end_idx,
+                pattern_start_ts=ts_values[start_idx],
+                pattern_end_ts=ts_values[end_idx],
+                metrics={},
+            ))
+            last_end = end_idx
+            i = end_idx + 1
+            continue
+
+        # 急跌段检查
+        if streak_total_gain <= 0:
+            i += 1
+            continue
+
+        max_offset = int(math.floor(selloff_start_pct * streak_len))
+        search_start = end_idx + 1
+        search_end_limit = min(search_start + max_offset, n - selloff_bars)
+
+        found_selloff = False
+        for sell_start in range(search_start, search_end_limit + 1):
+            sell_end = sell_start + selloff_bars - 1
+            if sell_end >= n:
+                break
+
+            sell_min_close = float(np.min(closes[sell_start: sell_end + 1]))
+            drawdown = streak_max_close - sell_min_close
+            drawdown_ratio = drawdown / streak_total_gain
+
+            if drawdown_ratio >= selloff_return_pct:
+                results.append(DetectionResult(
+                    matched=True,
+                    pattern_start_idx=start_idx,
+                    pattern_end_idx=sell_end,
+                    pattern_start_ts=ts_values[start_idx],
+                    pattern_end_ts=ts_values[sell_end],
+                    metrics={},
+                ))
+                last_end = sell_end
+                i = sell_end + 1
+                found_selloff = True
+                break
+
+        if not found_selloff:
+            i += 1
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # 单股扫描
 # ---------------------------------------------------------------------------
-
-
-
 
 
 def _build_signal_label(hit_tfs: list[str], per_tf_detail: dict[str, dict[str, Any]]) -> str:
@@ -631,3 +754,25 @@ def run_consecutive_uptrends_v1_specialized(
     base_metrics["codes_with_signal"] = sum(1 for r in result_map.values() if r.signal_count > 0)
 
     return result_map, base_metrics
+
+
+# ---------------------------------------------------------------------------
+# 回测钩子
+# ---------------------------------------------------------------------------
+
+def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    return {"params": _normalize_tf_params(group_params, section_key)}
+
+
+BACKTEST_HOOKS = {
+    "detect": detect_streak,
+    "detect_vectorized": detect_streak_vectorized,
+    "prepare": None,
+    "normalize_params": _normalize_for_backtest,
+    "tf_sections": {
+        "weekly": {"tf_key": "w", "table": "klines_w"},
+        "daily": {"tf_key": "d", "table": "klines_d"},
+        "min60": {"tf_key": "60", "table": "klines_60"},
+    },
+    "tf_logic": "or",
+}

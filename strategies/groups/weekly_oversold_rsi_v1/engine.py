@@ -239,6 +239,60 @@ def detect_weekly_rsi(code_frame: pd.DataFrame, params: dict[str, Any]) -> Detec
     )
 
 
+def detect_weekly_rsi_vectorized(code_frame: pd.DataFrame, params: dict[str, Any]) -> list[DetectionResult]:
+    """在单只股票的完整周线历史上一次性检测所有 RSI 超跌命中点。
+
+    与 detect_weekly_rsi 的区别：
+    - detect_weekly_rsi 只检查最新一根K线，供筛选模式和回测外层滑窗使用。
+    - 本函数遍历全部有效 RSI 位置，收集所有命中记录，
+      回测引擎无需再用外层 while 滑窗逐 bar 推进。
+
+    输入：
+    1. code_frame: 单只股票完整周线 DataFrame（已按 ts 排序，含 rsi 列）。
+    2. params: 已规范化的 RSI 参数。
+    输出：
+    1. DetectionResult 列表，每个元素对应一根命中K线。
+    边界条件：
+    1. code_frame 必须已包含 rsi 列（由 prepare_weekly_rsi_features 预计算）。
+    2. 无有效 RSI 值时返回空列表。
+    """
+    if code_frame.empty:
+        return []
+
+    rsi_threshold = float(params["rsi_threshold"])
+    historical_ratio = float(params["historical_ratio_pct"])
+
+    rsi_values = code_frame["rsi"].values.astype(np.float64)
+    ts_values = code_frame["ts"].values
+
+    # 逐 bar 累积最低 RSI（NaN 用 inf 占位，accumulate 后还原）
+    rsi_for_min = np.where(np.isnan(rsi_values), np.inf, rsi_values)
+    running_min = np.minimum.accumulate(rsi_for_min)
+    running_min = np.where(running_min == np.inf, np.nan, running_min)
+
+    # 列式布尔掩码
+    valid = ~np.isnan(rsi_values)
+    cond_threshold = rsi_values < rsi_threshold
+    cond_historical = rsi_values <= running_min * historical_ratio
+    matched = valid & cond_threshold & cond_historical
+
+    hit_indices = np.where(matched)[0]
+    results: list[DetectionResult] = []
+    for i in hit_indices:
+        results.append(DetectionResult(
+            matched=True,
+            pattern_start_idx=int(i),
+            pattern_end_idx=int(i),
+            pattern_start_ts=ts_values[i],
+            pattern_end_ts=ts_values[i],
+            metrics={
+                "latest_rsi": round(float(rsi_values[i]), 2),
+                "historical_min_rsi": round(float(running_min[i]), 2),
+            },
+        ))
+    return results
+
+
 def build_weekly_rsi_payload(
     *,
     code_frame: pd.DataFrame,
@@ -481,3 +535,23 @@ def run_weekly_oversold_rsi_v1_specialized(
     base_metrics["codes_with_signal"] = sum(1 for r in result_map.values() if r.signal_count > 0)
 
     return result_map, base_metrics
+
+
+# ---------------------------------------------------------------------------
+# 回测钩子
+# ---------------------------------------------------------------------------
+
+def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    return {"params": _normalize_weekly_params(group_params)}
+
+
+BACKTEST_HOOKS = {
+    "detect": detect_weekly_rsi,
+    "detect_vectorized": detect_weekly_rsi_vectorized,
+    "prepare": prepare_weekly_rsi_features,
+    "normalize_params": _normalize_for_backtest,
+    "tf_sections": {
+        "weekly": {"tf_key": "w", "table": "klines_w"},
+    },
+    "tf_logic": "or",
+}

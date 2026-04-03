@@ -3,7 +3,7 @@
 
 职责：
 1. 管理任务状态、任务日志、筛选结果与前端配置持久化。
-2. 负责 schema 初始化与版本升级策略（当前 schema_version=v7）。
+2. 负责 schema 初始化与版本升级策略（当前 schema_version=v8）。
 3. 对外提供线程安全读写接口，供任务管理器与 API 路由调用。
 
 设计约束：
@@ -40,11 +40,12 @@ def _json_dumps(obj: Any) -> str:
 
 
 class StateDB:
-    SCHEMA_VERSION = "7"
+    SCHEMA_VERSION = "8"
     RETRY_TASK_QUERY_BATCH_SIZE = 2000
     MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v2"
     LEGACY_MONITOR_FORM_SETTINGS_KEY = "ui.monitor.form_settings.v1"
     MAINTENANCE_FORM_SETTINGS_KEY = "ui.maintenance.form_settings.v1"
+    BACKTEST_FORM_SETTINGS_KEY = "ui.backtest.form_settings.v1"
 
     def __init__(self, db_path: Path):
         """
@@ -142,7 +143,7 @@ class StateDB:
         """
         初始化或升级状态库 schema。
 
-        当前目标版本：`schema_version = 7`。
+        当前目标版本：`schema_version = 8`。
         升级策略采用非破坏式迁移：优先保留任务和日志历史，再补齐新增表、索引和序列，最后更新 `app_meta`。
         """
         def _op(con: duckdb.DuckDBPyConnection) -> None:
@@ -395,6 +396,47 @@ class StateDB:
                 "create index if not exists idx_maintenance_retry_tasks_mode_status on maintenance_retry_tasks(mode, last_status)"
             )
 
+            # ── backtest_jobs / backtest_logs (v8) ──
+            con.execute("create sequence if not exists backtest_logs_seq start 1")
+            con.execute(
+                """
+                create table if not exists backtest_jobs (
+                    job_id varchar primary key,
+                    created_at timestamp not null,
+                    updated_at timestamp not null,
+                    started_at timestamp,
+                    finished_at timestamp,
+                    status varchar not null,
+                    progress double default 0,
+                    strategy_group_id varchar not null,
+                    mode varchar not null,
+                    forward_bars_json varchar,
+                    slide_step integer default 1,
+                    group_params_json varchar,
+                    param_ranges_json varchar,
+                    total_stocks integer default 0,
+                    processed_stocks integer default 0,
+                    combo_index integer default 0,
+                    combo_total integer default 0,
+                    summary_json varchar,
+                    error_message varchar
+                )
+                """
+            )
+            con.execute(
+                """
+                create table if not exists backtest_logs (
+                    log_id bigint primary key default nextval('backtest_logs_seq'),
+                    job_id varchar not null,
+                    ts timestamp not null,
+                    level varchar not null,
+                    message varchar not null
+                )
+                """
+            )
+            con.execute("create index if not exists idx_backtest_jobs_created_at on backtest_jobs(created_at)")
+            con.execute("create index if not exists idx_backtest_logs_job_id_log_id on backtest_logs(job_id, log_id)")
+
             con.execute(
                 """
                 insert into app_meta (meta_key, meta_value)
@@ -546,6 +588,206 @@ class StateDB:
         1. 同键已存在时覆盖更新。
         """
         self.set_meta_json(self.MAINTENANCE_FORM_SETTINGS_KEY, settings)
+
+    def get_backtest_form_settings(self) -> dict[str, Any]:
+        value = self.get_meta_json(self.BACKTEST_FORM_SETTINGS_KEY, default={})
+        if isinstance(value, dict):
+            return value
+        return {}
+
+    def set_backtest_form_settings(self, settings: dict[str, Any]) -> None:
+        self.set_meta_json(self.BACKTEST_FORM_SETTINGS_KEY, settings)
+
+    # ── backtest_jobs / backtest_logs CRUD ─────────────────────────────
+
+    _BT_KEEP_JOBS = 20  # 保留最近 N 个回测 job（裁剪旧记录）
+
+    def create_backtest_job(
+        self,
+        *,
+        job_id: str,
+        strategy_group_id: str,
+        mode: str,
+        forward_bars: tuple[int, int, int],
+        slide_step: int,
+        group_params: dict[str, Any],
+        param_ranges: dict[str, Any],
+    ) -> None:
+        now = datetime.now()
+
+        def _op(con: duckdb.DuckDBPyConnection) -> None:
+            con.execute(
+                """
+                insert into backtest_jobs (
+                    job_id, created_at, updated_at, status,
+                    strategy_group_id, mode, forward_bars_json, slide_step,
+                    group_params_json, param_ranges_json
+                ) values (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    job_id, now, now,
+                    strategy_group_id, mode,
+                    _json_dumps(list(forward_bars)), slide_step,
+                    _json_dumps(group_params), _json_dumps(param_ranges),
+                ],
+            )
+            self._trim_backtest_jobs(con)
+
+        self._with_write_connection(_op)
+
+    def update_backtest_job_fields(self, job_id: str, **fields: Any) -> None:
+        if not fields:
+            return
+        fields["updated_at"] = datetime.now()
+        set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
+        values = list(fields.values()) + [job_id]
+
+        def _op(con: duckdb.DuckDBPyConnection) -> None:
+            con.execute(f"update backtest_jobs set {set_clause} where job_id = ?", values)
+
+        self._with_write_connection(_op)
+
+    def get_backtest_job(self, job_id: str) -> dict[str, Any] | None:
+        def _op(con: duckdb.DuckDBPyConnection):
+            return con.execute(
+                """
+                select
+                    job_id, created_at, updated_at, started_at, finished_at,
+                    status, progress, strategy_group_id, mode,
+                    forward_bars_json, slide_step,
+                    group_params_json, param_ranges_json,
+                    total_stocks, processed_stocks, combo_index, combo_total,
+                    summary_json, error_message
+                from backtest_jobs where job_id = ?
+                """,
+                [job_id],
+            ).fetchone()
+
+        row = self._with_read_connection(_op)
+        if not row:
+            return None
+
+        return {
+            "job_id": row[0],
+            "created_at": row[1],
+            "updated_at": row[2],
+            "started_at": row[3],
+            "finished_at": row[4],
+            "status": row[5],
+            "progress": row[6],
+            "strategy_group_id": row[7],
+            "mode": row[8],
+            "forward_bars": json.loads(row[9]) if row[9] else [2, 5, 7],
+            "slide_step": row[10],
+            "group_params": json.loads(row[11]) if row[11] else {},
+            "param_ranges": json.loads(row[12]) if row[12] else {},
+            "total_stocks": row[13],
+            "processed_stocks": row[14],
+            "combo_index": row[15],
+            "combo_total": row[16],
+            "summary": json.loads(row[17]) if row[17] else {},
+            "error_message": row[18],
+        }
+
+    def list_backtest_jobs(self, limit: int = 30) -> list[dict[str, Any]]:
+        def _op(con: duckdb.DuckDBPyConnection):
+            return con.execute(
+                """
+                select job_id, created_at, status, strategy_group_id, mode,
+                       forward_bars_json, progress, error_message
+                from backtest_jobs
+                order by created_at desc
+                limit ?
+                """,
+                [limit],
+            ).fetchall()
+
+        rows = self._with_read_connection(_op)
+        return [
+            {
+                "job_id": r[0],
+                "created_at": r[1],
+                "status": r[2],
+                "strategy_group_id": r[3],
+                "mode": r[4],
+                "forward_bars": json.loads(r[5]) if r[5] else [],
+                "progress": r[6],
+                "error_message": r[7],
+            }
+            for r in rows
+        ]
+
+    def get_running_backtest_job(self) -> dict[str, Any] | None:
+        def _op(con: duckdb.DuckDBPyConnection):
+            return con.execute(
+                """
+                select job_id from backtest_jobs
+                where status in ('queued', 'running', 'stopping')
+                order by created_at desc limit 1
+                """
+            ).fetchone()
+
+        row = self._with_read_connection(_op)
+        if not row:
+            return None
+        return self.get_backtest_job(row[0])
+
+    def append_backtest_log(self, *, job_id: str, level: str, message: str) -> None:
+        now = datetime.now()
+
+        def _op(con: duckdb.DuckDBPyConnection) -> None:
+            con.execute(
+                "insert into backtest_logs (job_id, ts, level, message) values (?, ?, ?, ?)",
+                [job_id, now, level, message],
+            )
+
+        self._with_write_connection(_op)
+
+    def get_backtest_logs(
+        self,
+        job_id: str,
+        level: str,
+        limit: int = 300,
+        after_log_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [job_id]
+        where = "where job_id = ?"
+        if level in ("info", "error"):
+            where += " and level = ?"
+            params.append(level)
+        if after_log_id is not None:
+            where += " and log_id > ?"
+            params.append(int(after_log_id))
+        params.append(limit)
+
+        def _op(con: duckdb.DuckDBPyConnection):
+            return con.execute(
+                f"select log_id, ts, level, message from backtest_logs {where} order by log_id asc limit ?",
+                params,
+            ).fetchall()
+
+        rows = self._with_read_connection(_op)
+        return [
+            {
+                "log_id": int(r[0]),
+                "ts": r[1].strftime("%Y-%m-%d %H:%M:%S.%f") if isinstance(r[1], datetime) else str(r[1] or ""),
+                "level": r[2],
+                "message": r[3],
+            }
+            for r in rows
+        ]
+
+    def _trim_backtest_jobs(self, con: duckdb.DuckDBPyConnection) -> None:
+        rows = con.execute(
+            "select job_id from backtest_jobs order by created_at desc"
+        ).fetchall()
+        keep_ids = {str(r[0]) for r in rows[: self._BT_KEEP_JOBS]}
+        remove_ids = [str(r[0]) for r in rows if str(r[0]) not in keep_ids]
+        if not remove_ids:
+            return
+        ph = ", ".join(["?"] * len(remove_ids))
+        con.execute(f"delete from backtest_logs where job_id in ({ph})", remove_ids)
+        con.execute(f"delete from backtest_jobs where job_id in ({ph})", remove_ids)
 
     def get_maintenance_retry_tasks(
         self,

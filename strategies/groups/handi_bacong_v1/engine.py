@@ -963,3 +963,28 @@ def run_handi_bacong_v1_specialized(
     base_metrics["codes_with_signal"] = sum(1 for r in result_map.values() if r.signal_count > 0)
 
     return result_map, base_metrics
+
+
+# ---------------------------------------------------------------------------
+# 回测钩子
+# ---------------------------------------------------------------------------
+
+def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> dict[str, Any]:
+    return {
+        "tf_params": _normalize_tf_params(group_params, section_key),
+        "global_params": _normalize_global_params(group_params),
+        "tf_key": _PARAM_SECTION_TO_TF[section_key],
+    }
+
+
+BACKTEST_HOOKS = {
+    "detect": detect_handi_bacong,
+    "detect_vectorized": None,
+    "prepare": None,
+    "normalize_params": _normalize_for_backtest,
+    "tf_sections": {
+        "weekly": {"tf_key": "w", "table": "klines_w"},
+        "daily": {"tf_key": "d", "table": "klines_d"},
+    },
+    "tf_logic": "and",
+}

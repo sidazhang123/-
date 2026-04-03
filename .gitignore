@@ -1,4 +1,6 @@
 ﻿__pycache__/
 *.pyc
-*.duckdb
-*.duckdb.wal
+screening_state.duckdb
+screening_state.duckdb.wal
+.playwright-mcp/
+.vscode/
