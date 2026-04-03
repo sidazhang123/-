@@ -14,8 +14,10 @@ strategies/
     ├── consecutive_uptrends_v1/
     ├── converging_triangle_v1/
     ├── flag_pattern_v1/
+    ├── handi_bacong_v1/
     ├── multi_tf_ma_uptrend_v1/
     ├── weekly_oversold_rsi_v1/
+    ├── weekly_sideways_v1/
     └── xianren_zhilu_v1/
 ```
 

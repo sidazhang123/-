@@ -688,7 +688,7 @@
       appendLogs("btErrorLogs", JSON.parse(e.data));
       // Pulse error tab
       const errTab = document.querySelector(".error-tab");
-      if (errTab) errTab.classList.add("has-errors");
+      if (errTab) errTab.classList.add("has-error-alert");
     });
 
     es.addEventListener("done", (e) => {
@@ -728,6 +728,21 @@
    */
   function updateStatus(d) {
     $("btStatusText").textContent = statusLabel(d.status);
+
+    // 任务已终态时直接显示 100% 和满量
+    if (d.status === "completed" || d.status === "failed" || d.status === "stopped") {
+      $("btProcessedText").textContent = `${d.total_stocks} / ${d.total_stocks}`;
+      $("btProgressText").textContent = "100.0%";
+      $("btProgressBar").style.width = "100%";
+      if (d.combo_total > 0) {
+        $("btComboRow").style.display = "";
+        $("btComboText").textContent = `${d.combo_total} / ${d.combo_total}`;
+      } else {
+        $("btComboRow").style.display = "none";
+      }
+      return;
+    }
+
     $("btProcessedText").textContent = `${d.processed_stocks} / ${d.total_stocks}`;
 
     const isSweep = d.combo_total > 0;
@@ -761,6 +776,8 @@
     state.logCursor.error = 0;
     $("btInfoLogs").textContent = "";
     $("btErrorLogs").textContent = "";
+    const errTab = document.querySelector(".error-tab");
+    if (errTab) errTab.classList.remove("has-error-alert");
   }
   function appendLogs(elId, items) {
     const level = elId === "btErrorLogs" ? "error" : "info";
@@ -785,6 +802,11 @@
     }
     // Auto scroll
     el.scrollTop = el.scrollHeight;
+    // 写入错误日志时触发红色闪烁
+    if (elId === "btErrorLogs") {
+      const errTab = document.querySelector(".error-tab");
+      if (errTab) errTab.classList.add("has-error-alert");
+    }
   }
 
   // ── on complete ──
@@ -851,6 +873,12 @@
     if (!state.currentJobId) return;
     try {
       const raw = await getJSON(`/api/backtests/${state.currentJobId}/stats`);
+      if (raw.total_hits === 0) {
+        showPanel("btStatsPanel");
+        $("btStatsContent").innerHTML =
+          '<p style="text-align:center;color:var(--color-text-secondary);padding:2rem 0">本次回测无命中结果</p>';
+        return;
+      }
       const data = transformStatsData(raw);
       showPanel("btStatsPanel");
       renderStats(data);
@@ -890,6 +918,8 @@
       for (const [lbl, key] of metrics) {
         const v = fwdStats[key];
         const tr = document.createElement("tr");
+        if (key === "profit_median") tr.style.background = "rgba(239,68,68,0.12)";
+        if (key === "drawdown_median") tr.style.background = "rgba(34,197,94,0.12)";
         tr.innerHTML = `<td>${lbl}</td><td>${fmtStat(v)}</td>`;
         table.appendChild(tr);
       }
@@ -1399,7 +1429,8 @@
         name: "中位盈利 %",
         nameLocation: "center",
         nameGap: 30,
-        axisLabel: { fontSize: 10 },
+        nameTextStyle: { color: "#000", fontSize: 15 },
+        axisLabel: { fontSize: 15, color: "#000" },
         min: function (value) { var pad = Math.max((value.max - value.min) * 0.1, 0.5); return +(value.min - pad).toFixed(2); },
         max: function (value) { var pad = Math.max((value.max - value.min) * 0.1, 0.5); return +(value.max + pad).toFixed(2); },
       },
@@ -1407,8 +1438,9 @@
         type: "value",
         name: "中位回撤 %",
         nameLocation: "center",
-        nameGap: 40,
-        axisLabel: { fontSize: 10 },
+        nameGap: 45,
+        nameTextStyle: { color: "#000", fontSize: 15 },
+        axisLabel: { fontSize: 15, color: "#000" },
         min: function (value) { var pad = Math.max((value.max - value.min) * 0.1, 0.5); return +(value.min - pad).toFixed(2); },
         max: function (value) { var pad = Math.max((value.max - value.min) * 0.1, 0.5); return +(value.max + pad).toFixed(2); },
       },
@@ -1422,7 +1454,7 @@
         top: 20,
         text: ["夏普高", "夏普低"],
         inRange: { color: ["#fc8181", "#fbd38d", "#68d391"] },
-        textStyle: { fontSize: 10, color: "#ccc" },
+        textStyle: { fontSize: 15, color: "#000" },
       },
       series: [{
         type: "scatter",
@@ -1433,10 +1465,7 @@
           itemStyle: { shadowBlur: 10, shadowColor: "rgba(255,255,255,0.3)" },
         },
         label: {
-          show: scatterData.length <= 30,
-          position: "top",
-          fontSize: 9,
-          color: "#aaa",
+          show: false,
           formatter: function (params) {
             return params.data._combo._label;
           },
@@ -1457,8 +1486,9 @@
     const el = $("btSweepRankChart");
     if (!el) return;
 
-    const chartH = Math.max(300, Math.min(600, scored.length * 25 + 80));
+    const chartH = Math.max(360, Math.min(900, scored.length * 35 + 100));
     el.style.height = chartH + "px";
+    void el.offsetHeight;           // force reflow before ECharts measures
 
     const chart = echarts.init(el, "dark");
     state.charts.push(chart);
@@ -1487,17 +1517,18 @@
           return `<b>${c._label}</b><br/>${paramStr}<br/>命中: ${c.total_hits}<br/>综合评分: <b>${c._score.toFixed(2)}</b>`;
         },
       },
-      grid: { top: 15, bottom: 30, left: 10, right: 40, containLabel: true },
+      grid: { top: 15, bottom: 30, left: 10, right: 55, containLabel: true },
       xAxis: {
         type: "value",
         name: "综合评分",
         nameLocation: "end",
-        axisLabel: { fontSize: 10 },
+        nameTextStyle: { color: "#000", fontSize: 15 },
+        axisLabel: { fontSize: 15, color: "#000" },
       },
       yAxis: {
         type: "category",
         data: labels,
-        axisLabel: { fontSize: 10, width: 220, overflow: "truncate" },
+        axisLabel: { show: false },
         axisTick: { show: false },
       },
       visualMap: {
@@ -1514,7 +1545,8 @@
         label: {
           show: true,
           position: "right",
-          fontSize: 10,
+          fontSize: 15,
+          color: "#000",
           formatter: ({ value }) => value.toFixed(1),
         },
       }],
@@ -1524,15 +1556,16 @@
       option.dataZoom = [{
         type: "slider",
         yAxisIndex: 0,
-        start: 100 - (20 / scored.length) * 100,
+        start: 0,
         end: 100,
-        width: 16,
-        right: 5,
+        width: 18,
+        right: 8,
       }];
-      option.grid.right = 60;
+      option.grid.right = 80;
     }
 
     chart.setOption(option);
+    chart.resize();                  // sync canvas to final container size
   }
 
   /**
@@ -1554,6 +1587,7 @@
     }
 
     card.style.display = "";
+    void el.offsetHeight;           // force reflow before ECharts measures
     const chart = echarts.init(el, "dark");
     state.charts.push(chart);
 
@@ -1598,8 +1632,9 @@
         name: shortX,
         nameLocation: "center",
         nameGap: 28,
+        nameTextStyle: { color: "#000", fontSize: 15 },
         splitArea: { show: true },
-        axisLabel: { fontSize: 10 },
+        axisLabel: { fontSize: 15, color: "#000" },
       },
       yAxis: {
         type: "category",
@@ -1607,8 +1642,9 @@
         name: shortY,
         nameLocation: "center",
         nameGap: 55,
+        nameTextStyle: { color: "#000", fontSize: 15 },
         splitArea: { show: true },
-        axisLabel: { fontSize: 10 },
+        axisLabel: { fontSize: 15, color: "#000" },
       },
       visualMap: {
         min: minScore === maxScore ? minScore - 1 : minScore,
@@ -1618,14 +1654,15 @@
         right: 0,
         top: 10,
         inRange: { color: ["#fc8181", "#fbd38d", "#68d391"] },
-        textStyle: { fontSize: 10 },
+        textStyle: { fontSize: 15, color: "#000" },
       },
       series: [{
         type: "heatmap",
         data: heatData,
         label: {
           show: valsX.length * valsY.length <= 100,
-          fontSize: 10,
+          fontSize: 15,
+          color: "#000",
           formatter: ({ data }) => data[2].toFixed(1),
         },
         emphasis: {
@@ -1633,6 +1670,7 @@
         },
       }],
     });
+    chart.resize();                  // sync canvas to final container size
   }
 
   // ── 参数快照弹窗 ──

@@ -16,7 +16,7 @@
 
 ## 状态库要点
 
-1. `StateDB` 当前 schema 版本为 `5`。
+1. `StateDB` 当前 schema 版本为 `8`。
 2. 核心表包括 `tasks`、`task_logs`、`task_results`、`maintenance_jobs`、`maintenance_logs`、`maintenance_retry_tasks`、`concept_jobs`、`concept_logs`、`_maintenance_meta`、`app_meta`。
 3. 监控页和维护页表单配置也由状态库存储，不再是纯前端本地状态。
 

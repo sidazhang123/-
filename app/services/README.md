@@ -19,8 +19,11 @@
 11. `concept_logger.py`：概念任务日志适配。
 12. `concept_maintenance.py`：概念抓取、过滤、进度统计与写库执行器。
 13. `concept_formula.py`：概念过滤公式解析与标准化。
-14. `source_schema_migration.py`：源库 schema 迁移辅助逻辑。
-15. `simple_api_bridge.py`：统一隔离 zsdtdx simple_api 导入与进程池生命周期，自动在 get_stock_kline 结束后销毁并行抓取器。
+14. `backtest_manager.py`：回测任务生命周期管理与参数扫描编排。
+15. `backtest_engine.py`：回测执行引擎，含前瞻指标预计算、并行检测与统计输出。
+16. `backtest_stats.py`：回测统计分析，含逐股聚合、基础统计与直方图分箱。
+17. `source_schema_migration.py`：源库 schema 迁移辅助逻辑。
+18. `simple_api_bridge.py`：统一隔离 zsdtdx simple_api 导入与进程池生命周期，自动在 get_stock_kline 结束后销毁并行抓取器。
 
 ## 关键约束
 

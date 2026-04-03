@@ -14,17 +14,18 @@
 ## 2. 当前基线
 
 1. 策略目录统一为 `strategies/groups/*`。
-2. 当前策略组共 8 个：
+2. 当前策略组共 9 个：
    1. `consecutive_uptrends_v1`（specialized，w/d/60）
    2. `converging_triangle_v1`（specialized，w/d）
    3. `flag_pattern_v1`（specialized，w/d/15）
-   4. `multi_tf_ma_uptrend_v1`（specialized，w/d/60/15）
-   5. `weekly_oversold_rsi_v1`（specialized，w）
-   6. `weekly_sideways_v1`（specialized，w）
-   7. `xianren_zhilu_v1`（specialized，w/d）
-   8. `strategy_2`（specialized 模板）
+   4. `handi_bacong_v1`（specialized，w/d）
+   5. `multi_tf_ma_uptrend_v1`（specialized，w/d/60/15）
+   6. `weekly_oversold_rsi_v1`（specialized，w）
+   7. `weekly_sideways_v1`（specialized，w）
+   8. `xianren_zhilu_v1`（specialized，w/d）
+   9. `strategy_2`（specialized 模板）
 3. 服务监听固定 `0.0.0.0:8000`。
-4. 状态库 schema 版本：`app_meta.schema_version = "5"`。
+4. 状态库 schema 版本：`app_meta.schema_version = "8"`。
 5. K 线维护模式仅支持：`latest_update` / `historical_backfill`，默认 `latest_update`。
 6. 前端第三方依赖全部本地静态资源，不依赖 CDN。
 7. 概念更新任务已并入主系统，运行中会阻止新筛选任务创建。
@@ -50,10 +51,13 @@
 │  ├─ engine_commons.py
 │  └─ groups/
 │     ├─ consecutive_uptrends_v1/
+│     ├─ converging_triangle_v1/
 │     ├─ flag_pattern_v1/
+│     ├─ handi_bacong_v1/
 │     ├─ multi_tf_ma_uptrend_v1/
 │     ├─ strategy_2/
 │     ├─ weekly_oversold_rsi_v1/
+│     ├─ weekly_sideways_v1/
 │     └─ xianren_zhilu_v1/
 └─ app/
    ├─ app_config.yaml
@@ -152,12 +156,15 @@
 2. `POST /api/tasks/{task_id}/pause`
 3. `POST /api/tasks/{task_id}/resume`
 4. `POST /api/tasks/{task_id}/stop`
-5. `GET /api/tasks/{task_id}/results`
-6. `GET /api/tasks/{task_id}/result-stock-concepts`
-7. `GET /api/tasks/{task_id}/candles`
-8. `GET /api/tasks/{task_id}/stock-chart`
-9. `GET /api/tasks/{task_id}/stream`
-10. `GET /api/tasks/{task_id}/status-stream`
+5. `DELETE /api/tasks`
+6. `GET /api/tasks/{task_id}`
+7. `GET /api/tasks/{task_id}/params`
+8. `GET /api/tasks/{task_id}/results`
+9. `GET /api/tasks/{task_id}/result-stock-concepts`
+10. `GET /api/tasks/{task_id}/candles`
+11. `GET /api/tasks/{task_id}/stock-chart`
+12. `GET /api/tasks/{task_id}/stream`
+13. `GET /api/tasks/{task_id}/status-stream`
 
 维护与概念任务相关：
 
@@ -170,10 +177,27 @@
 7. `POST /api/concept/jobs/{job_id}/stop`
 8. `GET /api/concept/jobs/{job_id}/stream`
 
+回测任务相关：
+
+1. `POST /api/backtests`
+2. `GET /api/backtests`
+3. `DELETE /api/backtests`
+4. `GET /api/backtests/{job_id}/status`
+5. `GET /api/backtests/{job_id}/params`
+6. `POST /api/backtests/{job_id}/stop`
+7. `GET /api/backtests/{job_id}/logs`
+8. `GET /api/backtests/{job_id}/stream`
+9. `GET /api/backtests/{job_id}/hits`
+10. `GET /api/backtests/{job_id}/stats`
+11. `GET /api/backtests/{job_id}/sweep`
+12. `GET /api/backtests/{job_id}/sweep-stats`
+13. `GET /api/backtests/{job_id}/stock-chart`
+
 前端设置相关：
 
 1. `GET/POST /api/ui-settings/monitor`
 2. `GET/POST /api/ui-settings/maintenance`
+3. `GET/POST /api/ui-settings/backtest`
 
 ## 9. 风险点
 

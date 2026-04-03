@@ -21,11 +21,12 @@
 1. `consecutive_uptrends_v1`：specialized，w/d/60 K线连续小阳策略。
 2. `converging_triangle_v1`：specialized，w/d 大收敛三角形策略。
 3. `flag_pattern_v1`：specialized，w/d/15 多周期旗形上涨策略。
-4. `multi_tf_ma_uptrend_v1`：specialized，w/d/60/15 多周期均线向上策略。
-5. `weekly_oversold_rsi_v1`：specialized，w 周线超跌 RSI 策略。
-6. `weekly_sideways_v1`：specialized，w 周线长期震荡策略。
-7. `xianren_zhilu_v1`：specialized，w/d 仙人指路形态策略。
-8. `strategy_2`：specialized 模板策略，作为后续 AI 和开发者创建新策略的首选参考模板。
+4. `handi_bacong_v1`：specialized，w/d 旱地拔葱策略。
+5. `multi_tf_ma_uptrend_v1`：specialized，w/d/60/15 多周期均线向上策略。
+6. `weekly_oversold_rsi_v1`：specialized，w 周线超跌 RSI 策略。
+7. `weekly_sideways_v1`：specialized，w 周线长期震荡策略。
+8. `xianren_zhilu_v1`：specialized，w/d 仙人指路形态策略。
+9. `strategy_2`：specialized 模板策略，作为后续 AI 和开发者创建新策略的首选参考模板。
 
 ## 2. 启动方式
 
@@ -70,6 +71,7 @@ py run.py
 │     ├─ consecutive_uptrends_v1/
 │     ├─ converging_triangle_v1/
 │     ├─ flag_pattern_v1/
+│     ├─ handi_bacong_v1/
 │     ├─ multi_tf_ma_uptrend_v1/
 │     ├─ strategy_2/
 │     ├─ weekly_oversold_rsi_v1/
@@ -94,14 +96,16 @@ py run.py
 2. `app/main.py`：装配 FastAPI、日志系统、状态库、任务管理器、维护管理器与概念管理器。
 3. `app/api/routes.py`：集中定义 API 路由、请求校验、结果拼装、流式接口和前端设置接口。
 4. `app/db/market_data.py`：读取源行情库与概念数据，负责图表数据和概念信息查询。
-5. `app/db/state_db.py`：持久化任务、日志、结果、维护状态、概念任务与前端配置，当前 schema 版本为 `5`。
+5. `app/db/state_db.py`：持久化任务、日志、结果、维护状态、概念任务与前端配置，当前 schema 版本为 `8`。
 6. `app/services/task_manager.py`：筛选任务创建、暂停、恢复、停止、引擎选择与结果写库。
 7. `app/services/maintenance_manager.py`：维护任务生命周期与停止控制。
 8. `app/services/kline_maintenance.py`：K 线维护执行引擎，支持最新更新与历史回填。
 9. `app/services/concept_manager.py`：概念更新任务生命周期管理。
 10. `app/services/concept_maintenance.py`：概念数据抓取、过滤、写库与进度汇总。
-11. `app/services/simple_api_bridge.py`：统一隔离 zsdtdx simple_api 导入与进程池生命周期，提供自动清理抓取器的上下文封装。
-12. `strategies/groups/strategy_2/*`：新策略模板，重点说明 specialized 入口契约、payload 时间窗口合同与概念过滤写法。
+11. `app/services/backtest_manager.py`：回测任务生命周期管理与参数扫描编排。
+12. `app/services/backtest_engine.py`：回测执行引擎，含前瞻指标预计算、并行检测与统计输出。
+13. `app/services/simple_api_bridge.py`：统一隔离 zsdtdx simple_api 导入与进程池生命周期，提供自动清理抓取器的上下文封装。
+14. `strategies/groups/strategy_2/*`：新策略模板，重点说明 specialized 入口契约、payload 时间窗口合同与概念过滤写法。
 
 ## 5. 配置与依赖要点
 
@@ -117,6 +121,7 @@ py run.py
 6. `concept`：概念抓取超时、并发数、重试次数与板块过滤名单。
 7. `parallel_log`、`maintenance_log`、`log_keep`：并行抓取日志压缩策略和日志保留策略。
 8. `app`：启动预热与停机优雅等待时间。
+9. `backtest`：回测缓存目录、并发线程数、默认前瞻 K 线数与滑动步长。
 
 关键依赖：
 
@@ -153,6 +158,13 @@ py run.py
 3. 过程状态与日志写入 `concept_jobs`、`concept_logs`。
 4. 当概念任务运行中时，平台会拒绝创建新的筛选任务，避免概念过滤使用到不一致的数据快照。
 
+### 6.4 回测任务链路
+
+1. 前端通过 `POST /api/backtests` 创建回测任务，支持 `fixed`（单参数组合）和 `sweep`（参数扫描）两种模式。
+2. `BacktestManager` 调用 `BacktestEngine` 执行四阶段流水线：前瞻指标预计算、并行检测、指标关联、CSV/统计输出。
+3. 结果写入 `backtest_jobs`、`backtest_logs`，命中数据和统计以 CSV/JSON 形式存储在 `cache/backtest/{job_id}/` 下。
+4. 前端通过回测状态、日志流、命中列表、统计分析和 K 线图表接口展示回测结果。
+
 ## 7. API 总览
 
 ### 7.1 基础与配置接口
@@ -163,6 +175,7 @@ py run.py
 4. `GET /api/strategy-groups/{group_id}`：读取单个策略组 manifest 信息。
 5. `GET/POST /api/ui-settings/monitor`：读取/保存监控页表单配置，正式字段为结构化 `group_params`。
 6. `GET/POST /api/ui-settings/maintenance`：读取/保存维护页配置。
+7. `GET/POST /api/ui-settings/backtest`：读取/保存回测页配置。
 
 ### 7.2 筛选任务接口
 
@@ -171,15 +184,17 @@ py run.py
 3. `POST /api/tasks/{task_id}/resume`：恢复任务。
 4. `POST /api/tasks/{task_id}/stop`：停止任务。
 5. `GET /api/tasks`：任务列表。
-6. `GET /api/tasks/{task_id}`：任务状态。
-7. `GET /api/tasks/{task_id}/logs`：任务日志。
-8. `GET /api/tasks/{task_id}/results`：结果列表。
-9. `GET /api/tasks/{task_id}/result-stocks`：结果股票汇总。
-10. `GET /api/tasks/{task_id}/result-stock-concepts`：结果股票概念信息，包含概念集中度 Top3 摘要。
-11. `GET /api/tasks/{task_id}/candles`：K 线数据查询。
-12. `GET /api/tasks/{task_id}/stock-chart`：单股图表与窗口高亮。
-13. `GET /api/tasks/{task_id}/stream`：任务日志流。
-14. `GET /api/tasks/{task_id}/status-stream`：任务状态流。
+6. `DELETE /api/tasks`：批量删除终态任务及关联日志和结果。
+7. `GET /api/tasks/{task_id}`：任务状态。
+8. `GET /api/tasks/{task_id}/params`：任务参数快照。
+9. `GET /api/tasks/{task_id}/logs`：任务日志。
+10. `GET /api/tasks/{task_id}/results`：结果列表。
+11. `GET /api/tasks/{task_id}/result-stocks`：结果股票汇总。
+12. `GET /api/tasks/{task_id}/result-stock-concepts`：结果股票概念信息，包含概念集中度 Top3 摘要。
+13. `GET /api/tasks/{task_id}/candles`：K 线数据查询。
+14. `GET /api/tasks/{task_id}/stock-chart`：单股图表与窗口高亮。
+15. `GET /api/tasks/{task_id}/stream`：任务日志流。
+16. `GET /api/tasks/{task_id}/status-stream`：任务状态流。
 
 ### 7.3 维护与概念任务接口
 
@@ -197,6 +212,22 @@ py run.py
 12. `GET /api/concept/jobs/{job_id}/stream`：概念任务日志流。
 13. `GET /api/stream/heartbeat`：前端流式连接保活。
 
+### 7.4 回测任务接口
+
+1. `POST /api/backtests`：创建回测任务。
+2. `GET /api/backtests`：回测任务列表。
+3. `DELETE /api/backtests`：批量删除终态回测任务及其缓存目录。
+4. `GET /api/backtests/{job_id}/status`：回测任务状态。
+5. `GET /api/backtests/{job_id}/params`：回测任务参数快照。
+6. `POST /api/backtests/{job_id}/stop`：停止回测任务。
+7. `GET /api/backtests/{job_id}/logs`：回测任务日志。
+8. `GET /api/backtests/{job_id}/stream`：回测任务日志流。
+9. `GET /api/backtests/{job_id}/hits`：回测命中记录。
+10. `GET /api/backtests/{job_id}/stats`：回测统计分析。
+11. `GET /api/backtests/{job_id}/sweep`：sweep 参数组合结果。
+12. `GET /api/backtests/{job_id}/sweep-stats`：sweep 组合详细统计。
+13. `GET /api/backtests/{job_id}/stock-chart`：回测 K 线与命中区间。
+
 ## 8. 状态库结构
 
 状态库文件默认为 `screening_state.duckdb`，由 `StateDB.init_schema()` 初始化与升级。
@@ -211,8 +242,10 @@ py run.py
 6. `maintenance_retry_tasks`：维护失败重试任务。
 7. `concept_jobs`：概念更新任务主表。
 8. `concept_logs`：概念更新任务日志。
-9. `_maintenance_meta`：维护过程内部元数据。
-10. `app_meta`：应用元数据，包含 `schema_version=5`。
+9. `backtest_jobs`：回测任务主表。
+10. `backtest_logs`：回测任务日志。
+11. `_maintenance_meta`：维护过程内部元数据。
+12. `app_meta`：应用元数据，包含 `schema_version=8`。
 
 ## 9. 策略开发约定
 

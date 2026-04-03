@@ -43,6 +43,15 @@ _ANNUALIZE_FACTOR: dict[str, float] = {
     "15": np.sqrt(252 * 16),
 }
 
+# 半个月对应的交易 bar 数: 用于命中去重
+_HALF_MONTH_BARS: dict[str, int] = {
+    "w": 2,
+    "d": 10,
+    "60": 40,
+    "30": 80,
+    "15": 160,
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 阶段 A: 前瞻指标预计算 + 缓存
@@ -158,6 +167,62 @@ def precompute_forward_metrics(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 命中去重：半个月窗口内保留中位命中
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _dedup_nearby_hits(
+    hits: list[dict[str, Any]],
+    tf_key: str,
+) -> list[dict[str, Any]]:
+    """
+    将同一只股票在半个月内的连续命中聚为一簇，只保留中位那条。
+
+    聚簇规则：按 pattern_end_ts 排序后，相邻两条命中间距 ≤ gap_bars 根
+    K线则归为同一簇；簇内取 index = len//2 的中位记录。
+    """
+    if len(hits) <= 1:
+        return hits
+
+    gap_bars = _HALF_MONTH_BARS.get(tf_key, 10)
+
+    # 按 pattern_end_ts 排序
+    sorted_hits = sorted(hits, key=lambda h: h["pattern_end_ts"])
+
+    clusters: list[list[dict]] = [[sorted_hits[0]]]
+    for h in sorted_hits[1:]:
+        prev = clusters[-1][-1]
+        delta = (h["pattern_end_ts"] - prev["pattern_end_ts"])
+        # Timestamp 差值转为 bar 数估算（兼容 datetime.timedelta / pd.Timedelta / np.timedelta64）
+        secs = pd.Timedelta(delta).total_seconds()
+
+        if tf_key == "w":
+            bar_gap = secs / (7 * 86400)
+        elif tf_key == "d":
+            bar_gap = secs / 86400
+        elif tf_key == "60":
+            bar_gap = secs / 3600
+        elif tf_key == "30":
+            bar_gap = secs / 1800
+        elif tf_key == "15":
+            bar_gap = secs / 900
+        else:
+            bar_gap = secs / 86400
+
+        if bar_gap <= gap_bars:
+            clusters[-1].append(h)
+        else:
+            clusters.append([h])
+
+    # 每簇取中位
+    deduped: list[dict] = []
+    for cluster in clusters:
+        mid = len(cluster) // 2
+        deduped.append(cluster[mid])
+
+    return deduped
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 阶段 B: 滑动检测
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -213,6 +278,7 @@ def _detect_hits_for_codes(
 
     for code, code_df in df_all.groupby("code", sort=False):
         code_df = code_df.reset_index(drop=True)
+        code_hits: list[dict[str, Any]] = []
 
         # prepare (一次全量)
         if prepare_fn and params_for_prepare:
@@ -229,7 +295,7 @@ def _detect_hits_for_codes(
                 if p_start_ts is None and result.pattern_start_idx is not None:
                     p_start_ts = code_df["ts"].iloc[result.pattern_start_idx]
                 if p_end_ts is not None:
-                    hits.append({
+                    code_hits.append({
                         "code": code,
                         "tf_key": tf_key,
                         "pattern_start_ts": p_start_ts,
@@ -258,7 +324,7 @@ def _detect_hits_for_codes(
                         p_start_ts = sub_df["ts"].iloc[result.pattern_start_idx]
 
                     if p_end_ts is not None:
-                        hits.append({
+                        code_hits.append({
                             "code": code,
                             "tf_key": tf_key,
                             "pattern_start_ts": p_start_ts,
@@ -271,6 +337,9 @@ def _detect_hits_for_codes(
                         pos += slide_step
                 else:
                     pos += slide_step
+
+        # 半个月窗口去重：同一只股票的密集命中只保留中位
+        hits.extend(_dedup_nearby_hits(code_hits, tf_key))
 
         if progress_queue is not None:
             progress_queue.put(1)

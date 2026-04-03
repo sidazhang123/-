@@ -324,7 +324,9 @@ class BacktestManager:
                 )
                 log_fn("error", "回测已因停止请求中断")
             else:
-                self.state_db.update_backtest_job_fields(job_id, status="completed")
+                self.state_db.update_backtest_job_fields(
+                    job_id, status="completed", progress=1.0,
+                )
                 log_fn("info", "回测完成")
 
         except Exception as exc:
@@ -478,6 +480,19 @@ class BacktestManager:
                 progress_done.set()
                 progress_thread.join(timeout=5)
 
+                # 排干队列残余项，确保 processed_stocks 达到 total
+                try:
+                    while True:
+                        progress_queue.get_nowait()
+                        processed_count += 1
+                except Exception:
+                    pass
+                self.state_db.update_backtest_job_fields(
+                    job_id,
+                    processed_stocks=len(all_codes),
+                    total_stocks=len(all_codes),
+                )
+
                 all_hits.extend(hits)
                 progress = (sec_idx + 1) / (len(active_sections) + 1)  # 留最后一段给阶段C/D
                 self.state_db.update_backtest_job_fields(
@@ -507,6 +522,11 @@ class BacktestManager:
             stats = backtest_stats.compute_full_stats(hits_df, (x, y, z))
             backtest_engine.write_stats_json(stats, output_dir)
             summary["stats"] = stats
+        else:
+            backtest_engine.write_stats_json(
+                {"total_hits": 0, "unique_stocks": 0, "per_forward": {}},
+                output_dir,
+            )
 
         self.state_db.update_backtest_job_fields(
             job_id,
@@ -648,6 +668,19 @@ class BacktestManager:
                     progress_done.set()
                     progress_thread.join(timeout=5)
 
+                    # 排干队列残余项，确保 processed_stocks 达到 total
+                    try:
+                        while True:
+                            progress_queue.get_nowait()
+                            sweep_processed += 1
+                    except Exception:
+                        pass
+                    self.state_db.update_backtest_job_fields(
+                        job_id,
+                        processed_stocks=len(all_codes),
+                        total_stocks=len(all_codes),
+                    )
+
                     combo_hits.extend(hits)
 
                 # 指标解析
@@ -746,8 +779,11 @@ class BacktestManager:
                 vals.append(round(v, 6))
                 v += r_step
 
+            # 始终包含 max 端点
             if not vals:
                 vals = [r_min]
+            if abs(vals[-1] - r_max) > 1e-9:
+                vals.append(round(r_max, 6))
 
             param_paths.append(path)
             param_values.append(vals)

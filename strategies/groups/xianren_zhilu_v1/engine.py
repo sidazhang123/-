@@ -70,7 +70,9 @@ def _normalize_tf_params(group_params: dict[str, Any], section_key: str) -> dict
     return {
         "enabled": as_bool(raw.get("enabled"), False),
         "ma_period": as_int(raw.get("ma_period"), 5, minimum=2, maximum=60),
-        "shadow_ratio": as_float(raw.get("shadow_ratio"), 0.6, minimum=0.0, maximum=10.0),
+        "shadow_ratio": as_float(raw.get("shadow_ratio"), 40, minimum=0.0, maximum=100.0),
+        "lower_shadow_pct": as_float(raw.get("lower_shadow_pct"), 30.0, minimum=0.0, maximum=100.0),
+        "max_gain_pct": as_float(raw.get("max_gain_pct"), 7.0, minimum=0.0, maximum=30.0),
         "volume_multiplier": as_float(raw.get("volume_multiplier"), 1.3, minimum=1.0),
         "lookback_bars": as_int(raw.get("lookback_bars"), 5, minimum=1, maximum=60),
         "price_decline_ratio": as_float(raw.get("price_decline_ratio"), 1.2, minimum=1.0),
@@ -185,6 +187,8 @@ def detect_xianren_zhilu(
     metrics: dict[str, Any] = {}
 
     shadow_ratio = float(params["shadow_ratio"])
+    lower_shadow_pct = float(params["lower_shadow_pct"])
+    max_gain_pct = float(params["max_gain_pct"])
     volume_multiplier = float(params["volume_multiplier"])
     lookback_bars = int(params["lookback_bars"])
     ma_period = int(params["ma_period"])
@@ -208,10 +212,14 @@ def detect_xianren_zhilu(
     high_price = float(current["high"])
     current_volume = float(current["volume"])
 
-    # 条件1：阳线（close > open）且 high > close
-    body = close_price - open_price
-    if body <= 0:
+    # 条件1：close >= open（强制）且 high > open（有最大涨幅）
+    if close_price < open_price:
         metrics["reason"] = "非阳线"
+        return DetectionResult(matched=False, metrics=metrics)
+
+    max_gain = high_price - open_price
+    if max_gain <= 0:
+        metrics["reason"] = "无最大涨幅"
         return DetectionResult(matched=False, metrics=metrics)
 
     shadow = high_price - close_price
@@ -219,11 +227,29 @@ def detect_xianren_zhilu(
         metrics["reason"] = "无上影线"
         return DetectionResult(matched=False, metrics=metrics)
 
-    # 上影线与实体比值
-    shadow_ratio_actual = shadow / body
-    metrics["shadow_ratio"] = round(shadow_ratio_actual, 3)
-    if shadow_ratio_actual < shadow_ratio:
-        metrics["reason"] = f"上影线比值 {shadow_ratio_actual:.3f} < 阈值 {shadow_ratio}"
+    # 上影线占最大涨庅百分比
+    shadow_pct = shadow / max_gain * 100
+    metrics["shadow_ratio"] = round(shadow_pct, 2)
+    if shadow_pct < shadow_ratio:
+        metrics["reason"] = f"上影线占比 {shadow_pct:.2f}% < 阈值 {shadow_ratio}%"
+        return DetectionResult(matched=False, metrics=metrics)
+
+    # 条件1a：下影线 < 上影线 × lower_shadow_pct%
+    low_price = float(current["low"])
+    lower_shadow = open_price - low_price
+    if lower_shadow < 0:
+        lower_shadow = 0.0
+    lower_shadow_ratio = (lower_shadow / shadow * 100) if shadow > 0 else 0.0
+    metrics["lower_shadow_pct"] = round(lower_shadow_ratio, 2)
+    if lower_shadow >= shadow * (lower_shadow_pct / 100):
+        metrics["reason"] = f"下影线占上影线 {lower_shadow_ratio:.2f}% ≥ 阈值 {lower_shadow_pct}%"
+        return DetectionResult(matched=False, metrics=metrics)
+
+    # 条件1b：当日最大涨幅 >= max_gain_pct%
+    gain_pct = max_gain / open_price * 100 if open_price > 0 else 0.0
+    metrics["max_gain_pct"] = round(gain_pct, 2)
+    if gain_pct < max_gain_pct:
+        metrics["reason"] = f"最大涨幅 {gain_pct:.2f}% < 阈值 {max_gain_pct}%"
         return DetectionResult(matched=False, metrics=metrics)
 
     # 条件2：放量（当前成交量 ≥ 前3根均量 × 倍数）
@@ -305,6 +331,8 @@ def detect_xianren_zhilu_vectorized(
         return []
 
     shadow_ratio_threshold = float(params["shadow_ratio"])
+    lower_shadow_pct = float(params["lower_shadow_pct"])
+    max_gain_pct = float(params["max_gain_pct"])
     volume_multiplier = float(params["volume_multiplier"])
     lookback_bars = int(params["lookback_bars"])
     ma_period = int(params["ma_period"])
@@ -318,19 +346,31 @@ def detect_xianren_zhilu_vectorized(
     opens = code_frame["open"].values.astype(np.float64)
     closes = code_frame["close"].values.astype(np.float64)
     highs = code_frame["high"].values.astype(np.float64)
+    lows = code_frame["low"].values.astype(np.float64)
     volumes = code_frame["volume"].values.astype(np.float64)
     mas = code_frame["ma"].values.astype(np.float64)
     ts_values = code_frame["ts"].values
 
-    # 条件1：阳线且有上影线
+    # 条件1：close >= open 且有上影线
     body = closes - opens
     shadow = highs - closes
-    is_bull = body > 0
+    max_gain = highs - opens
+    is_bull = closes >= opens
     has_shadow = shadow > 0
+    has_gain = max_gain > 0
 
-    # 条件2：上影线 / 实体 >= shadow_ratio（body > 0 已由 is_bull 保证）
-    safe_body = np.where(body > 0, body, 1.0)
-    cond_shadow = (shadow / safe_body) >= shadow_ratio_threshold
+    # 条件2：上影线占最大涨幅百分比 >= shadow_ratio
+    safe_gain = np.where(max_gain > 0, max_gain, 1.0)
+    cond_shadow = (shadow / safe_gain * 100) >= shadow_ratio_threshold
+
+    # 条件2a：下影线 < 上影线 × lower_shadow_pct%
+    lower_shadow = np.maximum(opens - lows, 0.0)
+    safe_shadow = np.where(shadow > 0, shadow, 1.0)
+    cond_lower = lower_shadow < safe_shadow * (lower_shadow_pct / 100)
+
+    # 条件2b：当日最大涨幅 >= max_gain_pct%
+    safe_opens = np.where(opens > 0, opens, 1.0)
+    cond_gain_pct = (max_gain / safe_opens * 100) >= max_gain_pct
 
     # 条件3：放量（volume >= 前3根均量 × multiplier）
     avg_vol_3 = pd.Series(volumes).rolling(3, min_periods=3).mean().shift(1).values
@@ -346,7 +386,7 @@ def detect_xianren_zhilu_vectorized(
     indices = np.arange(n)
     cond_data = indices >= max(min_bars - 1, 3)
 
-    matched = is_bull & has_shadow & cond_shadow & cond_volume & cond_ma & cond_data
+    matched = is_bull & has_shadow & has_gain & cond_shadow & cond_lower & cond_gain_pct & cond_volume & cond_ma & cond_data
 
     hit_indices = np.where(matched)[0]
     results: list[DetectionResult] = []
@@ -358,7 +398,7 @@ def detect_xianren_zhilu_vectorized(
             pattern_start_ts=ts_values[i],
             pattern_end_ts=ts_values[i],
             metrics={
-                "shadow_ratio": round(float(shadow[i] / body[i]), 3),
+                "shadow_ratio": round(float(shadow[i] / max_gain[i] * 100), 2),
                 "volume_ratio": round(float(volumes[i] / avg_vol_3[i]), 2),
                 "ma_current": round(float(mas[i]), 2),
                 "ma_lookback": round(float(ma_lookback[i]), 2),

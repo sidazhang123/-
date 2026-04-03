@@ -164,21 +164,34 @@ def _coerce_datetime(value: Any) -> datetime | None:
 
 def _datetime_midpoint(start: datetime, end: datetime) -> datetime:
     """
+    计算两个时间点的中点。
+
     输入：
-    1. start: 输入参数，具体约束以调用方和实现为准。
-    2. end: 输入参数，具体约束以调用方和实现为准。
+    1. start: 起始时间。
+    2. end: 结束时间。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. start 与 end 的时间中点。
     用途：
-    1. 执行 `_datetime_midpoint` 对应的业务或工具逻辑。
+    1. 为无明确锚点的信号标记推算展示位置。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. start 与 end 相同时返回其本身。
     """
     return start + (end - start) / 2
 
 
 def _extract_latest_pattern_window(payload: dict[str, Any]) -> dict[str, Any] | None:
-    """Extract the latest pattern window from strategy payload when available."""
+    """从策略 payload 的 patterns 列表中提取最新一条形态窗口。
+
+    输入：
+    1. payload: 策略结果的原始负载字典。
+    输出：
+    1. 返回窗口信息字典，包含 anchor_day、window_start、window_end 的原始值与解析后 datetime。
+    2. 无有效 pattern 时返回 None。
+    用途：
+    1. 为未在顶层明确声明窗口字段的策略提供图表展示区间的回退推导。
+    边界条件：
+    1. 仅读取列表末尾的 pattern；无效或时间解析失败时跳过。
+    """
     patterns = payload.get("patterns") if isinstance(payload.get("patterns"), list) else None
     if not patterns:
         return None
@@ -317,16 +330,18 @@ def _validate_params_shape(
     path: str = "group_params",
 ) -> list[str]:
     """
+    递归校验提交参数的结构是否与模板一致。
+
     输入：
-    1. submitted: 输入参数，具体约束以调用方和实现为准。
-    2. template: 输入参数，具体约束以调用方和实现为准。
-    3. path: 输入参数，具体约束以调用方和实现为准。
+    1. submitted: 前端提交的参数值。
+    2. template: 策略 manifest 中的 default_params 模板。
+    3. path: 当前递归路径，用于报错定位。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 返回错误消息列表；空列表表示校验通过。
     用途：
-    1. 执行 `_validate_params_shape` 对应的业务或工具逻辑。
+    1. 保存监控页设置时校验 group_params 字段类型、嵌套结构和未知字段。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. template 为 None 时跳过校验；模板为空列表时仅校验 submitted 是否为列表。
     """
     errors: list[str] = []
 
@@ -468,11 +483,11 @@ def health() -> dict[str, str]:
     输入：
     1. 无显式输入参数。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 固定返回 `{"status": "ok"}`。
     用途：
-    1. 执行 `health` 对应的业务或工具逻辑。
+    1. 服务健康检查。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 无。
     """
     return {"status": "ok"}
 
@@ -502,13 +517,13 @@ def get_maintenance_runtime_metadata() -> dict[str, Any]:
 def list_strategy_groups(request: Request) -> dict[str, Any]:
     """
     输入：
-    1. request: 输入参数，具体约束以调用方和实现为准。
+    1. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 包含 items 列表的字典，每项为策略组摘要。
     用途：
-    1. 执行 `list_strategy_groups` 对应的业务或工具逻辑。
+    1. 供前端下拉菜单加载全部策略组。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 无策略组时返回空列表。
     """
     registry = request.app.state.strategy_registry
     return {"items": registry.list_groups()}
@@ -518,14 +533,14 @@ def list_strategy_groups(request: Request) -> dict[str, Any]:
 def get_strategy_group(group_id: str, request: Request) -> dict[str, Any]:
     """
     输入：
-    1. group_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. group_id: 策略组 ID。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 策略组完整 manifest 信息。
     用途：
-    1. 执行 `get_strategy_group` 对应的业务或工具逻辑。
+    1. 读取单个策略组的参数模板、帮助文本等详情。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 策略组不存在时返回 404。
     """
     registry = request.app.state.strategy_registry
     try:
@@ -538,13 +553,13 @@ def get_strategy_group(group_id: str, request: Request) -> dict[str, Any]:
 def get_monitor_ui_settings(request: Request) -> dict[str, Any]:
     """
     输入：
-    1. request: 输入参数，具体约束以调用方和实现为准。
+    1. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 监控页表单配置字典，含 group_params 与 per_strategy_params。
     用途：
-    1. 执行 `get_monitor_ui_settings` 对应的业务或工具逻辑。
+    1. 前端加载监控页已保存的表单状态。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 未保存过时返回空字典。
     """
     state_db = request.app.state.state_db
     return {"settings": _normalize_monitor_settings_payload(state_db.get_monitor_form_settings())}
@@ -554,14 +569,14 @@ def get_monitor_ui_settings(request: Request) -> dict[str, Any]:
 def save_monitor_ui_settings(payload: MonitorFormSettingsPayload, request: Request) -> dict[str, Any]:
     """
     输入：
-    1. payload: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. payload: 监控页表单配置。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 保存后的完整设置字典。
     用途：
-    1. 执行 `save_monitor_ui_settings` 对应的业务或工具逻辑。
+    1. 持久化监控页表单配置，并同步更新 per_strategy_params。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 策略组不存在或参数校验失败时返回 400。
     """
     state_db = request.app.state.state_db
     registry = request.app.state.strategy_registry
@@ -613,13 +628,13 @@ def save_monitor_ui_settings(payload: MonitorFormSettingsPayload, request: Reque
 def get_maintenance_ui_settings(request: Request) -> dict[str, Any]:
     """
     输入：
-    1. request: 输入参数，具体约束以调用方和实现为准。
+    1. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 维护页表单配置字典。
     用途：
-    1. 执行 `get_maintenance_ui_settings` 对应的业务或工具逻辑。
+    1. 前端加载维护页已保存的表单状态。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 未保存过时返回空字典。
     """
     state_db = request.app.state.state_db
     return {"settings": state_db.get_maintenance_form_settings()}
@@ -629,14 +644,14 @@ def get_maintenance_ui_settings(request: Request) -> dict[str, Any]:
 def save_maintenance_ui_settings(payload: MaintenanceFormSettingsPayload, request: Request) -> dict[str, Any]:
     """
     输入：
-    1. payload: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. payload: 维护页表单配置。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 保存后的完整设置字典。
     用途：
-    1. 执行 `save_maintenance_ui_settings` 对应的业务或工具逻辑。
+    1. 持久化维护页表单配置。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 无。
     """
     state_db = request.app.state.state_db
     settings = payload.model_dump()
@@ -648,14 +663,14 @@ def save_maintenance_ui_settings(payload: MaintenanceFormSettingsPayload, reques
 def create_task(payload: CreateTaskRequest, request: Request) -> CreateTaskResponse:
     """
     输入：
-    1. payload: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. payload: 任务创建参数（股票、策略、时间窗口等）。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 新任务 ID。
     用途：
-    1. 执行 `create_task` 对应的业务或工具逻辑。
+    1. 创建筛选任务并异步执行。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 维护/概念任务运行中时返回 409；参数不合法返回 400。
     """
     task_manager = request.app.state.task_manager
     maintenance_manager = request.app.state.maintenance_manager
@@ -721,14 +736,14 @@ def get_result_stock_concepts(task_id: str, request: Request) -> ResultStockConc
 def pause_task(task_id: str, request: Request) -> TaskControlResponse:
     """
     输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. task_id: 筛选任务 ID。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 任务控制响应（含新状态）。
     用途：
-    1. 执行 `pause_task` 对应的业务或工具逻辑。
+    1. 暂停运行中的筛选任务。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     task_manager = request.app.state.task_manager
     try:
@@ -742,14 +757,14 @@ def pause_task(task_id: str, request: Request) -> TaskControlResponse:
 def resume_task(task_id: str, request: Request) -> TaskControlResponse:
     """
     输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. task_id: 筛选任务 ID。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 任务控制响应（含新状态）。
     用途：
-    1. 执行 `resume_task` 对应的业务或工具逻辑。
+    1. 恢复已暂停的筛选任务。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     task_manager = request.app.state.task_manager
     try:
@@ -763,14 +778,14 @@ def resume_task(task_id: str, request: Request) -> TaskControlResponse:
 def stop_task(task_id: str, request: Request) -> TaskControlResponse:
     """
     输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. task_id: 筛选任务 ID。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 任务控制响应（含新状态）。
     用途：
-    1. 执行 `stop_task` 对应的业务或工具逻辑。
+    1. 停止运行中或已暂停的筛选任务。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     task_manager = request.app.state.task_manager
     try:
@@ -788,15 +803,15 @@ def list_tasks(
 ) -> dict[str, Any]:
     """
     输入：
-    1. request: 输入参数，具体约束以调用方和实现为准。
-    2. offset: 输入参数，具体约束以调用方和实现为准。
-    3. limit: 输入参数，具体约束以调用方和实现为准。
+    1. request: 请求上下文。
+    2. offset: 分页起始偏移。
+    3. limit: 每页最大条数。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 包含 items 列表的任务列表字典。
     用途：
-    1. 执行 `list_tasks` 对应的业务或工具逻辑。
+    1. 分页读取筛选任务列表。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 无任务时返回空列表。
     """
     state_db = request.app.state.state_db
     return {"items": state_db.list_tasks(offset=offset, limit=limit)}
@@ -854,41 +869,20 @@ def get_task_params(task_id: str, request: Request) -> dict[str, Any]:
 def get_task(task_id: str, request: Request) -> TaskStatusResponse:
     """
     输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. task_id: 筛选任务 ID。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 筛选任务状态响应。
     用途：
-    1. 执行 `get_task` 对应的业务或工具逻辑。
+    1. 读取单个筛选任务的当前状态与进度。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     state_db = request.app.state.state_db
     task = state_db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
-
-    summary = task.get("summary") or {}
-    run_mode = (task.get("params") or {}).get("run_mode") or "full"
-    return TaskStatusResponse(
-        task_id=task["task_id"],
-        status=task["status"],
-        progress=float(task.get("progress") or 0.0),
-        total_stocks=int(task.get("total_stocks") or 0),
-        processed_stocks=int(task.get("processed_stocks") or 0),
-        result_count=int(task.get("result_count") or 0),
-        info_log_count=int(task.get("info_log_count") or 0),
-        error_log_count=int(task.get("error_log_count") or 0),
-        current_code=task.get("current_code"),
-        started_at=task.get("started_at"),
-        finished_at=task.get("finished_at"),
-        error_message=task.get("error_message"),
-        unresolved_inputs=summary.get("unresolved_inputs") or [],
-        run_mode=run_mode,
-        strategy_group_id=task.get("strategy_group_id") or "",
-        strategy_name=task.get("strategy_name") or "",
-        strategy_description=task.get("strategy_description") or "",
-    )
+    return TaskStatusResponse(**_task_status_dict(task))
 
 
 @router.get("/tasks/{task_id}/logs", response_model=LogsResponse)
@@ -902,18 +896,17 @@ def get_logs(
 ) -> LogsResponse:
     """
     输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
-    3. level: 输入参数，具体约束以调用方和实现为准。
-    4. after_log_id: 输入参数，具体约束以调用方和实现为准。
-    5. offset: 输入参数，具体约束以调用方和实现为准。
-    6. limit: 输入参数，具体约束以调用方和实现为准。
+    1. task_id: 筛选任务 ID。
+    2. level: 日志级别过滤（all/info/error）。
+    3. after_log_id: 增量游标，仅返回该 ID 之后的日志。
+    4. offset: 分页偏移。
+    5. limit: 每页最大条数。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 日志列表与下次轮询游标。
     用途：
-    1. 执行 `get_logs` 对应的业务或工具逻辑。
+    1. 前端分页或增量拉取筛选任务日志。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     state_db = request.app.state.state_db
     if not state_db.get_task(task_id):
@@ -938,16 +931,15 @@ def get_results(
 ) -> ResultsResponse:
     """
     输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
-    3. offset: 输入参数，具体约束以调用方和实现为准。
-    4. limit: 输入参数，具体约束以调用方和实现为准。
+    1. task_id: 筛选任务 ID。
+    2. offset: 分页偏移。
+    3. limit: 每页最大条数。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 结果列表与分页信息。
     用途：
-    1. 执行 `get_results` 对应的业务或工具逻辑。
+    1. 分页读取筛选任务命中结果。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     state_db = request.app.state.state_db
     task = state_db.get_task(task_id)
@@ -968,14 +960,14 @@ def get_results(
 def get_result_stocks(task_id: str, request: Request) -> dict[str, Any]:
     """
     输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. task_id: 筛选任务 ID。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 包含命中股票汇总列表。
     用途：
-    1. 执行 `get_result_stocks` 对应的业务或工具逻辑。
+    1. 结果页左侧股票列表加载。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     state_db = request.app.state.state_db
     if not state_db.get_task(task_id):
@@ -1041,18 +1033,17 @@ def get_stock_chart(
 ) -> dict[str, Any]:
     """
     输入：
-    1. task_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
-    3. code: 输入参数，具体约束以调用方和实现为准。
-    4. timeframe: 输入参数，具体约束以调用方和实现为准。
-    5. padding_bars: 输入参数，具体约束以调用方和实现为准。
-    6. interval_bars: 输入参数，具体约束以调用方和实现为准。
+    1. task_id: 筛选任务 ID。
+    2. code: 股票代码。
+    3. timeframe: K 线周期。
+    4. padding_bars: 窗口前后补充 bar 数。
+    5. interval_bars: 信号默认展开 bar 数。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. K 线数据、信号标注、高亮区间及策略元信息。
     用途：
-    1. 执行 `get_stock_chart` 对应的业务或工具逻辑。
+    1. 结果页单股图表展示。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在返回 404；不支持的周期返回 400；无信号时返回空列表。
     """
     if timeframe not in TIMEFRAME_TO_TABLE:
         raise HTTPException(status_code=400, detail=f"不支持的周期: {timeframe}")
@@ -1242,14 +1233,14 @@ def get_stock_chart(
 def create_maintenance_job(payload: MaintenanceCreateRequest, request: Request) -> MaintenanceCreateResponse:
     """
     输入：
-    1. payload: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. payload: 维护任务创建参数（mode）。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 新维护任务 ID。
     用途：
-    1. 执行 `create_maintenance_job` 对应的业务或工具逻辑。
+    1. 创建 K 线维护任务并异步执行。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 参数不合法时返回 400。
     """
     manager = request.app.state.maintenance_manager
     try:
@@ -1358,15 +1349,15 @@ def list_maintenance_jobs(
 ) -> dict[str, Any]:
     """
     输入：
-    1. request: 输入参数，具体约束以调用方和实现为准。
-    2. offset: 输入参数，具体约束以调用方和实现为准。
-    3. limit: 输入参数，具体约束以调用方和实现为准。
+    1. request: 请求上下文。
+    2. offset: 分页偏移。
+    3. limit: 每页最大条数。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 维护任务列表。
     用途：
-    1. 执行 `list_maintenance_jobs` 对应的业务或工具逻辑。
+    1. 分页读取维护任务历史。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 无任务时返回空列表。
     """
     state_db = request.app.state.state_db
     raw_items = state_db.list_maintenance_jobs(offset=offset, limit=limit)
@@ -1391,63 +1382,34 @@ def list_maintenance_jobs(
 def get_maintenance_job(job_id: str, request: Request) -> MaintenanceStatusResponse:
     """
     输入：
-    1. job_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. job_id: 维护任务 ID。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 维护任务状态响应。
     用途：
-    1. 执行 `get_maintenance_job` 对应的业务或工具逻辑。
+    1. 读取单个维护任务的当前状态与摘要。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     state_db = request.app.state.state_db
     job = state_db.get_maintenance_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"维护任务不存在: {job_id}")
-    summary_raw = job.get("summary") if isinstance(job.get("summary"), dict) else {}
-    rows_written = summary_raw.get("rows_written")
-    if not isinstance(rows_written, dict):
-        rows_written = {}
-    summary = {
-        "steps_total": int(summary_raw.get("steps_total") or 0),
-        "steps_completed": int(summary_raw.get("steps_completed") or 0),
-        "total_tasks": int(summary_raw.get("total_tasks") or 0),
-        "success_tasks": int(summary_raw.get("success_tasks") or 0),
-        "failed_tasks": int(summary_raw.get("failed_tasks") or 0),
-        "retry_rounds_used": int(summary_raw.get("retry_rounds_used") or 0),
-        "rows_written": rows_written,
-        "retry_skipped_tasks": int(summary_raw.get("retry_skipped_tasks") or 0),
-        "removed_corrupted_rows": int(summary_raw.get("removed_corrupted_rows") or 0),
-        "duration_seconds": float(summary_raw.get("duration_seconds") or 0.0),
-    }
-    fetch_progress_raw = summary_raw.get("fetch_progress")
-    if isinstance(fetch_progress_raw, dict):
-        summary["fetch_progress"] = fetch_progress_raw
-    return MaintenanceStatusResponse(
-        job_id=job["job_id"],
-        status=job["status"],
-        phase=job.get("phase"),
-        progress=float(job.get("progress") or 0.0),
-        mode=str(job.get("mode") or "latest_update"),
-        started_at=job.get("started_at"),
-        finished_at=job.get("finished_at"),
-        error_message=job.get("error_message"),
-        summary=summary,
-    )
+    return MaintenanceStatusResponse(**_maintenance_status_dict(job))
 
 
 @router.post("/maintenance/jobs/{job_id}/stop", response_model=MaintenanceControlResponse)
 def stop_maintenance_job(job_id: str, request: Request) -> MaintenanceControlResponse:
     """
     输入：
-    1. job_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
+    1. job_id: 维护任务 ID。
+    2. request: 请求上下文。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 任务控制响应（含新状态）。
     用途：
-    1. 执行 `stop_maintenance_job` 对应的业务或工具逻辑。
+    1. 停止运行中的维护任务。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     manager = request.app.state.maintenance_manager
     try:
@@ -1468,18 +1430,17 @@ def get_maintenance_logs(
 ) -> MaintenanceLogsResponse:
     """
     输入：
-    1. job_id: 输入参数，具体约束以调用方和实现为准。
-    2. request: 输入参数，具体约束以调用方和实现为准。
-    3. level: 输入参数，具体约束以调用方和实现为准。
-    4. after_log_id: 输入参数，具体约束以调用方和实现为准。
-    5. offset: 输入参数，具体约束以调用方和实现为准。
-    6. limit: 输入参数，具体约束以调用方和实现为准。
+    1. job_id: 维护任务 ID。
+    2. level: 日志级别过滤（all/info/error）。
+    3. after_log_id: 增量游标。
+    4. offset: 分页偏移。
+    5. limit: 每页最大条数。
     输出：
-    1. 返回值语义由函数实现定义；无返回时为 `None`。
+    1. 日志列表与下次轮询游标。
     用途：
-    1. 执行 `get_maintenance_logs` 对应的业务或工具逻辑。
+    1. 前端分页或增量拉取维护任务日志。
     边界条件：
-    1. 关键边界与异常分支按函数体内判断与调用约定处理。
+    1. 任务不存在时返回 404。
     """
     state_db = request.app.state.state_db
     if not state_db.get_maintenance_job(job_id):

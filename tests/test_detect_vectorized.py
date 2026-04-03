@@ -163,7 +163,9 @@ class TestXianrenZhiluVectorized:
         params = {
             "enabled": True,
             "ma_period": 5,
-            "shadow_ratio": 0.6,
+            "shadow_ratio": 40,
+            "lower_shadow_pct": 30.0,
+            "max_gain_pct": 3.0,
             "volume_multiplier": 1.3,
             "lookback_bars": 5,
             "price_decline_ratio": 1.0,  # 放宽以便有命中
@@ -182,7 +184,9 @@ class TestXianrenZhiluVectorized:
         """空数据返回空列表。"""
         df = pd.DataFrame()
         params = {
-            "shadow_ratio": 0.6,
+            "shadow_ratio": 40,
+            "lower_shadow_pct": 30.0,
+            "max_gain_pct": 7.0,
             "volume_multiplier": 1.3,
             "lookback_bars": 5,
             "ma_period": 5,
