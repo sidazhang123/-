@@ -297,7 +297,7 @@ def _evaluate_triangle(
     if n < segment_count:
         return None
 
-    # §9 分段分位数边界构造
+    # §9 分段分位数边界构造（纯 Python 排序 + 闭合回归，避免小数组 numpy 开销）
     seg_size = n / segment_count
     upper_vals: list[float] = []
     lower_vals: list[float] = []
@@ -310,23 +310,46 @@ def _evaluate_triangle(
         if seg_start >= seg_end:
             return None
 
-        seg_highs = highs[seg_start:seg_end]
-        seg_lows = lows[seg_start:seg_end]
+        # 转为 Python list 后排序，避免 np.sort 的 copy+dispatch 开销
+        sh = sorted(highs[seg_start:seg_end].tolist())
+        sl = sorted(lows[seg_start:seg_end].tolist())
+        k = len(sh)
+        # Q90 on sorted highs
+        q_idx_h = 0.9 * (k - 1)
+        i_h = int(q_idx_h)
+        frac_h = q_idx_h - i_h
+        i_h_next = min(i_h + 1, k - 1)
+        q90 = sh[i_h] + frac_h * (sh[i_h_next] - sh[i_h])
+        # Q10 on sorted lows
+        q_idx_l = 0.1 * (k - 1)
+        i_l = int(q_idx_l)
+        frac_l = q_idx_l - i_l
+        i_l_next = min(i_l + 1, k - 1)
+        q10 = sl[i_l] + frac_l * (sl[i_l_next] - sl[i_l])
 
-        upper_vals.append(float(np.quantile(seg_highs, 0.9)))
-        lower_vals.append(float(np.quantile(seg_lows, 0.1)))
+        upper_vals.append(q90)
+        lower_vals.append(q10)
         center_xs.append((seg_start + seg_end - 1) / 2.0)
 
-    xs = np.array(center_xs, dtype=np.float64)
-    us = np.array(upper_vals, dtype=np.float64)
-    ls = np.array(lower_vals, dtype=np.float64)
-
-    # §10 线性回归
-    b_u, a_u = np.polyfit(xs, us, 1)
-    b_l, a_l = np.polyfit(xs, ls, 1)
+    # §10 线性回归（纯 Python 闭合公式，4~20 个点无需 numpy）
+    n_seg = float(len(center_xs))
+    sx = sum(center_xs)
+    sxx = sum(x * x for x in center_xs)
+    denom_reg = n_seg * sxx - sx * sx
+    if denom_reg == 0:
+        return None
+    sy_u = sum(upper_vals)
+    sxy_u = sum(x * u for x, u in zip(center_xs, upper_vals))
+    b_u = (n_seg * sxy_u - sx * sy_u) / denom_reg
+    a_u = (sy_u - b_u * sx) / n_seg
+    sy_l = sum(lower_vals)
+    sxy_l = sum(x * l for x, l in zip(center_xs, lower_vals))
+    b_l = (n_seg * sxy_l - sx * sy_l) / denom_reg
+    a_l = (sy_l - b_l * sx) / n_seg
 
     # §11 参考价格与单位斜率
-    p_ref = float(np.median(closes))
+    half = n >> 1
+    p_ref = float(np.partition(closes, half)[half])
     if p_ref <= 0:
         return None
 
@@ -428,12 +451,14 @@ def _evaluate_triangle(
     score_apex = apex_progress
     score_symmetry = 1.0 - slope_symmetry_ratio
 
-    # fit_error: MARE
-    fitted_upper = a_u + b_u * xs
-    fitted_lower = a_l + b_l * xs
-    upper_errors = np.abs(us - fitted_upper) / np.where(fitted_upper > 0, fitted_upper, 1.0)
-    lower_errors = np.abs(ls - fitted_lower) / np.where(fitted_lower > 0, fitted_lower, 1.0)
-    fit_error = float(np.mean(np.concatenate([upper_errors, lower_errors])))
+    # fit_error: MARE（纯 Python，segment 点数少无需 numpy）
+    err_sum = 0.0
+    for x_pt, u_pt, l_pt in zip(center_xs, upper_vals, lower_vals):
+        fu = a_u + b_u * x_pt
+        fl = a_l + b_l * x_pt
+        err_sum += abs(u_pt - fu) / (fu if fu > 0 else 1.0)
+        err_sum += abs(l_pt - fl) / (fl if fl > 0 else 1.0)
+    fit_error = err_sum / (2.0 * len(center_xs))
     score_fit = max(0.0, 1.0 - fit_error)
 
     score = (
@@ -468,35 +493,29 @@ def _evaluate_triangle(
     )
 
 
-def _scan_tf_for_code(
+def _scan_tf_arrays(
     *,
-    code_frame: pd.DataFrame,
+    ts_arr: np.ndarray,
+    highs_all: np.ndarray,
+    lows_all: np.ndarray,
+    closes_all: np.ndarray,
+    n_total: int,
     params: dict[str, Any],
     tf_key: str,
 ) -> TriangleResult | None:
-    """在单只股票的单个周期数据上搜索最优三角形窗口。
+    """在原始 numpy 数组上搜索最优三角形窗口（无 DataFrame 开销）。
 
     输入：
-    1. code_frame: 单只股票在该周期的 OHLCV DataFrame（已按 ts 排序）。
-    2. params: 已规范化的单周期参数。
-    3. tf_key: 周期标识。
+    1. ts_arr: numpy datetime64 时间戳数组。
+    2. highs_all/lows_all/closes_all: float64 价格数组。
+    3. n_total: 有效数据长度（可小于数组物理长度，用于支持滑窗裁剪）。
+    4. params: 已规范化的单周期参数。
+    5. tf_key: 周期标识。
     输出：
     1. 返回该周期下评分最高的 TriangleResult，或无命中时返回 None。
-       结果中 start_idx / end_idx 为窗口在 code_frame 中的绝对索引。
-    用途：
-    1. 枚举所有合法候选窗口，逐窗口评估后保留同周期最优。
-    边界条件：
-    1. 数据不足时返回 None。
-    2. t_e 和 t_s 统一步长枚举，通过时间戳校验月数合法性。
     """
-    if code_frame.empty:
+    if n_total == 0:
         return None
-
-    ts_arr = code_frame["ts"].values  # numpy datetime64 array
-    highs_all = code_frame["high"].values.astype(np.float64)
-    lows_all = code_frame["low"].values.astype(np.float64)
-    closes_all = code_frame["close"].values.astype(np.float64)
-    n_total = len(code_frame)
 
     search_recent_weeks = params.get("search_recent_weeks", 0)
     pattern_months_min = params["pattern_months_min"]
@@ -509,31 +528,31 @@ def _scan_tf_for_code(
 
     step = _TF_STEP[tf_key]
 
-    # 搜索范围：t_e 的时间必须在 [T_latest - search_recent_weeks, T_latest]
-    # search_recent_weeks <= 0 表示不限制（回测模式下 scope 参数已剥离）
-    latest_ts = pd.Timestamp(ts_arr[-1])
+    # 搜索范围：使用 numpy datetime64 比较（避免 pd.Timestamp 开销）
+    latest_ts = ts_arr[n_total - 1]
     if search_recent_weeks > 0:
-        search_start_ts = latest_ts - pd.Timedelta(weeks=search_recent_weeks)
+        search_start_ts = latest_ts - np.timedelta64(search_recent_weeks * 7, "D")
     else:
-        search_start_ts = pd.Timestamp(ts_arr[0])
+        search_start_ts = ts_arr[0]
 
-    # 月数换算常量
-    days_per_month = 30.0
+    # 月→天 timedelta（预计算，避免循环内重复构造）
+    td_max = np.timedelta64(int(pattern_months_max * 30), "D")
+    td_min = np.timedelta64(int(pattern_months_min * 30), "D")
 
     best: TriangleResult | None = None
 
     # t_e 从最新向前枚举
     for e_idx in range(n_total - 1, -1, -step):
-        te_ts = pd.Timestamp(ts_arr[e_idx])
+        te_ts = ts_arr[e_idx]
         if te_ts < search_start_ts:
             break
 
-        # t_s 从最远到最近枚举
-        earliest_start_ts = te_ts - pd.Timedelta(days=pattern_months_max * days_per_month)
-        latest_start_ts = te_ts - pd.Timedelta(days=pattern_months_min * days_per_month)
+        # t_s 时间界限（numpy timedelta64 运算）
+        earliest_start_ts = te_ts - td_max
+        latest_start_ts = te_ts - td_min
 
         for s_idx in range(0, e_idx, step):
-            ts_ts = pd.Timestamp(ts_arr[s_idx])
+            ts_ts = ts_arr[s_idx]
 
             # 时间合法性检查
             if ts_ts < earliest_start_ts:
@@ -548,7 +567,6 @@ def _scan_tf_for_code(
 
             # 半区粗筛：前半 high 最大值应 > 后半（上沿下降趋势），
             # 后半 low 最小值应 > 前半（下沿上升趋势）。
-            # 比完整 _evaluate_triangle 便宜一个数量级，可淘汰 70-85% 的窗口。
             mid = (s_idx + e_idx) // 2
             if highs_all[mid:e_idx + 1].max() >= highs_all[s_idx:mid].max():
                 continue
@@ -585,12 +603,47 @@ def _scan_tf_for_code(
 
     # 最新 K 线破位检查：若最新收盘价低于三角下沿的容忍度则放弃
     if best is not None:
-        latest_close = float(closes_all[-1])
+        latest_close = float(closes_all[n_total - 1])
         lower_threshold = best.lower_end * (1.0 - params["lower_break_pct"])
         if latest_close < lower_threshold:
             best = None
 
     return best
+
+
+def _scan_tf_for_code(
+    *,
+    code_frame: pd.DataFrame,
+    params: dict[str, Any],
+    tf_key: str,
+) -> TriangleResult | None:
+    """在单只股票的单个周期数据上搜索最优三角形窗口（DataFrame 入口）。
+
+    输入：
+    1. code_frame: 单只股票在该周期的 OHLCV DataFrame（已按 ts 排序）。
+    2. params: 已规范化的单周期参数。
+    3. tf_key: 周期标识。
+    输出：
+    1. 返回该周期下评分最高的 TriangleResult，或无命中时返回 None。
+       结果中 start_idx / end_idx 为窗口在 code_frame 中的绝对索引。
+    """
+    if code_frame.empty:
+        return None
+
+    ts_arr = code_frame["ts"].values
+    highs_all = code_frame["high"].values.astype(np.float64)
+    lows_all = code_frame["low"].values.astype(np.float64)
+    closes_all = code_frame["close"].values.astype(np.float64)
+
+    return _scan_tf_arrays(
+        ts_arr=ts_arr,
+        highs_all=highs_all,
+        lows_all=lows_all,
+        closes_all=closes_all,
+        n_total=len(code_frame),
+        params=params,
+        tf_key=tf_key,
+    )
 
 
 def detect_converging_triangle(
@@ -1005,9 +1058,14 @@ def detect_converging_triangle_vectorized(
     if code_frame.empty or not params.get("enabled", True):
         return []
 
+    # 预提取 numpy 数组，避免每次锚点循环都创建 sub-DataFrame
     ts_arr = code_frame["ts"].values
+    highs_all = code_frame["high"].values.astype(np.float64)
+    lows_all = code_frame["low"].values.astype(np.float64)
+    closes_all = code_frame["close"].values.astype(np.float64)
     n_total = len(code_frame)
 
+    pattern_months_min = params["pattern_months_min"]
     search_recent_weeks = params.get("search_recent_weeks", 0)
 
     # 锚点步长: search_recent_weeks 对应的 bar 数（避免搜索窗口重叠）
@@ -1024,7 +1082,6 @@ def detect_converging_triangle_vectorized(
             anchor_step = max(int(pattern_months_min * 21), 1)
 
     # 最小有效锚点位置: pattern_months_min 对应的 bar 数 + segment_count
-    pattern_months_min = params["pattern_months_min"]
     if tf_key == "w":
         min_bars_needed = max(int(pattern_months_min * 4.3), params["segment_count"])
     else:
@@ -1033,20 +1090,26 @@ def detect_converging_triangle_vectorized(
     all_hits: list[DetectionResult] = []
     last_hit_end_idx = -1  # 用于去重：跳过与上一个命中重叠的区间
 
-    # 从历史最远端向最新端滑动锚点
+    # 从历史最远端向最新端滑动锚点（直接传递数组 + n_total 截断，无 DataFrame 开销）
     anchor = min_bars_needed
     while anchor < n_total:
-        # 用 code_frame[:anchor+1] 作为"当前可见数据"调用 _scan_tf_for_code
-        sub_frame = code_frame.iloc[: anchor + 1]
-        tri = _scan_tf_for_code(code_frame=sub_frame, params=params, tf_key=tf_key)
+        tri = _scan_tf_arrays(
+            ts_arr=ts_arr,
+            highs_all=highs_all,
+            lows_all=lows_all,
+            closes_all=closes_all,
+            n_total=anchor + 1,
+            params=params,
+            tf_key=tf_key,
+        )
 
         if tri is not None and tri.start_idx > last_hit_end_idx:
             all_hits.append(DetectionResult(
                 matched=True,
                 pattern_start_idx=tri.start_idx,
                 pattern_end_idx=tri.end_idx,
-                pattern_start_ts=code_frame.iloc[tri.start_idx]["ts"],
-                pattern_end_ts=code_frame.iloc[tri.end_idx]["ts"],
+                pattern_start_ts=ts_arr[tri.start_idx],
+                pattern_end_ts=ts_arr[tri.end_idx],
                 metrics={
                     "score": tri.score,
                     "window_bars": tri.window_bars,
@@ -1061,15 +1124,22 @@ def detect_converging_triangle_vectorized(
     # ---- 尾部补扫：确保最后一根K线也被覆盖 ----
     tail_anchor = n_total - 1
     if tail_anchor >= min_bars_needed:
-        sub_frame = code_frame.iloc[: tail_anchor + 1]
-        tri = _scan_tf_for_code(code_frame=sub_frame, params=params, tf_key=tf_key)
+        tri = _scan_tf_arrays(
+            ts_arr=ts_arr,
+            highs_all=highs_all,
+            lows_all=lows_all,
+            closes_all=closes_all,
+            n_total=tail_anchor + 1,
+            params=params,
+            tf_key=tf_key,
+        )
         if tri is not None and tri.start_idx > last_hit_end_idx:
             all_hits.append(DetectionResult(
                 matched=True,
                 pattern_start_idx=tri.start_idx,
                 pattern_end_idx=tri.end_idx,
-                pattern_start_ts=code_frame.iloc[tri.start_idx]["ts"],
-                pattern_end_ts=code_frame.iloc[tri.end_idx]["ts"],
+                pattern_start_ts=ts_arr[tri.start_idx],
+                pattern_end_ts=ts_arr[tri.end_idx],
                 metrics={
                     "score": tri.score,
                     "window_bars": tri.window_bars,

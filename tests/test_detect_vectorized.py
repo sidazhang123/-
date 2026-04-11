@@ -446,3 +446,135 @@ class TestConsecutiveUptrendsVectorized:
         }
         results = cu_module.detect_streak_vectorized(df, params)
         assert results == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# handi_bacong_v1
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestHandiBacongVectorized:
+    """验证 handi_bacong_v1 的放量预过滤不会产生假阴性。"""
+
+    @pytest.fixture
+    def hb_module(self):
+        from strategies.groups.handi_bacong_v1 import engine
+        return engine
+
+    @staticmethod
+    def _build_box_breakout_frame(
+        box_bars: int = 60,
+        breakout_bars: int = 2,
+        base_price: float = 10.0,
+        box_range_pct: float = 25.0,
+        volume_ratio: float = 3.0,
+        freq_days: int = 7,
+    ) -> pd.DataFrame:
+        """构造确定性箱体突破数据。
+
+        箱体内价格在 [base, base*(1+range_pct/100)] 区间震荡，
+        突破 bar 价格远超上沿，量能放大 volume_ratio 倍。
+        """
+        n = box_bars + breakout_bars
+        amp = base_price * box_range_pct / 100.0
+        upper = base_price + amp
+
+        np.random.seed(99)
+        rows = []
+        base_ts = datetime(2018, 1, 1)
+        box_volumes = []
+
+        for i in range(box_bars):
+            mid = base_price + amp * 0.5 + np.random.normal(0, amp * 0.05)
+            o = mid - np.random.uniform(0, amp * 0.15)
+            c = mid + np.random.uniform(0, amp * 0.15)
+            h = max(o, c) + np.random.uniform(0, amp * 0.1)
+            lo = min(o, c) - np.random.uniform(0, amp * 0.1)
+            vol = np.random.uniform(800, 1200)
+            box_volumes.append(vol)
+            rows.append({
+                "code": "TEST",
+                "ts": base_ts + timedelta(days=i * freq_days),
+                "open": round(o, 2),
+                "high": round(h, 2),
+                "low": round(lo, 2),
+                "close": round(c, 2),
+                "volume": round(vol, 2),
+            })
+
+        avg_vol = np.mean(box_volumes)
+        for j in range(breakout_bars):
+            breakout_close = upper + amp * 1.5
+            rows.append({
+                "code": "TEST",
+                "ts": base_ts + timedelta(days=(box_bars + j) * freq_days),
+                "open": round(upper + amp * 0.5, 2),
+                "high": round(breakout_close * 1.02, 2),
+                "low": round(upper, 2),
+                "close": round(breakout_close, 2),
+                "volume": round(avg_vol * volume_ratio, 2),
+            })
+
+        return pd.DataFrame(rows)
+
+    def test_spike_mask_preserves_known_breakout(self, hb_module):
+        """放量预过滤掩码应保留已知突破位置。"""
+        df = self._build_box_breakout_frame()
+        volumes = df["volume"].values.astype(np.float64)
+
+        mask = hb_module._precompute_volume_spike_mask(
+            volumes, breakout_volume_pct=100.0, min_box_bars=4,
+        )
+        # 最后 2 根是突破 bar，mask 应为 True
+        assert mask[-1], "最后一根突破 bar 应通过放量预过滤"
+        assert mask[-2], "倒数第二根突破 bar 应通过放量预过滤"
+
+    def test_vectorized_finds_known_breakout(self, hb_module):
+        """vectorized 应在构造数据中找到箱体突破。"""
+        df = self._build_box_breakout_frame()
+        tf_params = {
+            "enabled": True,
+            "range_pct_min": 15.0,
+            "range_pct_max": 50.0,
+            "touch_tolerance_pct": 10.0,
+            "segment_count": 4,
+            "max_slope_pct": 5.0,
+            "breakout_range_pct": 50.0,
+            "breakout_volume_pct": 100.0,
+        }
+        global_params = {"min_duration_weeks": 6}
+
+        results = hb_module.detect_handi_bacong_vectorized(df, tf_params, global_params, "w")
+        assert len(results) >= 1, "应至少找到 1 段箱体突破命中"
+        assert results[0].matched is True
+
+    def test_low_volume_not_matched(self, hb_module):
+        """突破量不足时不应命中。"""
+        df = self._build_box_breakout_frame(volume_ratio=0.5)
+        tf_params = {
+            "enabled": True,
+            "range_pct_min": 15.0,
+            "range_pct_max": 50.0,
+            "touch_tolerance_pct": 10.0,
+            "segment_count": 4,
+            "max_slope_pct": 5.0,
+            "breakout_range_pct": 50.0,
+            "breakout_volume_pct": 100.0,
+        }
+        global_params = {"min_duration_weeks": 6}
+
+        results = hb_module.detect_handi_bacong_vectorized(df, tf_params, global_params, "w")
+        assert len(results) == 0, "突破量不足时不应命中"
+
+    def test_empty_returns_empty(self, hb_module):
+        """空数据返回空列表。"""
+        df = pd.DataFrame()
+        tf_params = {
+            "enabled": True, "range_pct_min": 20.0, "range_pct_max": 40.0,
+            "touch_tolerance_pct": 10.0, "segment_count": 4,
+            "max_slope_pct": 3.0, "breakout_range_pct": 100.0,
+            "breakout_volume_pct": 100.0,
+        }
+        global_params = {"min_duration_weeks": 6}
+        results = hb_module.detect_handi_bacong_vectorized(df, tf_params, global_params, "w")
+        assert results == []

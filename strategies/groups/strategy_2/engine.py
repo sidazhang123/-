@@ -209,6 +209,26 @@ def detect_strategy_2(
     return DetectionResult(matched=False)
 
 
+def detect_strategy_2_vectorized(
+    daily_frame: pd.DataFrame,
+    params: dict[str, Any],
+) -> list[DetectionResult]:
+    """向量化检测：处理完整历史，返回所有命中的 DetectionResult 列表。
+
+    输入：
+    1. daily_frame: 单只股票的完整日线 DataFrame（已按时间排序）。
+    2. params: 已规范化的策略参数。
+    输出：
+    1. 命中的 DetectionResult 列表；无命中时返回空列表。
+    用途：
+    1. 回测引擎的首选执行路径，一次性扫描整段历史，避免滑窗逐 bar 调用。
+    2. 缺少此函数时，回测将回退到已弃用的 detect 滑窗路径。
+
+    TODO: 复制模板后，实现向量化检测逻辑。
+    """
+    return []
+
+
 # ---------------------------------------------------------------------------
 # 信号组装层：将检测结果转换为前端 payload
 # ---------------------------------------------------------------------------
@@ -485,18 +505,26 @@ def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> d
 #
 # 结构说明：
 #   detect            — 核心检测函数，签名: (df, *, params, tf_key, ...) → DetectionResult
-#   detect_vectorized — 批量检测入口（可选，暂留 None）
-#   prepare           — 预计算指标函数（可选，签名: (df, params) → df），无需时设为 None
+#   detect_vectorized — 向量化检测入口（推荐实现，回测的首选 CPU 路径）
+#   detect_batch      — GPU 批量检测入口（可选，回测 sweep 模式的首选路径）
+#   prepare           — CPU 预计算指标函数（可选，签名: (df, params) → df）
+#   prepare_batch     — GPU 批量预计算函数（可选，签名: (gpu_raw, boundaries, params) → dict）
+#   prepare_key       — sweep 分组键（可选，有 prepare_batch 时推荐，用于合并相同预计算的 combo）
 #   normalize_params  — 将前端 group_params + section_key 转换为 detect 函数的 kwargs
 #   tf_sections       — 回测覆盖的周期分段及其对应K线表名
 #   tf_logic          — 多周期命中逻辑: "and"（全部命中）/ "or"（任一命中）
+#
+# 回测引擎调度优先级： detect_batch (GPU) > detect_vectorized (CPU) > detect (滑窗，已弃用)
 #
 # TODO: 复制模板后，替换 detect / prepare / tf_sections 为实际函数和周期配置。
 # ---------------------------------------------------------------------------
 BACKTEST_HOOKS = {
     "detect": detect_strategy_2,
-    "detect_vectorized": None,
+    "detect_vectorized": detect_strategy_2_vectorized,
+    "detect_batch": None,          # TODO: GPU 批量检测（可选，参考 weekly_oversold_rsi_v1 / consecutive_uptrends_v1）
     "prepare": None,
+    "prepare_batch": None,         # TODO: GPU 批量预计算（可选，参考 weekly_oversold_rsi_v1 / multi_tf_ma_uptrend_v1）
+    "prepare_key": None,           # TODO: sweep 分组键（有 prepare_batch 时推荐，参考 weekly_oversold_rsi_v1）
     "normalize_params": _normalize_for_backtest,
     "tf_sections": {
         "daily": {"tf_key": "d", "table": "klines_d"},

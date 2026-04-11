@@ -41,7 +41,6 @@ class TestApiMonitorContract(unittest.TestCase):
     def test_monitor_form_settings_payload_uses_group_params_object(self) -> None:
         payload = MonitorFormSettingsPayload(
             source_db="D:/quant.duckdb",
-            stocks_input="sh.600000",
             sample_size=20,
             strategy_group_id="demo",
             group_params={"daily": {"lookback_days": 7, "close_to_ma20_pct": 0.05}},
@@ -78,7 +77,6 @@ class TestApiMonitorContract(unittest.TestCase):
 
         payload = MonitorFormSettingsPayload(
             source_db="D:/quant.duckdb",
-            stocks_input="sh.600000",
             sample_size=20,
             strategy_group_id="demo",
             group_params={

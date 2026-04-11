@@ -7,7 +7,8 @@
    a. 【必选】最新 n 根线中 MA 均线斜率百分比落在 [slope_min, slope_max] 区间；
    b. 【可选】连续筛选——所有不重叠窗口斜率均满足区间；
    c. 【可选】收盘偏离——最后一根线收盘价距指定 MA 的偏离幅度在阈值内；
-   d. 【可选】收敛震荡——最后 p 根线的最高/最低振幅小于阈值。
+   d. 【可选】收敛震荡——最后 p 根线的最高/最低振幅小于阈值；
+   e. 【可选】收盘偏离上限——扫描区间内每根线收盘价距主 MA 的偏离幅度不超过阈值（仅筛选模式）。
 3. 仅当所有已启用周期全部通过时产生信号。
 
 斜率公式（百分比）：
@@ -108,6 +109,8 @@ def _normalize_tf_params(group_params: dict[str, Any], section_key: str) -> dict
         "consolidation_enabled": as_bool(raw.get("consolidation_enabled"), False),
         "consolidation_bars": as_int(raw.get("consolidation_bars"), 3, minimum=2, maximum=100),
         "consolidation_max_amp_pct": as_float(raw.get("consolidation_max_amp_pct"), 3.0, minimum=0.1, maximum=100.0),
+        "max_close_deviation_enabled": as_bool(raw.get("max_close_deviation_enabled"), False),
+        "max_close_deviation_pct": as_float(raw.get("max_close_deviation_pct"), 20.0, minimum=0.1, maximum=200.0),
     }
 
 
@@ -255,6 +258,9 @@ def prepare_multi_tf_ma_features(frame: pd.DataFrame, params: dict[str, Any]) ->
     return pd.concat(prepared, axis=0, ignore_index=True)
 
 
+prepare_multi_tf_ma_features._multi_stock = True
+
+
 # ---------------------------------------------------------------------------
 # 条件检查
 # ---------------------------------------------------------------------------
@@ -374,6 +380,38 @@ def _check_consolidation(code_frame: pd.DataFrame, params: dict[str, Any]) -> tu
     return passed, amp_pct, reason
 
 
+def _check_max_close_deviation(code_frame: pd.DataFrame, params: dict[str, Any]) -> tuple[bool, float, str]:
+    """检查扫描区间内每根线的收盘价是否偏离主 MA 超过阈值。
+
+    输入：
+    1. code_frame: 单只股票的有特征列的 DataFrame（含 close、ma 列）。
+    2. params: 已规范化的单周期参数。
+    输出：
+    1. (是否通过, 最大偏离百分比, 失败原因描述)。
+    用途：
+    1. 可选条件：排除扫描区间内曾大幅偏离均线的股票（仅筛选模式使用）。
+    边界条件：
+    1. max_close_deviation_enabled 为 False 时直接返回通过。
+    2. MA 值存在 NaN 或 ≤ 0 的行会被跳过，不影响其余行的判断。
+    3. 全部 MA 值无效时返回 False。
+    """
+    if not params.get("max_close_deviation_enabled", False):
+        return True, 0.0, ""
+
+    closes = code_frame["close"].values
+    ma_values = code_frame["ma"].values
+    valid = (~np.isnan(ma_values)) & (ma_values > 0)
+    if not valid.any():
+        return False, 0.0, "MA 全部无效，无法检查收盘价偏离"
+
+    dev_pct = np.abs(closes[valid] - ma_values[valid]) / ma_values[valid] * 100.0
+    max_dev = float(np.nanmax(dev_pct))
+    limit = float(params.get("max_close_deviation_pct", 20.0))
+    passed = max_dev <= limit
+    reason = "" if passed else f"收盘价最大偏离 {max_dev:.2f}% 超过阈值 {limit}%"
+    return passed, max_dev, reason
+
+
 # ---------------------------------------------------------------------------
 # 单股扫描
 # ---------------------------------------------------------------------------
@@ -383,6 +421,8 @@ def detect_multi_tf_ma_uptrend(
     code_frame: pd.DataFrame,
     params: dict[str, Any],
     tf_key: str,
+    *,
+    metrics_only: bool = False,
 ) -> DetectionResult:
     """对单只股票的单个周期执行全部条件检查。
 
@@ -390,6 +430,8 @@ def detect_multi_tf_ma_uptrend(
     1. code_frame: 单只股票在该周期的特征 DataFrame（含 ma/slope_pct/ma_dev 列）。
     2. params: 已规范化的单周期参数。
     3. tf_key: 周期标识。
+    4. metrics_only: 为 True 时跳过条件门控、只计算 metrics（供向量化命中后
+       收集前端 payload 数据使用）。
     输出：
     1. DetectionResult，matched 表示是否全部通过，metrics 含斜率/偏离/收敛明细。
     用途：
@@ -409,7 +451,7 @@ def detect_multi_tf_ma_uptrend(
     slope_ok, slope_values, slope_reason = _check_slope(code_frame, params)
     metrics["slope_passed"] = slope_ok
     metrics["slope_values"] = [round(v, 4) for v in slope_values]
-    if not slope_ok:
+    if not metrics_only and not slope_ok:
         metrics["reason"] = slope_reason
         return DetectionResult(matched=False, metrics=metrics)
 
@@ -417,7 +459,7 @@ def detect_multi_tf_ma_uptrend(
     dev_ok, dev_pct, dev_reason = _check_close_deviation(code_frame, params)
     metrics["close_deviation_passed"] = dev_ok
     metrics["close_deviation_pct"] = round(dev_pct, 4)
-    if not dev_ok:
+    if not metrics_only and not dev_ok:
         metrics["reason"] = dev_reason
         return DetectionResult(matched=False, metrics=metrics)
 
@@ -425,8 +467,16 @@ def detect_multi_tf_ma_uptrend(
     cons_ok, cons_pct, cons_reason = _check_consolidation(code_frame, params)
     metrics["consolidation_passed"] = cons_ok
     metrics["consolidation_amp_pct"] = round(cons_pct, 4)
-    if not cons_ok:
+    if not metrics_only and not cons_ok:
         metrics["reason"] = cons_reason
+        return DetectionResult(matched=False, metrics=metrics)
+
+    # 可选：收盘价偏离上限（仅筛选模式）
+    hd_ok, hd_max_pct, hd_reason = _check_max_close_deviation(code_frame, params)
+    metrics["max_close_deviation_passed"] = hd_ok
+    metrics["max_close_deviation_max_pct"] = round(hd_max_pct, 4)
+    if not metrics_only and not hd_ok:
+        metrics["reason"] = hd_reason
         return DetectionResult(matched=False, metrics=metrics)
 
     n = int(params["n"])
@@ -473,6 +523,7 @@ def detect_multi_tf_ma_uptrend_vectorized(
     slope_max = float(params["slope_max"])
     continuous = params["continuous_check"]
 
+    xp = np
     ts_values = code_frame["ts"].values
     slope_values = code_frame["slope_pct"].values.astype(np.float64)
     n_total = len(code_frame)
@@ -484,13 +535,12 @@ def detect_multi_tf_ma_uptrend_vectorized(
 
     if continuous:
         window_count = max(n_param // slope_gap, 1)
-        # 对每个 bar，检查它及之前 (window_count-1)*slope_gap 间隔处的斜率是否全部在范围内
-        slope_ok_series = pd.Series(slope_in_range)
-        cond_slope = slope_ok_series.copy()
+        cond_slope = slope_in_range.copy()
         for k in range(1, window_count):
-            shifted = slope_ok_series.shift(k * slope_gap)
-            cond_slope = cond_slope & shifted.where(shifted.notna(), False)
-        cond_slope = cond_slope.values.astype(bool)
+            offset = k * slope_gap
+            shifted = np.zeros(n_total, dtype=bool)
+            shifted[offset:] = slope_in_range[:-offset]
+            cond_slope &= shifted
     else:
         cond_slope = slope_in_range
 
@@ -513,8 +563,12 @@ def detect_multi_tf_ma_uptrend_vectorized(
         amp_limit = float(params["consolidation_max_amp_pct"])
         highs = code_frame["high"].values.astype(np.float64)
         lows = code_frame["low"].values.astype(np.float64)
-        rolling_max_h = pd.Series(highs).rolling(p, min_periods=p).max().values
-        rolling_min_l = pd.Series(lows).rolling(p, min_periods=p).min().values
+        if n_total >= p:
+            rolling_max_h = pd.Series(highs).rolling(p).max().values
+            rolling_min_l = pd.Series(lows).rolling(p).min().values
+        else:
+            rolling_max_h = np.full(n_total, np.nan)
+            rolling_min_l = np.full(n_total, np.nan)
         safe_min_l = np.where(rolling_min_l > 0, rolling_min_l, np.nan)
         with np.errstate(divide="ignore", invalid="ignore"):
             amp_pct = (rolling_max_h - rolling_min_l) / safe_min_l * 100.0
@@ -527,13 +581,14 @@ def detect_multi_tf_ma_uptrend_vectorized(
     hit_indices = np.where(matched)[0]
     results: list[DetectionResult] = []
     for i in hit_indices:
-        start_idx = max(int(i) - n_param + 1, 0)
+        ii = int(i)
+        start_idx = max(ii - n_param + 1, 0)
         results.append(DetectionResult(
             matched=True,
             pattern_start_idx=start_idx,
-            pattern_end_idx=int(i),
+            pattern_end_idx=ii,
             pattern_start_ts=ts_values[start_idx],
-            pattern_end_ts=ts_values[i],
+            pattern_end_ts=ts_values[ii],
             metrics={"tf": tf_key},
         ))
     return results
@@ -794,13 +849,82 @@ def run_multi_tf_ma_uptrend_v1_specialized(
             if code_val in per_code_data:
                 per_code_data[code_val][tf] = code_frame.copy()
 
-    # ── 逐股扫描 ──
+    # ── 向量化批量检测 ──
     scan_start = time.perf_counter()
+
+    # 完全复刻 detect_multi_tf_ma_uptrend() 全部条件，pandas 向量化替代逐股循环 (AND)
+    _batch_hits: set[str] = set(codes)
+    for tf in enabled_tfs:
+        frame = tf_frames[tf]
+        if frame.empty:
+            _batch_hits = set()
+            break
+        _p = all_tf_params[tf]
+        _slope_min = float(_p["slope_min"])
+        _slope_max = float(_p["slope_max"])
+        _continuous = _p["continuous_check"]
+        _n = int(_p["n"])
+        _slope_gap = int(_p["slope_gap"])
+
+        _g = frame.groupby("code", sort=False)
+
+        if not _continuous:
+            _last = _g.last()
+            _slope_ok = (
+                _last["slope_pct"].notna()
+                & (_last["slope_pct"] >= _slope_min)
+                & (_last["slope_pct"] <= _slope_max)
+            )
+        else:
+            _wc = max(_n // _slope_gap, 1)
+            _slope_ok = pd.Series(True, index=_g.last().index)
+            for _offset in range(_wc):
+                _sv = _g["slope_pct"].shift(_offset * _slope_gap)
+                _sv_last = _sv.groupby(frame["code"], sort=False).last()
+                _slope_ok &= _sv_last.notna() & (_sv_last >= _slope_min) & (_sv_last <= _slope_max)
+            _last = _g.last()
+
+        _ok = _slope_ok
+
+        if _p["close_deviation_enabled"]:
+            _ma_dev = _last["ma_dev"]
+            _safe_ma = _ma_dev.where(_ma_dev > 0, np.nan)
+            _dev_pct = (_last["close"] - _safe_ma).abs() / _safe_ma * 100
+            _ok &= _dev_pct.notna() & (_dev_pct <= float(_p["close_deviation_pct"]))
+
+        if _p["consolidation_enabled"]:
+            _cp = int(_p["consolidation_bars"])
+            _cl = float(_p["consolidation_max_amp_pct"])
+            _tail_p = frame.groupby("code", sort=False).tail(_cp)
+            _rmax = _tail_p.groupby("code", sort=False)["high"].max()
+            _rmin = _tail_p.groupby("code", sort=False)["low"].min()
+            _safe_rmin = _rmin.where(_rmin > 0, np.nan)
+            _amp = (_rmax - _rmin) / _safe_rmin * 100
+            _ok &= _amp.notna() & (_amp < _cl)
+
+        _batch_hits &= set(_last.index[_ok])
+
+        # 可选：收盘价偏离上限（仅筛选模式）
+        if _p["max_close_deviation_enabled"] and _batch_hits:
+            _hd_limit = float(_p["max_close_deviation_pct"])
+            _tail_n = frame.groupby("code", sort=False).tail(_n)
+            _safe_ma_hd = _tail_n["ma"].where(_tail_n["ma"] > 0, np.nan)
+            _hd_pct = (_tail_n["close"] - _safe_ma_hd).abs() / _safe_ma_hd * 100
+            _tail_n_with_dev = _tail_n.assign(_hd_pct=_hd_pct)
+            _hd_max = _tail_n_with_dev.groupby("code", sort=False)["_hd_pct"].max()
+            _hd_pass = _hd_max.notna() & (_hd_max <= _hd_limit)
+            _batch_hits &= set(_hd_pass.index[_hd_pass])
+        if not _batch_hits:
+            break
+
     result_map: dict[str, StockScanResult] = {}
-    total_candidates = 0
+    total_candidates = len(codes)
     total_kept = 0
 
     for code in codes:
+        if code not in _batch_hits:
+            continue
+
         code_tf_data = per_code_data.get(code, {})
         # 补齐缺失周期为空 DataFrame
         for tf in enabled_tfs:
@@ -808,15 +932,46 @@ def run_multi_tf_ma_uptrend_v1_specialized(
                 code_tf_data[tf] = pd.DataFrame()
 
         try:
-            code_result, stats = _scan_one_code(
-                code=code,
-                name=code_to_name.get(code, ""),
+            # 向量化已确认全部周期通过，仅收集 metrics 构建 payload
+            total_bars = sum(len(df) for df in code_tf_data.values())
+            per_tf_detail: dict[str, dict[str, Any]] = {}
+            for tf in enabled_tfs:
+                frame = code_tf_data.get(tf, pd.DataFrame())
+                params = all_tf_params[tf]
+                n = int(params.get("n", len(frame)))
+                frame_window = frame.tail(n)
+                result = detect_multi_tf_ma_uptrend(
+                    frame_window, params, tf, metrics_only=True,
+                )
+                per_tf_detail[tf] = {"passed": True, **result.metrics}
+
+            payload = build_multi_tf_ma_uptrend_payload(
+                enabled_tfs=enabled_tfs,
+                per_tf_detail=per_tf_detail,
                 tf_data=code_tf_data,
                 all_params={tf: all_tf_params[tf] for tf in enabled_tfs},
-                enabled_tfs=enabled_tfs,
+            )
+            clock_tf = coarsest_tf(enabled_tfs)
+
+            signal = build_signal_dict(
+                code=code,
+                name=code_to_name.get(code, ""),
+                signal_dt=payload["anchor_day_ts"],
+                clock_tf=clock_tf,
                 strategy_group_id=strategy_group_id,
                 strategy_name=strategy_name,
+                signal_label=payload["signal_summary"],
+                payload=payload,
             )
+
+            code_result = StockScanResult(
+                code=code,
+                name=code_to_name.get(code, ""),
+                processed_bars=total_bars,
+                signal_count=1,
+                signals=[signal],
+            )
+            total_kept += 1
         except Exception as exc:
             code_result = StockScanResult(
                 code=code,
@@ -826,11 +981,7 @@ def run_multi_tf_ma_uptrend_v1_specialized(
                 signals=[],
                 error_message=str(exc),
             )
-            stats = {"candidate": 0, "kept": 0}
             base_metrics["stock_errors"] += 1
-
-        total_candidates += stats.get("candidate", 0)
-        total_kept += stats.get("kept", 0)
 
         if code_result.signal_count > 0 or code_result.error_message:
             result_map[code] = code_result
@@ -855,10 +1006,172 @@ def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> d
     }
 
 
+# ---------------------------------------------------------------------------
+# GPU 批量检测 (detect_batch hook)
+# ---------------------------------------------------------------------------
+
+
+def detect_multi_tf_ma_uptrend_batch(
+    columns: dict,
+    boundaries: np.ndarray,
+    det_kwargs: dict[str, Any],
+):
+    """GPU 批量检测：对拼接后的多股票数据一次性执行均线向上布尔运算。
+
+    columns: {col_name: cupy.ndarray} — flat GPU 数组
+    boundaries: numpy int64 array, shape=(n_stocks+1,)
+    det_kwargs: {"params": {...}, "tf_key": ...}
+    返回: cupy boolean mask, shape=(total_rows,)
+    """
+    from strategies.engine_commons import (
+        gpu_segmented_rolling_max,
+        gpu_segmented_rolling_min,
+        gpu_segmented_shift,
+    )
+    import cupy as cp
+
+    params = det_kwargs["params"]
+    if not params.get("enabled", True):
+        return cp.zeros(len(columns["close"]), dtype=bool)
+
+    n_param = int(params["n"])
+    slope_gap = int(params["slope_gap"])
+    slope_min = float(params["slope_min"])
+    slope_max = float(params["slope_max"])
+    continuous = params["continuous_check"]
+
+    slope_values = columns["slope_pct"]
+    n_total = len(slope_values)
+
+    # ── 斜率条件 ──
+    slope_in_range = (~cp.isnan(slope_values)
+                      & (slope_values >= slope_min)
+                      & (slope_values <= slope_max))
+
+    if continuous:
+        window_count = max(n_param // slope_gap, 1)
+        cond_slope = slope_in_range.copy()
+        for k in range(1, window_count):
+            offset = k * slope_gap
+            shifted = cp.zeros(n_total, dtype=bool)
+            if offset < n_total:
+                shifted[offset:] = slope_in_range[:-offset]
+            # 修正跨段：per-segment 前 offset 个位置置 False
+            for seg_i in range(len(boundaries) - 1):
+                seg_s = int(boundaries[seg_i])
+                seg_reset_end = min(seg_s + offset, int(boundaries[seg_i + 1]))
+                shifted[seg_s:seg_reset_end] = False
+            cond_slope &= shifted
+    else:
+        cond_slope = slope_in_range
+
+    # ── 收盘偏离条件 ──
+    if params["close_deviation_enabled"]:
+        closes = columns["close"]
+        ma_dev_values = columns["ma_dev"]
+        limit_pct = float(params["close_deviation_pct"])
+        dev_pct = cp.abs(closes - ma_dev_values) / cp.where(ma_dev_values > 0, ma_dev_values, 1.0) * 100.0
+        cond_dev = (~cp.isnan(ma_dev_values)
+                    & (ma_dev_values > 0)
+                    & (dev_pct <= limit_pct))
+    else:
+        cond_dev = cp.ones(n_total, dtype=bool)
+
+    # ── 收敛震荡条件 ──
+    if params["consolidation_enabled"]:
+        p = int(params["consolidation_bars"])
+        amp_limit = float(params["consolidation_max_amp_pct"])
+        highs = columns["high"]
+        lows = columns["low"]
+        if n_total >= p:
+            rolling_max_h = gpu_segmented_rolling_max(highs, boundaries, p)
+            rolling_min_l = gpu_segmented_rolling_min(lows, boundaries, p)
+        else:
+            rolling_max_h = cp.full(n_total, cp.nan)
+            rolling_min_l = cp.full(n_total, cp.nan)
+        safe_min_l = cp.where(rolling_min_l > 0, rolling_min_l, cp.nan)
+        amp_pct = (rolling_max_h - rolling_min_l) / safe_min_l * 100.0
+        cond_cons = (~cp.isnan(amp_pct)) & (amp_pct < amp_limit)
+    else:
+        cond_cons = cp.ones(n_total, dtype=bool)
+
+    return cond_slope & cond_dev & cond_cons
+
+
+def _get_multi_tf_batch_columns(det_kwargs: dict[str, Any]) -> list[str]:
+    """根据参数动态决定 batch 需要的列。"""
+    cols = ["close", "slope_pct"]
+    params = det_kwargs.get("params", {})
+    if params.get("close_deviation_enabled"):
+        cols.append("ma_dev")
+    if params.get("consolidation_enabled"):
+        cols.extend(["high", "low"])
+    return cols
+
+
+detect_multi_tf_ma_uptrend_batch._batch_columns = ["open", "high", "low", "close", "volume", "ma", "slope_pct", "ma_dev"]
+
+
+def prepare_multi_tf_ma_features_batch(
+    gpu_raw: dict,
+    boundaries: np.ndarray,
+    params: dict[str, Any],
+) -> dict:
+    """GPU 原生特征计算：直接在 GPU 上计算 MA / 斜率 / 偏离 MA。
+
+    gpu_raw:  {"open": cp, "high": cp, "low": cp, "close": cp, "volume": cp}
+    boundaries: numpy int64 array, shape=(n_stocks+1,)
+    params:   已规范化的单周期参数
+    返回: 包含原始列 + 特征列的新 dict（浅拷贝原始列）
+    """
+    from strategies.engine_commons import (
+        gpu_segmented_rolling_mean,
+        gpu_segmented_shift,
+    )
+    import cupy as cp
+
+    ma_period = int(params["ma_period"])
+    slope_gap = int(params["slope_gap"])
+    dev_enabled = params.get("close_deviation_enabled", False)
+    dev_ma_period = int(params.get("close_deviation_ma_period", ma_period)) if dev_enabled else ma_period
+
+    close = gpu_raw["close"]
+
+    # MA
+    ma = gpu_segmented_rolling_mean(close, boundaries, ma_period)
+
+    # 百分比斜率: 100 × (MA(t) − MA(t−m)) / (MA(t−m) × m)
+    ma_shifted = gpu_segmented_shift(ma, boundaries, slope_gap)
+    safe_shifted = cp.where(ma_shifted > 0, ma_shifted, 1.0)
+    slope_pct = 100.0 * (ma - ma_shifted) / (safe_shifted * slope_gap)
+    # MA(t−m) 无效时 slope_pct 也应为 NaN
+    slope_pct = cp.where(cp.isnan(ma_shifted), cp.nan, slope_pct)
+
+    # 偏离 MA
+    if dev_enabled and dev_ma_period != ma_period:
+        ma_dev = gpu_segmented_rolling_mean(close, boundaries, dev_ma_period)
+    else:
+        ma_dev = ma
+
+    result = dict(gpu_raw)  # 浅拷贝，共享原始数组
+    result["ma"] = ma
+    result["slope_pct"] = slope_pct
+    result["ma_dev"] = ma_dev
+    return result
+
+
 BACKTEST_HOOKS = {
     "detect": detect_multi_tf_ma_uptrend,
     "detect_vectorized": detect_multi_tf_ma_uptrend_vectorized,
+    "detect_batch": detect_multi_tf_ma_uptrend_batch,
     "prepare": prepare_multi_tf_ma_features,
+    "prepare_batch": prepare_multi_tf_ma_features_batch,
+    "prepare_key": lambda p: {
+        "ma_period": p["ma_period"],
+        "slope_gap": p["slope_gap"],
+        "close_deviation_enabled": p["close_deviation_enabled"],
+        "close_deviation_ma_period": p.get("close_deviation_ma_period", p["ma_period"]),
+    },
     "normalize_params": _normalize_for_backtest,
     "tf_sections": {
         "weekly": {"tf_key": "w", "table": "klines_w"},

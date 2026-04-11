@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import bisect
 import itertools
 import json
 import logging
@@ -18,13 +19,16 @@ import multiprocessing
 import threading
 import time
 import uuid
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
 from app import settings
 from app.services import backtest_engine, backtest_stats
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +46,8 @@ class BacktestManager:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bt")
         self._active_detection_pools: set[Any] = set()
         self._force_failed_jobs: set[str] = set()
+        self._job_options: dict[str, dict[str, Any]] = {}
+        self._job_runtime_status: dict[str, dict[str, Any]] = {}
         self._stop_event = threading.Event()
         self._recover_interrupted_jobs()
 
@@ -71,6 +77,7 @@ class BacktestManager:
         slide_step: int,
         group_params: dict[str, Any],
         param_ranges: dict[str, Any],
+        lock_fwd_cache: bool = True,
     ) -> str:
         with self._lock:
             if self._current_job_id:
@@ -91,6 +98,7 @@ class BacktestManager:
             self._current_job_id = job_id
             self._stop_event.clear()
             self._force_failed_jobs.discard(job_id)
+            self._job_options[job_id] = {"lock_fwd_cache": lock_fwd_cache}
 
         self._current_future = self._executor.submit(self._run_job, job_id)
         return job_id
@@ -119,6 +127,9 @@ class BacktestManager:
         job = self.state_db.get_backtest_job(job_id)
         if not job:
             return None
+        runtime_status = self._get_job_runtime_status(job_id)
+        if runtime_status and job.get("status") in ("queued", "running", "stopping"):
+            job.update(runtime_status)
         for k in ("created_at", "updated_at", "started_at", "finished_at"):
             if isinstance(job.get(k), datetime):
                 job[k] = job[k].isoformat()
@@ -128,6 +139,19 @@ class BacktestManager:
         return self.state_db.get_backtest_logs(
             job_id, level, after_log_id=after_log_id if after_log_id else None,
         )
+
+    def _set_job_runtime_status(self, job_id: str, **fields: Any) -> None:
+        with self._lock:
+            status = self._job_runtime_status.setdefault(job_id, {})
+            status.update(fields)
+
+    def _get_job_runtime_status(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._job_runtime_status.get(job_id, {}))
+
+    def _clear_job_runtime_status(self, job_id: str) -> None:
+        with self._lock:
+            self._job_runtime_status.pop(job_id, None)
 
     def shutdown(self) -> None:
         """
@@ -301,6 +325,8 @@ class BacktestManager:
 
             source_version = self.state_db.get_meta_value("backtest.source_data_version")
             code_to_name = backtest_engine.load_code_to_name(source_db_path)
+            opts = self._job_options.get(job_id, {})
+            skip_ver = opts.get("lock_fwd_cache", True)
 
             def log_fn(level: str, msg: str) -> None:
                 self.state_db.append_backtest_log(job_id=job_id, level=level, message=msg)
@@ -308,11 +334,13 @@ class BacktestManager:
             if job["mode"] == "fixed":
                 self._run_fixed(job_id, job, hooks, module_path, source_db_path,
                                 fwd_cache_dir, cache_dir, max_workers,
-                                source_version, code_to_name, log_fn)
+                                source_version, code_to_name, log_fn,
+                                skip_version_check=skip_ver)
             else:
                 self._run_sweep(job_id, job, hooks, module_path, source_db_path,
                                 fwd_cache_dir, cache_dir, max_workers,
-                                source_version, code_to_name, log_fn)
+                                source_version, code_to_name, log_fn,
+                                skip_version_check=skip_ver)
 
             if self._is_force_failed(job_id):
                 pass
@@ -353,11 +381,13 @@ class BacktestManager:
             finished_at=finished_at,
             summary_json=json.dumps(summary, ensure_ascii=False, default=str),
         )
+        self._clear_job_runtime_status(job_id)
         with self._lock:
             if self._current_job_id == job_id:
                 self._current_job_id = None
             self._current_future = None
             self._force_failed_jobs.discard(job_id)
+            self._job_options.pop(job_id, None)
 
     def _run_fixed(
         self,
@@ -372,12 +402,15 @@ class BacktestManager:
         source_version: str | None,
         code_to_name: dict[str, str],
         log_fn: Callable[[str, str], None],
+        skip_version_check: bool = False,
     ) -> None:
         """固定参数回测。"""
         tf_sections: dict[str, dict] = hooks["tf_sections"]
         forward_bars = tuple(job["forward_bars"])
         x, y, z = forward_bars
         group_params = job["group_params"]
+        detect_weight = 0.95
+        stats_weight = 0.05
 
         # ── 阶段 A: 预计算 ──
         parquet_paths: dict[str, Path] = {}
@@ -401,6 +434,7 @@ class BacktestManager:
                 forward_bars=(x, y, z),
                 fwd_cache_dir=fwd_cache_dir,
                 source_data_version=source_version,
+                skip_version_check=skip_version_check,
                 log_fn=log_fn,
             )
             parquet_paths[tf_key] = pq_path
@@ -410,7 +444,7 @@ class BacktestManager:
             return
 
         # ── 阶段 B: 检测 ──
-        all_hits: list[dict[str, Any]] = []
+        section_hits_map: dict[str, list[dict[str, Any]]] = {}
         max_total_stocks = 0
         active_sections = [sk for sk, si in tf_sections.items() if si["tf_key"] in parquet_paths]
 
@@ -446,12 +480,11 @@ class BacktestManager:
                                 processed_count += 1
                         except Exception:
                             pass
-                        base = si / (n_sec + 1)
-                        sec_frac = (processed_count / total) / (n_sec + 1) if total > 0 else 0
-                        prog = min(base + sec_frac, 1.0)
+                        sec_frac = processed_count / total if total > 0 else 0.0
+                        prog = detect_weight * ((si + sec_frac) / n_sec) if n_sec > 0 else 0.0
                         self.state_db.update_backtest_job_fields(
                             jid,
-                            progress=round(prog, 4),
+                            progress=round(min(prog, detect_weight), 4),
                             processed_stocks=processed_count,
                             total_stocks=total,
                         )
@@ -493,15 +526,27 @@ class BacktestManager:
                     total_stocks=len(all_codes),
                 )
 
-                all_hits.extend(hits)
-                progress = (sec_idx + 1) / (len(active_sections) + 1)  # 留最后一段给阶段C/D
+                section_hits_map[section_key] = hits
+                progress = detect_weight * ((sec_idx + 1) / len(active_sections))
                 self.state_db.update_backtest_job_fields(
-                    job_id, progress=round(progress, 3), total_stocks=max_total_stocks,
+                    job_id, progress=round(progress, 4), total_stocks=max_total_stocks,
                 )
         finally:
             mp_manager.shutdown()
 
+        # ── tf_logic 合并 ──
+        tf_logic = hooks.get("tf_logic", "or")
+        if tf_logic == "and" and len(section_hits_map) > 1:
+            all_hits = _intersect_hits_and(section_hits_map, tf_sections)
+            log_fn("info", f"tf_logic=and 交集后命中: {len(all_hits)}")
+        else:
+            all_hits = [h for hs in section_hits_map.values() for h in hs]
+
         log_fn("info", f"总命中: {len(all_hits)}")
+
+        self.state_db.update_backtest_job_fields(
+            job_id, progress=round(detect_weight, 4),
+        )
 
         # ── 阶段 C: 指标解析 ──
         hits_df = backtest_engine.resolve_hit_metrics(
@@ -530,7 +575,7 @@ class BacktestManager:
 
         self.state_db.update_backtest_job_fields(
             job_id,
-            progress=1.0,
+            progress=round(detect_weight + stats_weight, 4),
             summary_json=json.dumps(summary, ensure_ascii=False, default=str),
         )
         log_fn("info", "结果已写入")
@@ -548,28 +593,62 @@ class BacktestManager:
         source_version: str | None,
         code_to_name: dict[str, str],
         log_fn: Callable[[str, str], None],
+        skip_version_check: bool = False,
     ) -> None:
-        """动态调参回测 (sweep 模式)。"""
+        """动态调参回测 (sweep 模式)。
+
+        逐参数组合检测，每个 section 共享进程池以节省进程创建开销。
+        """
         tf_sections = hooks["tf_sections"]
         forward_bars = tuple(job["forward_bars"])
         x, y, z = forward_bars
         group_params = job["group_params"]
         param_ranges = job["param_ranges"]
+        normalize_params = hooks["normalize_params"]
+        detect_weight = 0.95
+        stats_weight = 0.05
 
         # 生成参数组合
         param_combos = self._generate_param_combos(group_params, param_ranges)
         combo_total = len(param_combos)
         self.state_db.update_backtest_job_fields(job_id, combo_total=combo_total)
         log_fn("info", f"参数组合总数: {combo_total}")
+        active_sections: list[dict[str, Any]] = []
+        for section_key, section_info in tf_sections.items():
+            enabled_combo_params: list[tuple[int, dict[str, Any]]] = []
+            for combo_idx, combo_params in enumerate(param_combos):
+                det_kwargs = normalize_params(combo_params, section_key)
+                params = det_kwargs.get("params") or det_kwargs.get("tf_params")
+                if params and not params.get("enabled", True):
+                    continue
+                enabled_combo_params.append((combo_idx, combo_params))
+            if not enabled_combo_params:
+                continue
+            active_sections.append(
+                {
+                    "section_key": section_key,
+                    "section_info": section_info,
+                    "enabled_combo_params": enabled_combo_params,
+                }
+            )
 
         # ── 阶段 A: 预计算 (前瞻指标与参数无关，只算一次) ──
         parquet_paths: dict[str, Path] = {}
-        for section_key, section_info in tf_sections.items():
+        for section_idx, section_plan in enumerate(active_sections):
             if self._stop_event.is_set():
                 return
 
+            section_key = section_plan["section_key"]
+            section_info = section_plan["section_info"]
             tf_key = section_info["tf_key"]
             table_name = section_info["table"]
+            self._set_job_runtime_status(
+                job_id,
+                phase="detect",
+                phase_label=f"检测 {section_key}",
+                phase_index=section_idx + 1,
+                phase_total=len(active_sections),
+            )
 
             pq_path = backtest_engine.precompute_forward_metrics(
                 source_db_path=source_db_path,
@@ -578,125 +657,273 @@ class BacktestManager:
                 forward_bars=(x, y, z),
                 fwd_cache_dir=fwd_cache_dir,
                 source_data_version=source_version,
+                skip_version_check=skip_version_check,
                 log_fn=log_fn,
             )
             parquet_paths[tf_key] = pq_path
 
-        if not parquet_paths:
+        if not active_sections or not parquet_paths:
             log_fn("info", "无可用周期，回测结束")
             return
 
         output_dir = cache_dir / job_id
         output_dir.mkdir(parents=True, exist_ok=True)
-        sweep_results: list[dict[str, Any]] = []
 
-        # 复用单一 Manager 避免 Windows 反复创建/销毁进程导致 OSError
+        # 预加载启用 section 的股票列表，避免批量检测时重复查询
+        for section_plan in active_sections:
+            section_plan["all_codes"] = backtest_engine.load_all_codes(
+                source_db_path,
+                section_plan["section_info"]["table"],
+            )
+        n_active = len(active_sections)
+
+        # ── 阶段 B+C: 先按 section 批量检测，再按组合顺序统计/落盘 ──
+        sweep_results: list[dict[str, Any]] = []
+        spill_dir = cache_dir / "_spill"
+        backtest_engine.cleanup_spill_dir(spill_dir)
+        section_accumulators: dict[str, backtest_engine.SweepHitsAccumulator] = {}
+        merged_accumulator: backtest_engine.SweepHitsAccumulator | None = None
+
         mp_manager = multiprocessing.Manager()
         try:
-            # ── 逐参数组合执行 ──
+            for sec_idx, section_plan in enumerate(active_sections):
+                if self._stop_event.is_set():
+                    return
+
+                section_key = section_plan["section_key"]
+                section_info = section_plan["section_info"]
+                all_codes = section_plan["all_codes"]
+                enabled_combo_params = section_plan["enabled_combo_params"]
+                tf_key = section_info["tf_key"]
+
+                progress_queue = mp_manager.Queue()
+                processed_count = 0.0
+                worker_partials: dict[int, tuple[int, int]] = {}
+                progress_done = threading.Event()
+                self._set_job_runtime_status(
+                    job_id,
+                    phase="detect",
+                    phase_label=f"检测 {section_key}",
+                    phase_index=sec_idx + 1,
+                    phase_total=n_active,
+                )
+
+                def _drain_progress_queue(q=progress_queue) -> None:
+                    nonlocal processed_count
+                    while True:
+                        try:
+                            item = q.get_nowait()
+                        except Exception:
+                            break
+                        if isinstance(item, dict):
+                            worker_id = int(item.get("worker") or 0)
+                            item_type = item.get("type")
+                            if item_type == "combo_progress":
+                                combo_done = max(0, int(item.get("done") or 0))
+                                combo_total = max(1, int(item.get("total") or 1))
+                                if worker_id > 0:
+                                    worker_partials[worker_id] = (combo_done, combo_total)
+                            elif item_type == "stock_done":
+                                processed_count += 1.0
+                                if worker_id > 0:
+                                    worker_partials.pop(worker_id, None)
+                            else:
+                                processed_count += float(item.get("count") or 0.0)
+                        else:
+                            processed_count += float(item)
+
+                def _update_detect_status(
+                    jid=job_id,
+                    total=len(all_codes),
+                    current_index=sec_idx,
+                    total_sections=n_active,
+                ) -> None:
+                    processed_display = min(int(processed_count), total)
+                    partial_stock_units = sum(done / combo_total for done, combo_total in worker_partials.values())
+                    estimated_done = min(processed_count + partial_stock_units, float(total))
+                    section_frac = estimated_done / total if total > 0 else 0.0
+                    progress = detect_weight * ((current_index + section_frac) / total_sections)
+                    phase_label = f"检测 {section_key} | 股票 {processed_display}/{total}"
+                    partial_count = len(worker_partials)
+                    if partial_count > 0:
+                        avg_combo_total = max(combo_total for _, combo_total in worker_partials.values())
+                        avg_combo_done = int(
+                            sum(done for done, _ in worker_partials.values()) / partial_count
+                        )
+                        phase_label += f" | 平均组合进度 {avg_combo_done}/{avg_combo_total}"
+                    self._set_job_runtime_status(
+                        jid,
+                        phase="detect",
+                        phase_label=phase_label,
+                        phase_index=current_index + 1,
+                        phase_total=total_sections,
+                    )
+                    self.state_db.update_backtest_job_fields(
+                        jid,
+                        processed_stocks=processed_display,
+                        total_stocks=total,
+                        progress=round(min(progress, detect_weight), 4),
+                    )
+
+                def _consume_progress(
+                    q=progress_queue,
+                    done_evt=progress_done,
+                    jid=job_id,
+                    total=len(all_codes),
+                    current_index=sec_idx,
+                    total_sections=n_active,
+                ) -> None:
+                    while not done_evt.is_set():
+                        _ = (jid, total, current_index, total_sections)
+                        _drain_progress_queue(q)
+                        _update_detect_status()
+                        time.sleep(2)
+
+                _update_detect_status()
+                progress_thread = threading.Thread(target=_consume_progress, daemon=True)
+                progress_thread.start()
+
+                section_hits_map = backtest_engine.run_detection_parallel_batch(
+                    all_codes=all_codes,
+                    parquet_path=parquet_paths[tf_key],
+                    tf_key=tf_key,
+                    table_name=section_info["table"],
+                    hooks_module_path=module_path,
+                    combo_params_list=enabled_combo_params,
+                    section_key=section_key,
+                    slide_step=job["slide_step"],
+                    max_forward_bar=max(forward_bars),
+                    max_workers=max_workers,
+                    progress_queue=progress_queue,
+                    on_pool_started=self._register_detection_pool,
+                    on_pool_finished=self._unregister_detection_pool,
+                    log_fn=log_fn,
+                    spill_dir=spill_dir,
+                )
+
+                progress_done.set()
+                progress_thread.join(timeout=5)
+
+                _drain_progress_queue(progress_queue)
+                _update_detect_status()
+                self.state_db.update_backtest_job_fields(
+                    job_id,
+                    processed_stocks=len(all_codes),
+                    total_stocks=len(all_codes),
+                    progress=round(detect_weight * ((sec_idx + 1) / n_active), 4),
+                )
+
+                section_accumulators[section_key] = section_hits_map
+
+            # ── tf_logic 合并 ──
+            tf_logic = hooks.get("tf_logic", "or")
+            if len(section_accumulators) == 1:
+                # 只有一个 section，直接复用（零拷贝）
+                merged_accumulator = next(iter(section_accumulators.values()))
+            elif tf_logic == "and" and len(section_accumulators) > 1:
+                any_spilled = any(a.is_spilled for a in section_accumulators.values())
+                if any_spilled:
+                    merged_accumulator = _intersect_hits_and_from_db(
+                        section_accumulators, tf_sections, spill_dir, log_fn,
+                    )
+                else:
+                    # 内存模式 AND — 用现有函数，结果写入新 accumulator
+                    merged_accumulator = backtest_engine.SweepHitsAccumulator(spill_dir=spill_dir)
+                    for combo_idx in range(combo_total):
+                        merged_accumulator.ensure_combo(combo_idx)
+                    for combo_idx in range(combo_total):
+                        sh: dict[str, list[dict]] = {}
+                        for sk, acc in section_accumulators.items():
+                            hits_list = acc._mem.get(combo_idx, [])
+                            if hits_list:
+                                sh[sk] = hits_list
+                        if not sh:
+                            continue
+                        if len(sh) > 1:
+                            merged_hits = _intersect_hits_and(sh, tf_sections)
+                        else:
+                            merged_hits = list(next(iter(sh.values())))
+                        if merged_hits:
+                            merged_accumulator.extend(combo_idx, merged_hits)
+                    total_raw = sum(a.total_hits for a in section_accumulators.values())
+                    log_fn("info", f"tf_logic=and 交集: {total_raw} → {merged_accumulator.total_hits}")
+                # 关闭旧 section accumulators（merged_accumulator 是新的）
+                for sk, acc in section_accumulators.items():
+                    acc.close()
+                section_accumulators.clear()
+            else:
+                # tf_logic=or，多个 section 合并
+                merged_accumulator = backtest_engine.SweepHitsAccumulator(spill_dir=spill_dir)
+                for combo_idx in range(combo_total):
+                    merged_accumulator.ensure_combo(combo_idx)
+                for sk, acc in section_accumulators.items():
+                    if acc.is_spilled:
+                        # 从 DB 批量读取并追加
+                        all_cis = list(acc.hit_counts.keys())
+                        for batch_start in range(0, len(all_cis), 500):
+                            batch_cis = all_cis[batch_start:batch_start + 500]
+                            batch_df = acc.query_combo_batch(batch_cis)
+                            for ci_val, grp in batch_df.groupby("_combo_idx", sort=False):
+                                rows = grp.to_dict("records")
+                                merged_accumulator.extend(int(ci_val), [
+                                    {"code": r["code"], "tf_key": r["tf_key"],
+                                     "pattern_start_ts": r["pattern_start_ts"],
+                                     "pattern_end_ts": r["pattern_end_ts"]}
+                                    for r in rows
+                                ])
+                    else:
+                        for ci, hits in acc.items():
+                            if hits:
+                                merged_accumulator.extend(ci, hits)
+                    acc.close()
+                section_accumulators.clear()
+
+            # ── 阶段 C: 批量指标解析（一次 JOIN 所有组合） ──
+            # 确保所有 combo_idx 存在（含未启用的 section 中被跳过的 combo）
+            for ci in range(combo_total):
+                merged_accumulator.ensure_combo(ci)
+            self._set_job_runtime_status(
+                job_id,
+                phase="stats",
+                phase_label="批量指标解析",
+                phase_index=0,
+                phase_total=combo_total,
+            )
+            combo_metrics_map = backtest_engine.resolve_hit_metrics_sweep(
+                combo_hits_map=None,
+                hit_accumulator=merged_accumulator,
+                parquet_paths=parquet_paths,
+                forward_bars=(x, y, z),
+                code_to_name=code_to_name,
+                log_fn=log_fn,
+            )
+
             for combo_idx, combo_params in enumerate(param_combos):
                 if self._stop_event.is_set():
                     return
 
-                self.state_db.update_backtest_job_fields(job_id, combo_index=combo_idx + 1)
                 combo_label = {p: _get_nested(combo_params, p) for p in param_ranges}
-                log_fn("info", f"参数组合 {combo_idx + 1}/{combo_total}: {combo_label}")
-
-                # 阶段B+C: 检测 + 指标
-                combo_hits: list[dict[str, Any]] = []
-                for section_key, section_info in tf_sections.items():
-                    if self._stop_event.is_set():
-                        return
-
-                    tf_key = section_info["tf_key"]
-                    if tf_key not in parquet_paths:
-                        continue
-                    table_name = section_info["table"]
-
-                    # 检查启用
-                    det_kwargs = hooks["normalize_params"](combo_params, section_key)
-                    params = det_kwargs.get("params") or det_kwargs.get("tf_params")
-                    if params and not params.get("enabled", True):
-                        continue
-
-                    all_codes = backtest_engine.load_all_codes(source_db_path, table_name)
-
-                    # 创建进度队列和消费线程
-                    progress_queue = mp_manager.Queue()
-                    sweep_processed = 0
-                    progress_done = threading.Event()
-
-                    def _consume_progress_sweep(
-                        q=progress_queue, done_evt=progress_done,
-                        jid=job_id, total=len(all_codes),
-                    ):
-                        nonlocal sweep_processed
-                        while not done_evt.is_set():
-                            try:
-                                while True:
-                                    q.get_nowait()
-                                    sweep_processed += 1
-                            except Exception:
-                                pass
-                            self.state_db.update_backtest_job_fields(
-                                jid,
-                                processed_stocks=sweep_processed,
-                                total_stocks=total,
-                            )
-                            time.sleep(2)
-
-                    progress_thread = threading.Thread(target=_consume_progress_sweep, daemon=True)
-                    progress_thread.start()
-
-                    hits = backtest_engine.run_detection_parallel(
-                        all_codes=all_codes,
-                        parquet_path=parquet_paths[tf_key],
-                        tf_key=tf_key,
-                        table_name=table_name,
-                        hooks_module_path=module_path,
-                        group_params=combo_params,
-                        section_key=section_key,
-                        slide_step=job["slide_step"],
-                        max_forward_bar=max(forward_bars),
-                        max_workers=max_workers,
-                        progress_queue=progress_queue,
-                        on_pool_started=self._register_detection_pool,
-                        on_pool_finished=self._unregister_detection_pool,
-                        log_fn=log_fn,
-                    )
-
-                    progress_done.set()
-                    progress_thread.join(timeout=5)
-
-                    # 排干队列残余项，确保 processed_stocks 达到 total
-                    try:
-                        while True:
-                            progress_queue.get_nowait()
-                            sweep_processed += 1
-                    except Exception:
-                        pass
-                    self.state_db.update_backtest_job_fields(
-                        job_id,
-                        processed_stocks=len(all_codes),
-                        total_stocks=len(all_codes),
-                    )
-
-                    combo_hits.extend(hits)
-
-                # 指标解析
-                hits_df = backtest_engine.resolve_hit_metrics(
-                    hits=combo_hits,
-                    parquet_paths=parquet_paths,
-                    forward_bars=(x, y, z),
-                    code_to_name=code_to_name,
-                    log_fn=log_fn,
+                combo_hit_count = merged_accumulator.hit_counts.get(combo_idx, 0)
+                hits_df = combo_metrics_map.get(combo_idx, pd.DataFrame())
+                self._set_job_runtime_status(
+                    job_id,
+                    phase="stats",
+                    phase_label="统计参数组合",
+                    phase_index=combo_idx + 1,
+                    phase_total=combo_total,
+                )
+                combo_progress = detect_weight
+                if combo_total > 0:
+                    combo_progress += stats_weight * (combo_idx / combo_total)
+                self.state_db.update_backtest_job_fields(
+                    job_id,
+                    progress=round(min(combo_progress, 0.9999), 4),
                 )
 
-                # 保存单组合结果
                 combo_dir = output_dir / f"combo_{combo_idx}"
                 backtest_engine.write_hits_csv(hits_df, combo_dir)
 
-                combo_stats: dict[str, Any] = {"total_hits": len(combo_hits)}
+                combo_stats: dict[str, Any] = {"total_hits": combo_hit_count}
                 if not hits_df.empty:
                     stats = backtest_stats.compute_full_stats(hits_df, (x, y, z))
                     backtest_engine.write_stats_json(stats, combo_dir)
@@ -705,9 +932,8 @@ class BacktestManager:
                 sweep_row = {
                     "combo_index": combo_idx,
                     "param_combo": combo_label,
-                    "total_hits": len(combo_hits),
+                    "total_hits": combo_hit_count,
                 }
-                # 提取汇总指标
                 per_fwd = combo_stats.get("per_forward", {})
                 for fwd_n, fwd_label in [(x, "x"), (y, "y"), (z, "z")]:
                     fwd_stats = per_fwd.get(str(fwd_n), {})
@@ -718,12 +944,25 @@ class BacktestManager:
                     sweep_row[f"avg_drawdown_{fwd_label}"] = drawdown_stats.get("mean")
 
                 sweep_results.append(sweep_row)
+                final_combo_progress = 1.0
+                if combo_total > 0:
+                    final_combo_progress = detect_weight + stats_weight * ((combo_idx + 1) / combo_total)
                 self.state_db.update_backtest_job_fields(
-                    job_id, progress=round((combo_idx + 1) / combo_total, 3),
+                    job_id,
+                    progress=round(final_combo_progress, 4),
+                    combo_index=combo_idx + 1,
                 )
 
         finally:
             mp_manager.shutdown()
+            # 清理所有 accumulator（确保异常/取消时也释放）
+            for acc in section_accumulators.values():
+                if acc is not merged_accumulator:
+                    acc.close()
+            section_accumulators.clear()
+            if merged_accumulator is not None:
+                merged_accumulator.close()
+                merged_accumulator = None
 
         # 写 sweep 汇总
         sweep_path = output_dir / "sweep_results.json"
@@ -797,6 +1036,227 @@ class BacktestManager:
             combos.append(params)
 
         return combos
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tf_logic 多周期交集 (AND)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TF_ORDER: list[str] = ["w", "d", "60", "30", "15"]
+
+# 以最粗周期为锚点，在此窗口内查找更细周期的命中
+_TF_ALIGN_WINDOW: dict[str, timedelta] = {
+    "w": timedelta(days=7),
+    "d": timedelta(days=1),
+    "60": timedelta(days=1),
+    "30": timedelta(days=1),
+    "15": timedelta(hours=4),
+}
+
+
+def _intersect_hits_and(
+    section_hits: dict[str, list[dict[str, Any]]],
+    tf_sections: dict[str, dict],
+) -> list[dict[str, Any]]:
+    """AND 交集：只保留所有已启用周期在时间窗口内同时命中的记录。
+
+    以最粗周期（coarsest TF）的命中为锚点，逐条检查每个更细周期是否存在
+    同一代码在 ``[anchor - window, anchor + 1day)`` 范围内的命中。
+    仅输出通过全部检查的最粗周期命中，保持前瞻指标一致。
+    """
+    if len(section_hits) <= 1:
+        return list(next(iter(section_hits.values()), []))
+
+    # section_key -> tf_key（仅保留有命中数据的 section）
+    section_tf: dict[str, str] = {}
+    for sk in section_hits:
+        if sk in tf_sections:
+            section_tf[sk] = tf_sections[sk]["tf_key"]
+    if not section_tf:
+        return []
+
+    def _tf_rank(sk: str) -> int:
+        tfk = section_tf.get(sk, "d")
+        return _TF_ORDER.index(tfk) if tfk in _TF_ORDER else 999
+
+    sorted_sks = sorted(section_tf.keys(), key=_tf_rank)
+    coarsest_sk = sorted_sks[0]
+    finer_sks = sorted_sks[1:]
+
+    if not finer_sks:
+        return section_hits[coarsest_sk]
+
+    coarsest_tf_key = section_tf[coarsest_sk]
+    window = _TF_ALIGN_WINDOW.get(coarsest_tf_key, timedelta(days=7))
+
+    # 为更细周期构建 {code: sorted([ts, ...])} 索引
+    finer_lookups: dict[str, dict[str, list[pd.Timestamp]]] = {}
+    for sk in finer_sks:
+        code_dates: dict[str, list[pd.Timestamp]] = defaultdict(list)
+        for hit in section_hits[sk]:
+            code_dates[hit["code"]].append(pd.Timestamp(hit["pattern_end_ts"]))
+        for code in code_dates:
+            code_dates[code].sort()
+        finer_lookups[sk] = dict(code_dates)
+
+    # 逐条过滤 coarsest TF 的命中
+    result: list[dict[str, Any]] = []
+    for hit in section_hits[coarsest_sk]:
+        code = hit["code"]
+        anchor_ts = pd.Timestamp(hit["pattern_end_ts"])
+        win_lo = anchor_ts - window
+        win_hi = anchor_ts + timedelta(days=1)  # 包含同日日内命中
+
+        aligned = True
+        for sk in finer_sks:
+            dates = finer_lookups[sk].get(code)
+            if not dates:
+                aligned = False
+                break
+            # 在已排序列表中二分查找 win_lo
+            lo = bisect.bisect_left(dates, win_lo)
+            if lo < len(dates) and dates[lo] < win_hi:
+                continue  # 窗口内有命中
+            aligned = False
+            break
+
+        if aligned:
+            result.append(hit)
+
+    return result
+
+
+def _intersect_hits_and_from_db(
+    section_accumulators: dict[str, backtest_engine.SweepHitsAccumulator],
+    tf_sections: dict[str, dict],
+    spill_dir: Path,
+    log_fn: Callable[[str, str], None],
+) -> backtest_engine.SweepHitsAccumulator:
+    """AND 交集的落盘模式版本：用 DuckDB 跨文件 JOIN 实现。"""
+    import duckdb as _ddb
+
+    # section_key -> tf_key
+    section_tf: dict[str, str] = {}
+    for sk in section_accumulators:
+        if sk in tf_sections:
+            section_tf[sk] = tf_sections[sk]["tf_key"]
+
+    def _tf_rank(sk: str) -> int:
+        tfk = section_tf.get(sk, "d")
+        return _TF_ORDER.index(tfk) if tfk in _TF_ORDER else 999
+
+    sorted_sks = sorted(section_tf.keys(), key=_tf_rank)
+    coarsest_sk = sorted_sks[0]
+    finer_sks = sorted_sks[1:]
+
+    if not finer_sks:
+        # 只有一个 section，直接返回
+        return section_accumulators[coarsest_sk]
+
+    coarsest_tf_key = section_tf[coarsest_sk]
+    window = _TF_ALIGN_WINDOW.get(coarsest_tf_key, timedelta(days=7))
+
+    # 确保所有 section 的 DB 缓冲已刷盘
+    for acc in section_accumulators.values():
+        acc._flush_pending()
+
+    # 创建合并用临时 DuckDB
+    merged_acc = backtest_engine.SweepHitsAccumulator(spill_dir=spill_dir)
+
+    spill_dir.mkdir(parents=True, exist_ok=True)
+    merge_db_path = spill_dir / f"merge_and_{id(merged_acc)}_{time.monotonic_ns()}.duckdb"
+    merge_db = _ddb.connect(str(merge_db_path))
+
+    try:
+        # ATTACH 各 section 的 DuckDB 文件
+        aliases: dict[str, str] = {}
+        for i, (sk, acc) in enumerate(section_accumulators.items()):
+            if acc.is_spilled and acc.spill_path:
+                alias = f"sec_{i}"
+                merge_db.execute(f"ATTACH '{acc.spill_path}' AS {alias} (READ_ONLY)")
+                aliases[sk] = alias
+            else:
+                # 内存模式的 section — 先临时写入文件再 ATTACH
+                alias = f"sec_{i}"
+                temp_path = spill_dir / f"temp_{alias}_{time.monotonic_ns()}.duckdb"
+                temp_db = _ddb.connect(str(temp_path))
+                temp_db.execute("""
+                    CREATE TABLE sweep_hits (
+                        combo_idx INTEGER, code VARCHAR, tf_key VARCHAR,
+                        pattern_start_ts TIMESTAMP, pattern_end_ts TIMESTAMP
+                    )
+                """)
+                rows = []
+                for ci, hits in acc._mem.items():
+                    for h in hits:
+                        rows.append((ci, h["code"], h["tf_key"],
+                                     h["pattern_start_ts"], h["pattern_end_ts"]))
+                if rows:
+                    temp_db.executemany("INSERT INTO sweep_hits VALUES (?,?,?,?,?)", rows)
+                temp_db.close()
+                merge_db.execute(f"ATTACH '{temp_path}' AS {alias} (READ_ONLY)")
+                aliases[sk] = alias
+
+        coarsest_alias = aliases[coarsest_sk]
+        window_interval = f"{int(window.total_seconds())} seconds"
+
+        # 构建 EXISTS 子句
+        exists_clauses = []
+        for sk in finer_sks:
+            finer_alias = aliases[sk]
+            exists_clauses.append(
+                f"EXISTS (SELECT 1 FROM {finer_alias}.sweep_hits f "
+                f"WHERE f.combo_idx = c.combo_idx AND f.code = c.code "
+                f"AND f.pattern_end_ts >= c.pattern_end_ts - INTERVAL '{window_interval}' "
+                f"AND f.pattern_end_ts < c.pattern_end_ts + INTERVAL '1 day')"
+            )
+
+        where_clause = " AND ".join(exists_clauses)
+        sql = (
+            f"SELECT c.combo_idx, c.code, c.tf_key, "
+            f"c.pattern_start_ts, c.pattern_end_ts "
+            f"FROM {coarsest_alias}.sweep_hits c "
+            f"WHERE {where_clause}"
+        )
+
+        result_df = merge_db.execute(sql).fetchdf()
+
+        log_fn("info", f"tf_logic=and (DB): 交集结果 {len(result_df)} 行")
+
+        # 将结果写入 merged_accumulator
+        if not result_df.empty:
+            # 强制落盘模式（直接创建 spill）
+            merged_acc._spill_dir = spill_dir
+            merged_acc._do_spill()
+            # 用 DuckDB DataFrame 直接注入（远快于 executemany 逐行）
+            merged_acc._db.execute(
+                "INSERT INTO sweep_hits SELECT * FROM result_df"
+            )
+            # 向量化更新元数据
+            counts = result_df.groupby("combo_idx").size()
+            for ci, cnt in counts.items():
+                merged_acc.hit_counts[int(ci)] = int(cnt)
+            merged_acc.total_hits = int(counts.sum())
+            uk = result_df[["code", "tf_key", "pattern_end_ts"]].drop_duplicates()
+            merged_acc.unique_keys = set(uk.itertuples(index=False, name=None))
+
+    finally:
+        merge_db.close()
+        # 清理合并临时 DB
+        for suffix in ("", ".wal"):
+            p = merge_db_path.parent / (merge_db_path.name + suffix)
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+        # 清理内存模式 section 的临时文件
+        for f in spill_dir.glob("temp_sec_*.duckdb*"):
+            try:
+                f.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    return merged_acc
 
 
 def _set_nested(d: dict, path: str, value: Any) -> None:

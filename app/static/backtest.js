@@ -38,6 +38,30 @@
     }
     return r.json();
   }
+  function shouldRetryWithoutLockFwdCache(err) {
+    try {
+      const payload = JSON.parse(err.message);
+      const detail = Array.isArray(payload?.detail) ? payload.detail : [];
+      return detail.some((item) =>
+        item?.type === "extra_forbidden" &&
+        Array.isArray(item?.loc) &&
+        item.loc[item.loc.length - 1] === "lock_fwd_cache"
+      );
+    } catch {
+      return false;
+    }
+  }
+  async function postJSONCompat(url, body) {
+    try {
+      return await postJSON(url, body);
+    } catch (err) {
+      if (!Object.prototype.hasOwnProperty.call(body || {}, "lock_fwd_cache")) throw err;
+      if (!shouldRetryWithoutLockFwdCache(err)) throw err;
+      const fallbackBody = cloneValue(body || {});
+      delete fallbackBody.lock_fwd_cache;
+      return await postJSON(url, fallbackBody);
+    }
+  }
 
   /** 在 obj 中按 path 设值 */
   function setValueAtPath(obj, path, val) {
@@ -170,6 +194,7 @@
     ["btFwdX", "btFwdY", "btFwdZ", "btSlideStep"].forEach((id) => {
       $(id).addEventListener("change", saveBacktestSettings);
     });
+    $("btLockFwdCache").addEventListener("change", saveBacktestSettings);
   }
 
   // ── strategies ──
@@ -261,11 +286,10 @@
   function renderSweepParams(group) {
     const container = $("btParamsSweep");
     container.innerHTML = renderParamField(
-      [], state.groupParams, group.param_help || {}, "", 0, { hideScopeParams: true }
+      [], state.groupParams, group.param_help || {}, "", 0, { readonly: true, hideScopeParams: true }
     );
     state.sweepRanges = {};
     injectRangeControls(container);
-    bindParamInputs(container);
     updateComboCount();
   }
 
@@ -309,18 +333,30 @@
     updateComboCount();
   }
 
-  /** 为每个数值 input 添加 min/max/step 范围控件 */
+  /** 为 sweep 只读数值字段添加 min/max/step 范围控件 */
   function injectRangeControls(container) {
-    container.querySelectorAll("input[type='number'][data-param-path]").forEach((inp) => {
-      const path = inp.dataset.paramPath;
-      const curVal = parseFloat(inp.value) || 0;
+    container.querySelectorAll(".param-readonly-value[data-param-path]").forEach((valueEl) => {
+      const path = valueEl.dataset.paramPath;
+      if (!path) return;
+      const currentValue = getValueAtPath(state.groupParams, path.split("."));
+      if (typeof currentValue !== "number" || !Number.isFinite(currentValue)) return;
+      const savedRange = state.sweepRanges[path] || null;
+      const curVal = savedRange && Number.isFinite(Number(savedRange.min))
+        ? Number(savedRange.min)
+        : currentValue;
+      const maxVal = savedRange && Number.isFinite(Number(savedRange.max))
+        ? Number(savedRange.max)
+        : currentValue;
+      const stepVal = savedRange && Number.isFinite(Number(savedRange.step)) && Number(savedRange.step) > 0
+        ? Number(savedRange.step)
+        : 1;
       const rangeDiv = document.createElement("span");
       rangeDiv.className = "bt-range-row";
       rangeDiv.innerHTML =
         `<label>min<input type="number" class="bt-rng-min" data-range-path="${path}" value="${curVal}" step="any"/></label>` +
-        `<label>max<input type="number" class="bt-rng-max" data-range-path="${path}" value="${curVal}" step="any"/></label>` +
-        `<label>step<input type="number" class="bt-rng-step" data-range-path="${path}" value="1" min="0.001" step="any"/></label>`;
-      inp.insertAdjacentElement("afterend", rangeDiv);
+        `<label>max<input type="number" class="bt-rng-max" data-range-path="${path}" value="${maxVal}" step="any"/></label>` +
+        `<label>step<input type="number" class="bt-rng-step" data-range-path="${path}" value="${stepVal}" min="0.001" step="any"/></label>`;
+      valueEl.insertAdjacentElement("afterend", rangeDiv);
 
       // Listen for range changes
       rangeDiv.querySelectorAll("input").forEach((ri) => {
@@ -348,6 +384,30 @@
     }
   }
 
+  function countSweepRangeValues(range) {
+    const rMin = Number(range && range.min);
+    const rMax = Number(range && range.max);
+    let rStep = Number(range && range.step);
+    if (!Number.isFinite(rMin) || !Number.isFinite(rMax)) return 0;
+    if (!Number.isFinite(rStep) || rStep <= 0) rStep = 1;
+
+    let count = 0;
+    let lastVal = null;
+    let v = rMin;
+    while (v <= rMax + 1e-9) {
+      lastVal = Math.round(v * 1e6) / 1e6;
+      count += 1;
+      v += rStep;
+    }
+
+    if (!count) return 1;
+    const roundedMax = Math.round(rMax * 1e6) / 1e6;
+    if (lastVal === null || Math.abs(lastVal - roundedMax) > 1e-9) {
+      count += 1;
+    }
+    return count;
+  }
+
   function updateComboCount() {
     const ranges = Object.values(state.sweepRanges);
     if (!ranges.length) {
@@ -356,7 +416,7 @@
     }
     let total = 1;
     for (const r of ranges) {
-      const count = Math.floor((r.max - r.min) / r.step) + 1;
+      const count = countSweepRangeValues(r);
       total *= Math.max(1, count);
     }
     $("btComboCount").textContent = `共 ${total} 种参数组合`;
@@ -397,6 +457,7 @@
         $("btFwdZ").value = s.forward_bars[2];
       }
       if (s.slide_step) $("btSlideStep").value = s.slide_step;
+      if (typeof s.lock_fwd_cache === "boolean") $("btLockFwdCache").checked = s.lock_fwd_cache;
       if (s.strategy_group_id) {
         const sel = $("btStrategySelect");
         if ([...sel.options].some((o) => o.value === s.strategy_group_id)) {
@@ -451,8 +512,9 @@
       group_params: cloneValue(state.groupParams),
       per_strategy_sweep_ranges: pssr,
       per_strategy_backtest_params: psbp,
+      lock_fwd_cache: $("btLockFwdCache").checked,
     };
-    const resp = await postJSON("/api/ui-settings/backtest", payload);
+    const resp = await postJSONCompat("/api/ui-settings/backtest", payload);
     state.perStrategySweepRanges = cloneValue(pssr);
     state.perStrategyBacktestParams = cloneValue(psbp);
     // 同步更新本地 monitorPerStrategyParams（后端已交叉写入 monitor）
@@ -460,7 +522,7 @@
     return resp;
   }
 
-  /** 将 state.groupParams 同步到 UI 输入控件 */
+  /** 将 state.groupParams 同步到 UI 字段 */
   function syncGroupParamsToUI() {
     document.querySelectorAll("[data-param-path]").forEach((inp) => {
       if (inp.classList.contains("bt-rng-min") ||
@@ -470,7 +532,8 @@
       const val = getValueAtPath(state.groupParams, path);
       if (val === undefined) return;
       if (inp.type === "checkbox") inp.checked = !!val;
-      else inp.value = val;
+      else if ("value" in inp) inp.value = val;
+      else inp.textContent = String(val);
     });
   }
 
@@ -518,7 +581,7 @@
         return data;
       }
 
-      const STATUS_TEXT = { queued: "排队中", running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止", stopping: "失败" };
+      const STATUS_TEXT = { queued: "排队中", running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止", stopping: "停止中" };
       for (const j of jobs) {
         const opt = document.createElement("option");
         opt.value = j.job_id;
@@ -620,6 +683,7 @@
       slide_step: slideStep,
       group_params: cleanParams,
       param_ranges: {},
+      lock_fwd_cache: $("btLockFwdCache").checked,
     };
 
     if (mode === "sweep") {
@@ -641,12 +705,16 @@
       hidePanel("btSweepPanel");
       clearLogs();
 
-      const resp = await postJSON("/api/backtests", payload);
+      const resp = await postJSONCompat("/api/backtests", payload);
       state.currentJobId = resp.job_id;
       state.currentMode = mode;
       await loadBacktestJobs(resp.job_id);
       connectSSE(resp.job_id);
-      await saveBacktestSettings();
+      try {
+        await saveBacktestSettings();
+      } catch (saveErr) {
+        console.warn("saveBacktestSettings failed after backtest creation", saveErr);
+      }
     } catch (err) {
       alert("创建回测失败: " + err.message);
       setButtonsRunning(false);
@@ -728,12 +796,22 @@
    */
   function updateStatus(d) {
     $("btStatusText").textContent = statusLabel(d.status);
+    const phaseLabel = d.phase_label || "";
+    const phaseIndex = Number.isFinite(Number(d.phase_index)) ? Number(d.phase_index) : 0;
+    const phaseTotal = Number.isFinite(Number(d.phase_total)) ? Number(d.phase_total) : 0;
+    const showPhase = !!phaseLabel && d.combo_total > 0;
+    const phaseSuffix = phaseIndex > 0 && phaseTotal > 0 ? ` (${phaseIndex} / ${phaseTotal})` : "";
+    $("btPhaseRow").style.display = showPhase ? "" : "none";
+    if (showPhase) {
+      $("btPhaseText").textContent = phaseLabel + phaseSuffix;
+    }
 
     // 任务已终态时直接显示 100% 和满量
     if (d.status === "completed" || d.status === "failed" || d.status === "stopped") {
       $("btProcessedText").textContent = `${d.total_stocks} / ${d.total_stocks}`;
       $("btProgressText").textContent = "100.0%";
       $("btProgressBar").style.width = "100%";
+      $("btPhaseRow").style.display = "none";
       if (d.combo_total > 0) {
         $("btComboRow").style.display = "";
         $("btComboText").textContent = `${d.combo_total} / ${d.combo_total}`;
@@ -747,11 +825,8 @@
 
     const isSweep = d.combo_total > 0;
     if (isSweep) {
-      // sweep 模式：综合组合级进度 + 组合内股票进度
-      const comboBase = d.combo_index > 0 ? (d.combo_index - 1) / d.combo_total : 0;
-      const comboSlice = 1 / d.combo_total;
-      const stockFrac = d.total_stocks > 0 ? d.processed_stocks / d.total_stocks : 0;
-      const pct = Math.min((comboBase + comboSlice * stockFrac) * 100, 100);
+      // sweep 模式：后端直接计算 progress（检测阶段 95% + 统计阶段 5%）
+      const pct = Math.min(d.progress * 100, 100);
       $("btProgressText").textContent = pct.toFixed(1) + "%";
       $("btProgressBar").style.width = pct + "%";
       $("btComboRow").style.display = "";
@@ -766,7 +841,7 @@
   }
 
   function statusLabel(s) {
-    const map = { queued: "排队中", running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止", stopping: "失败" };
+    const map = { queued: "排队中", running: "运行中", completed: "已完成", failed: "失败", stopped: "已停止", stopping: "停止中" };
     return map[s] || s;
   }
 
@@ -1472,6 +1547,222 @@
         },
       }],
     });
+
+    // ── 套索圈选统计：在散点图上自由画笔圈出区域，松手后统计参数众数 / 中位数 ──
+    _attachLassoSelect(chart, el, scatterData);
+  }
+
+  /**
+   * 射线法判断点 (px, py) 是否在多边形 poly 内部。
+   * poly = [[x0,y0],[x1,y1],...]
+   */
+  function _pointInPolygon(px, py, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i][0], yi = poly[i][1];
+      const xj = poly[j][0], yj = poly[j][1];
+      if ((yi > py) !== (yj > py) &&
+          px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  /**
+   * 在散点图容器上叠加 canvas，支持按住 Shift 自由画笔圈选，松开后统计参数。
+   */
+  function _attachLassoSelect(chart, containerEl, scatterData) {
+    // 移除上次可能残留的 overlay / 面板
+    const oldCvs = containerEl.querySelector(".lasso-canvas");
+    if (oldCvs) oldCvs.remove();
+    const oldPanel = containerEl.querySelector(".lasso-stats-panel");
+    if (oldPanel) oldPanel.remove();
+
+    // 确保容器 position 为 relative/absolute
+    const posStyle = getComputedStyle(containerEl).position;
+    if (posStyle === "static") containerEl.style.position = "relative";
+
+    // 创建 canvas overlay
+    const cvs = document.createElement("canvas");
+    cvs.className = "lasso-canvas";
+    Object.assign(cvs.style, {
+      position: "absolute", left: 0, top: 0,
+      width: "100%", height: "100%",
+      zIndex: 10, cursor: "crosshair",
+      pointerEvents: "none",          // 默认穿透，仅在画笔时拦截
+    });
+    containerEl.appendChild(cvs);
+
+    function syncSize() {
+      cvs.width  = containerEl.clientWidth;
+      cvs.height = containerEl.clientHeight;
+    }
+    syncSize();
+    const ro = new ResizeObserver(syncSize);
+    ro.observe(containerEl);
+
+    const ctx = cvs.getContext("2d");
+    let dragging = false;
+    let path = [];   // [[x,y], [x,y], ...]
+
+    // 绘制当前路径
+    function drawPath() {
+      ctx.clearRect(0, 0, cvs.width, cvs.height);
+      if (path.length < 2) return;
+      ctx.beginPath();
+      ctx.moveTo(path[0][0], path[0][1]);
+      for (let i = 1; i < path.length; i++) {
+        ctx.lineTo(path[i][0], path[i][1]);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = "rgba(64,158,255,0.85)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(64,158,255,0.10)";
+      ctx.fill();
+    }
+
+    // 用 ECharts zrender 事件捕获 mousedown，不与 tooltip/visualMap 冲突
+    // Shift 键进入画笔模式
+    chart.getZr().on("mousedown", function (e) {
+      if (!e.event.shiftKey) return;
+      dragging = true;
+      path = [[e.event.offsetX, e.event.offsetY]];
+      cvs.style.pointerEvents = "auto";   // 拦截后续 move/up
+      chart.dispatchAction({ type: "hideTip" });
+    });
+
+    cvs.addEventListener("mousemove", function (e) {
+      if (!dragging) return;
+      path.push([e.offsetX, e.offsetY]);
+      drawPath();
+    });
+
+    cvs.addEventListener("mouseup", function () {
+      if (!dragging) return;
+      dragging = false;
+      cvs.style.pointerEvents = "none";
+
+      // 需要至少 3 个点形成闭合区域
+      if (path.length < 3) {
+        ctx.clearRect(0, 0, cvs.width, cvs.height);
+        return;
+      }
+
+      // 找出多边形内的数据点
+      const selected = [];
+      for (const d of scatterData) {
+        const px = chart.convertToPixel("grid", [d.value[0], d.value[1]]);
+        if (!px) continue;
+        if (_pointInPolygon(px[0], px[1], path)) selected.push(d);
+      }
+
+      // 短暂保留轮廓后清除
+      setTimeout(() => ctx.clearRect(0, 0, cvs.width, cvs.height), 400);
+
+      if (selected.length === 0) return;
+      _showCircleStats(containerEl, selected);
+    });
+
+    // Esc 取消画笔
+    containerEl.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && dragging) {
+        dragging = false;
+        path = [];
+        cvs.style.pointerEvents = "none";
+        ctx.clearRect(0, 0, cvs.width, cvs.height);
+      }
+    });
+  }
+
+  /**
+   * 计算并显示圈选组合参数的众数 / 中位数。
+   */
+  function _showCircleStats(containerEl, selected) {
+    // 收集每个参数的值
+    const paramValues = {};   // { "engine.ma_period": [20, 30, 20, ...], ... }
+    for (const d of selected) {
+      const pc = d._combo.param_combo || {};
+      for (const [k, v] of Object.entries(pc)) {
+        (paramValues[k] || (paramValues[k] = [])).push(v);
+      }
+    }
+
+    // 众数
+    function mode(arr) {
+      const freq = {};
+      let maxCnt = 0, modeVal = arr[0];
+      for (const v of arr) {
+        const key = String(v);
+        freq[key] = (freq[key] || 0) + 1;
+        if (freq[key] > maxCnt) { maxCnt = freq[key]; modeVal = v; }
+      }
+      return modeVal;
+    }
+    // 中位数
+    function median(arr) {
+      const nums = arr.filter(v => typeof v === "number").sort((a, b) => a - b);
+      if (nums.length === 0) return null;
+      const mid = nums.length >> 1;
+      return nums.length & 1 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+    }
+
+    // 格式化值
+    function fmtVal(v) {
+      if (v == null) return "—";
+      if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(4);
+      return String(v);
+    }
+
+    // 构建面板 HTML
+    let rows = "";
+    for (const [k, vals] of Object.entries(paramValues)) {
+      const shortK = k.split(".").pop();
+      const modeV  = mode(vals);
+      const medV   = median(vals);
+      rows += `<tr><td style="text-align:left;padding:2px 8px;font-weight:600;">${shortK}</td>`
+            + `<td style="padding:2px 8px;">${fmtVal(modeV)}</td>`
+            + `<td style="padding:2px 8px;">${fmtVal(medV)}</td></tr>`;
+    }
+
+    // 也统计指标的中位数
+    const profits = selected.map(d => d.value[0]);
+    const dds     = selected.map(d => d.value[1]);
+    const sharpes = selected.map(d => d.value[2]);
+    rows += `<tr style="border-top:1px solid rgba(255,255,255,.15);"><td style="text-align:left;padding:2px 8px;font-weight:600;">中位盈利%</td>`
+          + `<td style="padding:2px 8px;">—</td><td style="padding:2px 8px;">${fmtVal(median(profits))}</td></tr>`;
+    rows += `<tr><td style="text-align:left;padding:2px 8px;font-weight:600;">中位回撤%</td>`
+          + `<td style="padding:2px 8px;">—</td><td style="padding:2px 8px;">${fmtVal(median(dds))}</td></tr>`;
+    rows += `<tr><td style="text-align:left;padding:2px 8px;font-weight:600;">中位夏普</td>`
+          + `<td style="padding:2px 8px;">—</td><td style="padding:2px 8px;">${fmtVal(median(sharpes))}</td></tr>`;
+
+    const html = `<div style="margin-bottom:4px;font-weight:700;font-size:.9rem;">圈选组合: ${selected.length} 个</div>`
+      + `<table style="font-size:.82rem;border-collapse:collapse;width:100%;">`
+      + `<thead><tr style="color:rgba(255,255,255,.55);"><th style="text-align:left;padding:2px 8px;">参数</th><th style="padding:2px 8px;">众数</th><th style="padding:2px 8px;">中位数</th></tr></thead>`
+      + `<tbody>${rows}</tbody></table>`
+      + `<div style="margin-top:6px;font-size:.72rem;color:rgba(255,255,255,.4);">按住 Shift 自由画笔重新圈选 · 点 × 关闭</div>`;
+
+    // 复用或新建面板
+    let panel = containerEl.querySelector(".lasso-stats-panel");
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "lasso-stats-panel";
+      Object.assign(panel.style, {
+        position: "absolute", right: "90px", top: "12px",
+        zIndex: 20, background: "rgba(30,30,42,.92)",
+        border: "1px solid rgba(255,255,255,.12)",
+        borderRadius: "8px", padding: "10px 14px",
+        color: "#e2e8f0", maxWidth: "320px",
+        boxShadow: "0 4px 20px rgba(0,0,0,.5)",
+        backdropFilter: "blur(6px)",
+      });
+      containerEl.appendChild(panel);
+    }
+    panel.innerHTML = `<span style="position:absolute;right:6px;top:4px;cursor:pointer;font-size:.9rem;color:rgba(255,255,255,.4);"
+      onclick="this.parentElement.remove()">×</span>` + html;
+    panel.style.display = "block";
   }
 
   /**

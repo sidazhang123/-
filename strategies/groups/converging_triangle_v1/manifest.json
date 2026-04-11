@@ -204,7 +204,7 @@
       }
     },
     "filter_st": {
-      "enabled": "是否在筛选时排除名称包含 ST（不分大小写）的股票。默认开启。"
+      "enabled": "是否在筛选时排除名称包含 ST（不分大小写）或包含“退”的股票。默认开启。"
     },
     "execution": {
       "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader，默认 false。"

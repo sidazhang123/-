@@ -710,28 +710,110 @@ def run_consecutive_uptrends_v1_specialized(
             if code_val in per_code_data:
                 per_code_data[code_val][tf] = code_frame.sort_values("ts").reset_index(drop=True)
 
-    # ── 逐股扫描 ──
+    # ── 向量化批量检测 ──
     scan_start = time.perf_counter()
+
+    # 完全复刻 detect_streak() 连续性判定，pandas 向量化替代逐股循环 (OR)
+    # 如果 selloff_enabled，向量化只检测连阳段（超集），selloff 在 per-stock 验证
+    _batch_hits: set[str] = set()
+    _batch_hits_per_tf: dict[str, set[str]] = {}
+    for tf in enabled_tfs:
+        frame = tf_frames[tf]
+        if frame.empty:
+            _batch_hits_per_tf[tf] = set()
+            continue
+        _p = all_tf_params[tf]
+        _streak_len = int(_p["streak_len"])
+        _bar_gain_max = float(_p["bar_gain_max"])
+        _scan_bars = int(_p.get("scan_bars", 0))
+
+        # 取尾部窗口
+        _wf = frame.groupby("code", sort=False).tail(_scan_bars) if _scan_bars > 0 else frame
+
+        # 合格K线布尔掩码
+        _safe_o = _wf["open"].where(_wf["open"] > 0, np.nan)
+        _is_bull = _wf["close"] > _wf["open"]
+        _gains = (_wf["close"] - _wf["open"]) / _safe_o
+        _qualified = (_is_bull & (_gains <= _bar_gain_max)).astype(int)
+
+        # 连续计数：用 cumsum 分段 + cumcount 计连续长度
+        _not_qual = ~_qualified.astype(bool)
+        _block_id = _not_qual.groupby(_wf["code"], sort=False).cumsum()
+        _streak_at = _qualified.groupby([_wf["code"], _block_id], sort=False).cumcount() + 1
+        _streak_at = _streak_at * _qualified  # 非合格位置清零
+
+        _max_streak = _streak_at.groupby(_wf["code"], sort=False).max()
+        _tf_hits = set(_max_streak.index[_max_streak >= _streak_len])
+        _batch_hits_per_tf[tf] = _tf_hits
+        _batch_hits |= _tf_hits
+
     result_map: dict[str, StockScanResult] = {}
-    total_candidates = 0
+    total_candidates = len(codes)
     total_kept = 0
 
     for code in codes:
+        if code not in _batch_hits:
+            continue
+
         code_tf_data = per_code_data.get(code, {})
         for tf in enabled_tfs:
             if tf not in code_tf_data:
                 code_tf_data[tf] = pd.DataFrame()
 
         try:
-            code_result, stats = _scan_one_code(
-                code=code,
-                name=code_to_name.get(code, ""),
+            # 向量化已确认命中，仅对命中周期调用 detect_streak 获取位置 metrics
+            total_bars = sum(len(df) for df in code_tf_data.values())
+            per_tf_detail: dict[str, dict[str, Any]] = {}
+            hit_tfs: list[str] = []
+
+            for tf in enabled_tfs:
+                if code not in _batch_hits_per_tf.get(tf, set()):
+                    per_tf_detail[tf] = {"detected": False, "reason": "未命中"}
+                    continue
+                frame = code_tf_data.get(tf, pd.DataFrame())
+                if frame.empty:
+                    per_tf_detail[tf] = {"detected": False, "reason": "无数据"}
+                    continue
+                params = all_tf_params[tf]
+                scan_bars = int(params.get("scan_bars", len(frame)))
+                frame_window = frame.tail(scan_bars)
+                result = detect_streak(frame_window, params)
+                detail = {"detected": result.matched, "tf": tf, **result.metrics}
+                per_tf_detail[tf] = detail
+                if result.matched:
+                    hit_tfs.append(tf)
+
+            if not hit_tfs:
+                # 向量化命中但 detect_streak 未确认（selloff 模式下可能发生）
+                continue
+
+            payload = build_consecutive_uptrends_payload(
+                hit_tfs=hit_tfs,
+                per_tf_detail=per_tf_detail,
                 tf_data=code_tf_data,
                 all_params={tf: all_tf_params[tf] for tf in enabled_tfs},
-                enabled_tfs=enabled_tfs,
+            )
+            clock_tf = coarsest_tf(hit_tfs)
+
+            signal = build_signal_dict(
+                code=code,
+                name=code_to_name.get(code, ""),
+                signal_dt=payload["window_end_ts"],
+                clock_tf=clock_tf,
                 strategy_group_id=strategy_group_id,
                 strategy_name=strategy_name,
+                signal_label=payload["signal_summary"],
+                payload=payload,
             )
+
+            code_result = StockScanResult(
+                code=code,
+                name=code_to_name.get(code, ""),
+                processed_bars=total_bars,
+                signal_count=1,
+                signals=[signal],
+            )
+            total_kept += 1
         except Exception as exc:
             code_result = StockScanResult(
                 code=code,
@@ -741,11 +823,7 @@ def run_consecutive_uptrends_v1_specialized(
                 signals=[],
                 error_message=str(exc),
             )
-            stats = {"candidate": 0, "kept": 0}
             base_metrics["stock_errors"] += 1
-
-        total_candidates += stats.get("candidate", 0)
-        total_kept += stats.get("kept", 0)
 
         if code_result.signal_count > 0 or code_result.error_message:
             result_map[code] = code_result
@@ -769,9 +847,181 @@ def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> d
     return {"params": params}
 
 
+# ---------------------------------------------------------------------------
+# GPU 批量检测 (detect_batch hook)
+# ---------------------------------------------------------------------------
+
+_STREAK_KERNEL_CODE = r'''
+extern "C" __global__
+void detect_streak_kernel(
+    const double* open_arr,
+    const double* close_arr,
+    const long long* boundaries,
+    const int n_segments,
+    const int streak_len,
+    const double bar_gain_max,
+    const int selloff_enabled,
+    const int max_offset,
+    const int selloff_bars,
+    const double selloff_return_pct,
+    bool* matched,
+    int* start_offsets
+) {
+    int seg = blockIdx.x * blockDim.x + threadIdx.x;
+    if (seg >= n_segments) return;
+
+    long long s = boundaries[seg];
+    long long e = boundaries[seg + 1];
+
+    int run_count = 0;
+    long long last_match_end = s - 1;
+
+    for (long long i = s; i < e; i++) {
+        double o = open_arr[i];
+        double c = close_arr[i];
+        bool qualified = (c > o) && (o > 0.0);
+        if (qualified) {
+            double gain = (c - o) / o;
+            qualified = (gain <= bar_gain_max);
+        }
+
+        if (qualified) {
+            run_count++;
+        } else {
+            run_count = 0;
+        }
+
+        if (run_count < streak_len) continue;
+
+        long long streak_start = i - streak_len + 1;
+        if (streak_start <= last_match_end) continue;
+
+        if (!selloff_enabled) {
+            matched[i] = true;
+            start_offsets[i] = (int)(streak_start - i);
+            last_match_end = i;
+            continue;
+        }
+
+        // Compute streak max close and total gain
+        double streak_max = close_arr[streak_start];
+        for (long long j = streak_start + 1; j <= i; j++) {
+            if (close_arr[j] > streak_max) streak_max = close_arr[j];
+        }
+        double total_gain = streak_max - close_arr[streak_start];
+        if (total_gain <= 0.0) continue;
+
+        // Search for selloff
+        bool found = false;
+        for (long long ss = i + 1; ss <= i + 1 + max_offset && !found; ss++) {
+            long long se = ss + selloff_bars - 1;
+            if (se >= e) break;
+
+            double min_close = close_arr[ss];
+            for (long long k = ss + 1; k <= se; k++) {
+                if (close_arr[k] < min_close) min_close = close_arr[k];
+            }
+
+            double drawdown_ratio = (streak_max - min_close) / total_gain;
+            if (drawdown_ratio >= selloff_return_pct) {
+                matched[se] = true;
+                start_offsets[se] = (int)(streak_start - se);
+                last_match_end = se;
+                found = true;
+            }
+        }
+    }
+}
+'''
+
+_STREAK_KERNEL = None
+
+
+def _get_streak_kernel():
+    global _STREAK_KERNEL
+    if _STREAK_KERNEL is not None:
+        return _STREAK_KERNEL
+    import cupy as cp
+    _STREAK_KERNEL = cp.RawKernel(_STREAK_KERNEL_CODE, 'detect_streak_kernel')
+    return _STREAK_KERNEL
+
+
+def detect_streak_batch(gpu_columns, boundaries, det_kwargs):
+    """GPU 批量检测连续小阳（含可选急跌段）。
+
+    每个 CUDA 线程处理一个 segment（一只股票），在 segment 内顺序扫描：
+    1. 计算阳线合格掩码 + 连续长度（run-length encoding）
+    2. 非重叠匹配 + 可选急跌段验证
+
+    gpu_columns: {"open": cupy, "close": cupy} flat GPU 数组
+    boundaries: numpy int64 array, shape=(n_stocks+1,)
+    det_kwargs: {"params": {...}}
+    返回: cupy boolean mask, shape=(total_rows,)
+    """
+    import cupy as cp
+
+    params = det_kwargs.get("params", {})
+    streak_len = int(params["streak_len"])
+    bar_gain_max = float(params["bar_gain_max"])
+    selloff_enabled = bool(params.get("selloff_enabled", False))
+    selloff_start_pct = float(params.get("selloff_start_pct", 0.5))
+    selloff_return_pct = float(params.get("selloff_return_pct", 0.7))
+    selloff_bars = int(params.get("selloff_bars", 3))
+    max_offset = int(math.floor(selloff_start_pct * streak_len))
+
+    open_arr = gpu_columns["open"]
+    close_arr = gpu_columns["close"]
+    n = len(open_arr)
+
+    matched = cp.zeros(n, dtype=cp.bool_)
+    start_offsets = cp.zeros(n, dtype=cp.int32)
+
+    n_segments = len(boundaries) - 1
+    boundaries_gpu = cp.asarray(boundaries.astype(np.int64))
+
+    kernel = _get_streak_kernel()
+    threads_per_block = 256
+    blocks = (n_segments + threads_per_block - 1) // threads_per_block
+
+    kernel(
+        (blocks,), (threads_per_block,),
+        (
+            open_arr, close_arr, boundaries_gpu,
+            np.int32(n_segments),
+            np.int32(streak_len), np.float64(bar_gain_max),
+            np.int32(1 if selloff_enabled else 0),
+            np.int32(max_offset),
+            np.int32(selloff_bars), np.float64(selloff_return_pct),
+            matched, start_offsets,
+        ),
+    )
+
+    # Cache for pattern_span_fn
+    detect_streak_batch._cached_boundaries = boundaries.copy()
+    detect_streak_batch._cached_offsets = cp.asnumpy(start_offsets)
+
+    return matched
+
+
+detect_streak_batch._batch_columns = ["open", "close"]
+detect_streak_batch._cached_boundaries = None
+detect_streak_batch._cached_offsets = None
+
+
+def _streak_pattern_span(seg_idx, local_idx):
+    """Pattern span callback: 从 start_offsets 计算 pattern_start。"""
+    s = int(detect_streak_batch._cached_boundaries[seg_idx])
+    offset = int(detect_streak_batch._cached_offsets[s + local_idx])
+    return max(0, local_idx + offset), local_idx
+
+
+detect_streak_batch._pattern_span_fn = _streak_pattern_span
+
+
 BACKTEST_HOOKS = {
     "detect": detect_streak,
     "detect_vectorized": detect_streak_vectorized,
+    "detect_batch": detect_streak_batch,
     "prepare": None,
     "normalize_params": _normalize_for_backtest,
     "tf_sections": {

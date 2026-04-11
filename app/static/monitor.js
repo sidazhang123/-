@@ -73,12 +73,7 @@ function syncErrorTabAlert() {
   button.classList.toggle("has-error-alert", selectedTaskHasErrors());
 }
 
-function splitStocks(text) {
-  return String(text || "")
-    .split(/[\n,\s，]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
+
 
 function selectedGroupId() {
   return $("strategyGroupSelect")?.value || "";
@@ -289,7 +284,6 @@ function collectMonitorSettings() {
   }
   return {
     source_db: $("sourceDb")?.value || "",
-    stocks_input: $("stocksInput")?.value || "",
     sample_size: getCurrentSampleSize(),
     strategy_group_id: gid,
     group_params: cloneValue(state.groupParams),
@@ -347,9 +341,6 @@ function applyMonitorSettings(settings) {
   if (!settings || typeof settings !== "object") return;
   if (typeof settings.source_db === "string" && $("sourceDb")) {
     $("sourceDb").value = settings.source_db;
-  }
-  if (typeof settings.stocks_input === "string" && $("stocksInput")) {
-    $("stocksInput").value = settings.stocks_input;
   }
   const sampleInput = $("sampleSize");
   if (sampleInput) {
@@ -690,7 +681,6 @@ async function createTask(runMode = "full") {
   }
 
   const payload = {
-    stocks: splitStocks($("stocksInput")?.value || ""),
     source_db: $("sourceDb")?.value.trim() || null,
     run_mode: runMode,
     sample_size: getCurrentSampleSize(),
@@ -821,7 +811,7 @@ function bindEvents() {
     state._prevGroupId = newId;
   });
 
-  ["sourceDb", "stocksInput", "skipCoverageFilter", "sampleSize"].forEach((id) => {
+  ["sourceDb", "skipCoverageFilter", "sampleSize"].forEach((id) => {
     const el = $(id);
     if (!el) return;
     el.addEventListener("input", markSettingsDirty);

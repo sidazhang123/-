@@ -22,7 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class CreateTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    stocks: list[str] = Field(default_factory=list, description="股票代码或中文名称列表")
     start_ts: datetime | None = None
     end_ts: datetime | None = None
     source_db: str | None = None
@@ -93,7 +92,6 @@ class MonitorFormSettingsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source_db: str = ""
-    stocks_input: str = ""
     sample_size: int = Field(default=20, ge=1, le=5000)
     strategy_group_id: str = ""
     group_params: dict[str, Any] = Field(default_factory=dict)
@@ -237,6 +235,10 @@ class BacktestCreateRequest(BaseModel):
         default_factory=dict,
         description="sweep模式：参数路径 → 扫描范围。路径格式: 'section.param_name'",
     )
+    lock_fwd_cache: bool = Field(
+        default=True,
+        description="锁定前瞻缓存：为 True 时只要缓存文件存在就直接使用，不校验版本",
+    )
 
 
 class BacktestCreateResponse(BaseModel):
@@ -259,6 +261,10 @@ class BacktestStatusResponse(BaseModel):
     processed_stocks: int = 0
     combo_index: int = 0
     combo_total: int = 0
+    phase: str | None = None
+    phase_label: str | None = None
+    phase_index: int | None = None
+    phase_total: int | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_message: str | None = None
@@ -321,6 +327,7 @@ class BacktestFormSettingsPayload(BaseModel):
 
     forward_bars: list[int] = Field(default_factory=lambda: [2, 5, 7], min_length=3, max_length=3)
     slide_step: int = Field(default=1, ge=1)
+    lock_fwd_cache: bool = True
     strategy_group_id: str = ""
     group_params: dict[str, Any] = Field(default_factory=dict)
     per_strategy_sweep_ranges: dict[str, Any] = Field(default_factory=dict)

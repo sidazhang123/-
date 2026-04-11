@@ -111,8 +111,12 @@ function deriveJobErrorText(job, jobType) {
 }
 
 function currentRunMode() {
-  const raw = $("maintenanceRunMode")?.value || "latest_update";
-  return raw === "concept" ? "concept_update" : normalizeMode(raw);
+  switch ($("maintenanceRunMode")?.value) {
+    case "latest_update":       return "latest_update";
+    case "historical_backfill": return "historical_backfill";
+    case "concept_update":      return "concept_update";
+    default:                    return "latest_update";
+  }
 }
 
 function syncJobTypeFromRunMode() {
@@ -580,29 +584,29 @@ async function loadServerStatus() {
     }
     const meta = data.metadata || {};
     const items = [];
-    const stdHost = meta.std_active_host || "";
-    const exHost = meta.ex_active_host || "";
-    items.push(renderHostItem("标准行情", stdHost));
-    items.push(renderHostItem("扩展行情", exHost));
 
-    let usedHosts = [];
-    try { usedHosts = JSON.parse(meta.std_used_hosts || "[]"); } catch { /* ignore */ }
-    for (const h of usedHosts) {
-      if (h && h !== stdHost) items.push(renderHostItem("标准(历史)", h, true));
-    }
-    let exUsedHosts = [];
-    try { exUsedHosts = JSON.parse(meta.ex_used_hosts || "[]"); } catch { /* ignore */ }
-    for (const h of exUsedHosts) {
-      if (h && h !== exHost) items.push(renderHostItem("扩展(历史)", h, true));
-    }
+    let stdUsed = [];
+    try { stdUsed = JSON.parse(meta.std_used_hosts || "[]"); } catch { /* ignore */ }
+    let exUsed = [];
+    try { exUsed = JSON.parse(meta.ex_used_hosts || "[]"); } catch { /* ignore */ }
+
+    const stdActive = meta.std_active_host || "";
+    const exActive = meta.ex_active_host || "";
+    const stdDisplay = stdActive || (stdUsed.length > 0 ? stdUsed[stdUsed.length - 1] : "");
+    const exDisplay = exActive || (exUsed.length > 0 ? exUsed[exUsed.length - 1] : "");
+    const stdStatus = stdActive ? "active" : stdDisplay ? "idle" : "none";
+    const exStatus = exActive ? "active" : exDisplay ? "idle" : "none";
+
+    items.push(renderHostItem("标准行情", stdDisplay, stdStatus));
+    items.push(renderHostItem("扩展行情", exDisplay, exStatus));
     container.innerHTML = items.join("");
   } catch (err) {
     container.innerHTML = `<span class="server-status-error">获取服务器状态失败: ${err.message}</span>`;
   }
 }
 
-function renderHostItem(tag, host, inactive) {
-  const dotClass = !host ? "gray" : inactive ? "gray" : "green";
+function renderHostItem(tag, host, status) {
+  const dotClass = status === "idle" ? "green" : status === "active" ? "amber" : "gray";
   const label = host || "未连接";
   return `<span class="server-status-item"><span class="status-dot ${dotClass}"></span><span class="host-label">${label}</span><span class="host-tag">${tag}</span></span>`;
 }

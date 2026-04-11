@@ -4,9 +4,11 @@
 职责：
 1. 按周线/日线两个可选周期，批量加载 K 线数据并在每个启用周期上独立检测仙人指路形态。
 2. 仙人指路定义：
-   a. 最新K线收上影线：close > open 且 (high − close) / (close − open) ≥ shadow_ratio。
-   b. 当K线放量：成交量 ≥ 之前3根K线平均成交量 × volume_multiplier。
-   c. 前期均线下降：lookback_bars 根前的 MA 值 ≥ 当前 MA 值 × price_decline_ratio。
+   a. 最新K线收上影线：close ≥ open 且 (high − close) / (high − open) × 100 ≥ shadow_ratio%。
+   b. 下影线 < 上影线 × lower_shadow_pct%（过滤下影线过长的K线）。
+   c. 当日最大涨幅 (high − open) / open × 100 ≥ max_gain_pct%。
+   d. 当K线放量：成交量 ≥ 之前3根K线平均成交量 × volume_multiplier。
+   e. 前期均线下降：lookback_bars 根前的 MA 值 ≥ 当前 MA 值 × price_decline_ratio。
 3. 多周期之间为并集关系（OR）：任一启用周期检测到仙人指路即产生信号。
 4. 同一股票多周期命中时合并为 1 条信号，clock_tf 取最粗命中周期。
 """
@@ -35,7 +37,7 @@ from strategies.engine_commons import (
     read_universe_filter_params,
 )
 
-STRATEGY_LABEL = "仙人指路"
+STRATEGY_LABEL = "仙人指路 v1"
 
 # 周期 key → klines 表名
 _TF_TABLE: dict[str, str] = {
@@ -159,6 +161,9 @@ def prepare_xianren_zhilu_features(frame: pd.DataFrame, params: dict[str, Any]) 
         part["ma"] = part["close"].rolling(ma_period, min_periods=ma_period).mean()
         prepared.append(part)
     return pd.concat(prepared, axis=0, ignore_index=True)
+
+
+prepare_xianren_zhilu_features._multi_stock = True
 
 
 # ---------------------------------------------------------------------------
@@ -373,11 +378,14 @@ def detect_xianren_zhilu_vectorized(
     cond_gain_pct = (max_gain / safe_opens * 100) >= max_gain_pct
 
     # 条件3：放量（volume >= 前3根均量 × multiplier）
-    avg_vol_3 = pd.Series(volumes).rolling(3, min_periods=3).mean().shift(1).values
+    avg_vol_3 = pd.Series(volumes).rolling(3).mean().shift(1).values
     cond_volume = volumes >= avg_vol_3 * volume_multiplier
 
     # 条件4：前期均线下降（ma[i - lookback_bars] >= ma[i] * price_decline_ratio）
-    ma_lookback = pd.Series(mas).shift(lookback_bars).values
+    ma_lookback = np.empty(n, dtype=np.float64)
+    ma_lookback[:] = np.nan
+    if lookback_bars < n:
+        ma_lookback[lookback_bars:] = mas[:-lookback_bars]
     cond_ma = (~np.isnan(mas) & ~np.isnan(ma_lookback)
                & (mas > 0)
                & (ma_lookback >= mas * price_decline_ratio))
@@ -391,18 +399,19 @@ def detect_xianren_zhilu_vectorized(
     hit_indices = np.where(matched)[0]
     results: list[DetectionResult] = []
     for i in hit_indices:
+        ii = int(i)
         results.append(DetectionResult(
             matched=True,
-            pattern_start_idx=int(i),
-            pattern_end_idx=int(i),
-            pattern_start_ts=ts_values[i],
-            pattern_end_ts=ts_values[i],
+            pattern_start_idx=ii,
+            pattern_end_idx=ii,
+            pattern_start_ts=ts_values[ii],
+            pattern_end_ts=ts_values[ii],
             metrics={
-                "shadow_ratio": round(float(shadow[i] / max_gain[i] * 100), 2),
-                "volume_ratio": round(float(volumes[i] / avg_vol_3[i]), 2),
-                "ma_current": round(float(mas[i]), 2),
-                "ma_lookback": round(float(ma_lookback[i]), 2),
-                "ma_decline_ratio": round(float(ma_lookback[i] / mas[i]), 2),
+                "shadow_ratio": round(float(shadow[ii] / max_gain[ii] * 100), 2),
+                "volume_ratio": round(float(volumes[ii] / avg_vol_3[ii]), 2),
+                "ma_current": round(float(mas[ii]), 2),
+                "ma_lookback": round(float(ma_lookback[ii]), 2),
+                "ma_decline_ratio": round(float(ma_lookback[ii] / mas[ii]), 2),
             },
         ))
     return results
@@ -622,28 +631,140 @@ def run_xianren_zhilu_v1_specialized(
             if code_val in per_code_data:
                 per_code_data[code_val][tf] = code_frame.copy()
 
-    # ── 逐股扫描 ──
+    # ── 向量化批量检测 ──
     scan_start = time.perf_counter()
+
+    # 完全复刻 detect_xianren_zhilu() 全部条件，pandas 向量化替代逐股循环 (OR)
+    _batch_hits: set[str] = set()
+    _batch_hits_per_tf: dict[str, set[str]] = {}
+    for tf in enabled_tfs:
+        frame = tf_frames[tf]
+        if frame.empty:
+            _batch_hits_per_tf[tf] = set()
+            continue
+        _p = all_tf_params[tf]
+        _sr = float(_p["shadow_ratio"])
+        _lsp = float(_p["lower_shadow_pct"])
+        _mgp = float(_p["max_gain_pct"])
+        _vm = float(_p["volume_multiplier"])
+        _lb = int(_p["lookback_bars"])
+        _mp = int(_p["ma_period"])
+        _pdr = float(_p["price_decline_ratio"])
+        _min_bars = _lb + _mp
+
+        _g = frame.groupby("code", sort=False)
+        # groupby.shift 内部 Cython 实现，真正向量化
+        _sv1 = _g["volume"].shift(1)
+        _sv2 = _g["volume"].shift(2)
+        _sv3 = _g["volume"].shift(3)
+        _f = frame.copy()
+        _f["_avg3"] = (_sv1 + _sv2 + _sv3) / 3.0
+        _f["_ma_lb"] = _g["ma"].shift(_lb)
+        _f["_n"] = _g.cumcount() + 1
+
+        _last = _f.groupby("code", sort=False).last()
+        _o, _c, _h = _last["open"], _last["close"], _last["high"]
+        _l, _v, _ma = _last["low"], _last["volume"], _last["ma"]
+        _shadow = _h - _c
+        _max_gain = _h - _o
+        _lower_sh = (_o - _l).clip(lower=0)
+        _safe_mg = _max_gain.where(_max_gain > 0, np.nan)
+        _safe_o = _o.where(_o > 0, np.nan)
+
+        _ok = (
+            (_last["_n"] >= _min_bars)
+            & (_c >= _o) & (_h > _o) & (_shadow > 0) & (_max_gain > 0)
+            & _ma.notna()
+            & (_shadow / _safe_mg * 100 >= _sr)
+            & (_lower_sh < _shadow * (_lsp / 100))
+            & (_max_gain / _safe_o * 100 >= _mgp)
+            & _last["_avg3"].notna() & (_last["_avg3"] > 0)
+            & (_v >= _last["_avg3"] * _vm)
+            & (_ma > 0) & _last["_ma_lb"].notna()
+            & (_last["_ma_lb"] >= _ma * _pdr)
+        )
+        _tf_hits = set(_last.index[_ok])
+        _batch_hits_per_tf[tf] = _tf_hits
+        _batch_hits |= _tf_hits
+
     result_map: dict[str, StockScanResult] = {}
-    total_candidates = 0
+    total_candidates = len(codes)
     total_kept = 0
 
     for code in codes:
+        if code not in _batch_hits:
+            continue
+
         code_tf_data = per_code_data.get(code, {})
         for tf in enabled_tfs:
             if tf not in code_tf_data:
                 code_tf_data[tf] = pd.DataFrame()
 
         try:
-            code_result, stats = _scan_one_code(
-                code=code,
-                name=code_to_name.get(code, ""),
+            # 向量化已确认命中，直接从数据收集 metrics 构建 payload
+            total_bars = sum(len(df) for df in code_tf_data.values())
+            hit_tfs: list[str] = [
+                tf for tf in enabled_tfs
+                if code in _batch_hits_per_tf.get(tf, set())
+            ]
+            per_tf_detail: dict[str, dict[str, Any]] = {}
+
+            for tf in enabled_tfs:
+                frame = code_tf_data.get(tf, pd.DataFrame())
+                if frame.empty or tf not in hit_tfs:
+                    per_tf_detail[tf] = {"passed": tf in hit_tfs, "reason": "无数据" if frame.empty else ""}
+                    continue
+                params = all_tf_params[tf]
+                i = len(frame) - 1
+                cur = frame.iloc[i]
+                o, c, h, l_p = float(cur["open"]), float(cur["close"]), float(cur["high"]), float(cur["low"])
+                vol = float(cur["volume"])
+                max_gain = h - o
+                shadow = h - c
+                lower_sh = max(o - l_p, 0.0)
+                avg3 = float(frame.iloc[i - 3:i]["volume"].mean()) if i >= 3 else 1.0
+                lb_idx = i - int(params["lookback_bars"])
+                ma_cur = float(cur["ma"])
+                ma_lb = float(frame.iloc[lb_idx]["ma"]) if 0 <= lb_idx < len(frame) else ma_cur
+
+                per_tf_detail[tf] = {
+                    "passed": True,
+                    "shadow_ratio": round(shadow / max_gain * 100, 2) if max_gain > 0 else 0.0,
+                    "lower_shadow_pct": round(lower_sh / shadow * 100, 2) if shadow > 0 else 0.0,
+                    "max_gain_pct": round(max_gain / o * 100, 2) if o > 0 else 0.0,
+                    "volume_ratio": round(vol / avg3, 2) if avg3 > 0 else 0.0,
+                    "ma_current": round(ma_cur, 2),
+                    "ma_lookback": round(ma_lb, 2),
+                    "ma_decline_ratio": round(ma_lb / ma_cur, 2) if ma_cur > 0 else 0.0,
+                }
+
+            payload = build_xianren_zhilu_payload(
+                hit_tfs=hit_tfs,
+                per_tf_detail=per_tf_detail,
                 tf_data=code_tf_data,
                 all_params={tf: all_tf_params[tf] for tf in enabled_tfs},
-                enabled_tfs=enabled_tfs,
+            )
+            clock_tf = coarsest_tf(hit_tfs)
+
+            signal = build_signal_dict(
+                code=code,
+                name=code_to_name.get(code, ""),
+                signal_dt=payload["anchor_day_ts"],
+                clock_tf=clock_tf,
                 strategy_group_id=strategy_group_id,
                 strategy_name=strategy_name,
+                signal_label=payload["signal_summary"],
+                payload=payload,
             )
+
+            code_result = StockScanResult(
+                code=code,
+                name=code_to_name.get(code, ""),
+                processed_bars=total_bars,
+                signal_count=1,
+                signals=[signal],
+            )
+            total_kept += 1
         except Exception as exc:
             code_result = StockScanResult(
                 code=code,
@@ -653,11 +774,7 @@ def run_xianren_zhilu_v1_specialized(
                 signals=[],
                 error_message=str(exc),
             )
-            stats = {"candidate": 0, "kept": 0}
             base_metrics["stock_errors"] += 1
-
-        total_candidates += stats.get("candidate", 0)
-        total_kept += stats.get("kept", 0)
 
         if code_result.signal_count > 0 or code_result.error_message:
             result_map[code] = code_result
@@ -679,10 +796,118 @@ def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> d
     return {"params": _normalize_tf_params(group_params, section_key)}
 
 
+# ---------------------------------------------------------------------------
+# GPU 批量检测 (detect_batch hook)
+# ---------------------------------------------------------------------------
+
+
+def detect_xianren_zhilu_batch(
+    columns: dict,
+    boundaries: np.ndarray,
+    det_kwargs: dict[str, Any],
+):
+    """GPU 批量检测：对拼接后的多股票数据一次性执行仙人指路布尔运算。
+
+    columns: {col_name: cupy.ndarray} — flat GPU 数组
+    boundaries: numpy int64 array, shape=(n_stocks+1,)
+    det_kwargs: {"params": {...}}
+    返回: cupy boolean mask, shape=(total_rows,)
+    """
+    from strategies.engine_commons import (
+        gpu_segmented_rolling_mean,
+        gpu_segmented_shift,
+    )
+    import cupy as cp
+
+    params = det_kwargs["params"]
+    shadow_ratio_threshold = float(params["shadow_ratio"])
+    lower_shadow_pct = float(params["lower_shadow_pct"])
+    max_gain_pct = float(params["max_gain_pct"])
+    volume_multiplier = float(params["volume_multiplier"])
+    lookback_bars = int(params["lookback_bars"])
+    ma_period = int(params["ma_period"])
+    price_decline_ratio = float(params["price_decline_ratio"])
+    min_bars = lookback_bars + ma_period
+
+    opens = columns["open"]
+    closes = columns["close"]
+    highs = columns["high"]
+    lows = columns["low"]
+    volumes = columns["volume"]
+    mas = columns["ma"]
+    n = len(opens)
+
+    # 条件1：close >= open 且有上影线
+    shadow = highs - closes
+    max_gain = highs - opens
+    is_bull = closes >= opens
+    has_shadow = shadow > 0
+    has_gain = max_gain > 0
+
+    # 条件2：上影线占最大涨幅百分比
+    safe_gain = cp.where(max_gain > 0, max_gain, 1.0)
+    cond_shadow = (shadow / safe_gain * 100) >= shadow_ratio_threshold
+
+    # 条件2a：下影线 < 上影线 × lower_shadow_pct%
+    lower_shadow = cp.maximum(opens - lows, 0.0)
+    safe_shadow = cp.where(shadow > 0, shadow, 1.0)
+    cond_lower = lower_shadow < safe_shadow * (lower_shadow_pct / 100)
+
+    # 条件2b：当日最大涨幅 >= max_gain_pct%
+    safe_opens = cp.where(opens > 0, opens, 1.0)
+    cond_gain_pct = (max_gain / safe_opens * 100) >= max_gain_pct
+
+    # 条件3：放量（segmented rolling mean + shift）
+    avg_vol_3 = gpu_segmented_shift(
+        gpu_segmented_rolling_mean(volumes, boundaries, 3),
+        boundaries, 1,
+    )
+    cond_volume = volumes >= avg_vol_3 * volume_multiplier
+
+    # 条件4：前期均线下降（segmented shift）
+    ma_lookback = gpu_segmented_shift(mas, boundaries, lookback_bars)
+    cond_ma = (~cp.isnan(mas) & ~cp.isnan(ma_lookback)
+               & (mas > 0)
+               & (ma_lookback >= mas * price_decline_ratio))
+
+    # 数据充足性：per-segment 前 min_bars-1 个位置 mask 掉
+    cond_data = cp.ones(n, dtype=bool)
+    for i in range(len(boundaries) - 1):
+        s = int(boundaries[i])
+        e = min(s + max(min_bars - 1, 3), int(boundaries[i + 1]))
+        if s < e:
+            cond_data[s:e] = False
+
+    return (is_bull & has_shadow & has_gain & cond_shadow & cond_lower
+            & cond_gain_pct & cond_volume & cond_ma & cond_data)
+
+
+detect_xianren_zhilu_batch._batch_columns = ["open", "high", "low", "close", "volume", "ma"]
+
+
+def prepare_xianren_zhilu_features_batch(
+    gpu_raw: dict,
+    boundaries: np.ndarray,
+    params: dict[str, Any],
+) -> dict:
+    """GPU 原生特征计算：直接在 GPU 上计算 MA。"""
+    from strategies.engine_commons import gpu_segmented_rolling_mean
+
+    ma_period = int(params["ma_period"])
+    ma = gpu_segmented_rolling_mean(gpu_raw["close"], boundaries, ma_period)
+
+    result = dict(gpu_raw)
+    result["ma"] = ma
+    return result
+
+
 BACKTEST_HOOKS = {
     "detect": detect_xianren_zhilu,
     "detect_vectorized": detect_xianren_zhilu_vectorized,
+    "detect_batch": detect_xianren_zhilu_batch,
     "prepare": prepare_xianren_zhilu_features,
+    "prepare_batch": prepare_xianren_zhilu_features_batch,
+    "prepare_key": lambda p: {"ma_period": p["ma_period"]},
     "normalize_params": _normalize_for_backtest,
     "tf_sections": {
         "weekly": {"tf_key": "w", "table": "klines_w"},

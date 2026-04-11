@@ -1,7 +1,7 @@
 {
   "id": "weekly_oversold_rsi_v1",
   "name": "周线超跌 v1",
-  "description": "周线 RSI 超跌筛选：最近一根周线的 RSI(m) 低于绝对阈值且不高于该股票历史最低 RSI(m) 的 y%。",
+  "description": "周线 RSI 超跌筛选：最近一根周线的 RSI(m) 低于绝对阈值且不高于该股票历史最低 RSI(m) 的 y%。可选启用末端暴跌检查，要求收盘价低于 Keltner 通道下轨（SMA − K × ATR）。",
   "module": "strategies.groups.weekly_oversold_rsi_v1",
   "engine": "specialized",
   "execution": {
@@ -16,7 +16,10 @@
     "weekly": {
       "rsi_period": 14,
       "rsi_threshold": 24,
-      "historical_ratio_pct": 120.0
+      "historical_ratio_pct": 120.0,
+      "atr_deviation_enabled": false,
+      "atr_period": 14,
+      "atr_multiplier": 2.0
     },
     "universe_filters": {
       "concepts": {
@@ -36,7 +39,8 @@
     "_overview": [
       "该策略仅使用周线数据，筛选 RSI 处于历史性超跌区域的股票。",
       "命中条件：最近一根周线的 RSI(m) 同时满足两个约束——低于绝对阈值 x，且不高于该股票全部历史周线中最低 RSI(m) 的 y%。",
-      "历史最低 RSI 按每只股票在数据库中所有可用周线数据计算，不限定固定起始日期。"
+      "历史最低 RSI 按每只股票在数据库中所有可用周线数据计算，不限定固定起始日期。",
+      "可选启用末端暴跌检查：要求最新周线收盘价低于 Keltner 通道下轨（SMA(n) − K × ATR(n)），体现下跌段末期出现加速暴跌。ATR 与 SMA 共用同一计算周期，ATR 使用 Wilder EMA 平滑。"
     ],
     "weekly": {
       "_render": "inline_template",
@@ -56,6 +60,22 @@
           "text": "且不高于历史最低 RSI 的 {historical_ratio_pct}%",
           "required": true,
           "help": "历史最低 RSI = 该股票全部周线数据中 RSI(m) 的最小值"
+        },
+        {
+          "text": "启用末端暴跌检查（Keltner 下轨）",
+          "required": false,
+          "toggle": "atr_deviation_enabled",
+          "help": "开启后要求最新周线收盘价低于 SMA − K × ATR，即 Keltner 通道下轨，体现下跌末期加速暴跌"
+        },
+        {
+          "text": "ATR 计算周期 {atr_period}",
+          "follow_toggle": "atr_deviation_enabled",
+          "help": "ATR 和 SMA 共用此周期，ATR 使用 Wilder EMA 平滑"
+        },
+        {
+          "text": "收盘价低于 SMA 减去 {atr_multiplier} 倍 ATR",
+          "follow_toggle": "atr_deviation_enabled",
+          "help": "倍数越大触发越困难，仅筛选极端暴跌"
         }
       ]
     },
@@ -67,7 +87,7 @@
       }
     },
     "filter_st": {
-      "enabled": "是否在筛选时排除名称包含 ST（不分大小写）的股票。默认开启。"
+      "enabled": "是否在筛选时排除名称包含 ST（不分大小写）或包含“退”的股票。默认开启。"
     },
     "execution": {
       "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader，默认 false。"

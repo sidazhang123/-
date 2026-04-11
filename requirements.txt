@@ -9,3 +9,6 @@ zsdtdx==latest
 backtrader @ git+https://github.com/mementum/backtrader.git@master
 scipy>=1.11
 numpy>=1.24
+# GPU 加速（可选）：根据 CUDA 版本选择 cupy-cuda11x 或 cupy-cuda12x
+# cupy-cuda12x==14.0.1
+# nvidia-cuda-nvrtc-cu12==12.9.86

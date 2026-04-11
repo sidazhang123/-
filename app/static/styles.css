@@ -391,15 +391,6 @@ textarea {
   font-size: var(--text-sm);
   line-height: 1.55;
 }
-#stocksInput {
-  min-height: 0;
-  height: 42px;
-  resize: none;
-  font-family: inherit;
-  font-size: var(--text-base);
-  line-height: 1.4;
-  overflow-y: auto;
-}
 textarea.focus-error {
   border-color: var(--color-danger);
   box-shadow: 0 0 0 3px rgba(255,59,48,0.15);
@@ -437,6 +428,20 @@ textarea::placeholder {
   grid-template-columns: repeat(4, 1fr);
   gap: var(--space-lg);
   margin-bottom: var(--space-lg);
+}
+.checkbox-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.checkbox-inline input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
 }
 
 
@@ -1050,6 +1055,7 @@ button.secondary:hover {
   flex-shrink: 0;
 }
 .server-status-item .status-dot.green { background: var(--color-success); }
+.server-status-item .status-dot.amber { background: var(--color-warning); }
 .server-status-item .status-dot.gray  { background: var(--color-text-tertiary); }
 .server-status-item .host-label {
   color: var(--color-text-primary);

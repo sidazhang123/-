@@ -36,7 +36,7 @@ strategies/
 5. 信号 payload 必须正确填写 `chart_interval_start_ts` 与 `chart_interval_end_ts`，且它们必须表示单次信号的实际展示窗口。
 6. 如需概念预筛选，只能使用 `default_params.universe_filters.concepts`，推荐字段固定为 `concept_terms` 与 `reason_terms`。
 7. 概念预筛选由 TaskManager 在 engine 之前执行，engine 不得重复做相同裁剪。
-8. **所有策略默认启用 ST 股票过滤**（`default_params.filter_st.enabled = true`），筛选时自动排除名称包含 ST（不分大小写）的股票。过滤由 TaskManager 在 engine 之前执行，engine 不需要处理。
+8. **所有策略默认启用 ST 股票过滤**（`default_params.filter_st.enabled = true`），筛选时自动排除名称包含 ST（不分大小写）或包含“退”的股票。过滤由 TaskManager 在 engine 之前执行，engine 不需要处理。
 9. **所有新策略的 `param_help` 中每个周期参数组必须采用 `_render: "inline_template"` 渲染模式**（配合 `_label`、`_tf_key`、`_templates`），不允许使用纯 `_comment` 文本方式。即使是单周期策略也必须遵守此规范。
 10. 如果策略检测到可视化辅助线（趋势线、支撑/阻力线、三角形边沿等），应通过 payload 的 `overlay_lines` 字段传递，前端会自动在 K 线图上渲染。详见 `strategy_2/README.md` 第十一节。
 
@@ -285,7 +285,7 @@ def _scan_one_code(*, code, name, daily_frame, daily_params, ...):
 规则与边界：
 
 1. 固定位置只能是 `default_params.filter_st.enabled` 或运行时 `group_params.filter_st.enabled`。
-2. 启用时，TaskManager 在进入 engine 前自动排除名称包含 ST（不分大小写）的股票。
+2. 启用时，TaskManager 在进入 engine 前自动排除名称包含 ST（不分大小写）或包含“退”的股票。
 3. 过滤发生在 TaskManager（概念预筛选之后），engine 不需要处理。
 4. 前端渲染为一个带开关的区域（与 execution 同级），用户可手动关闭。
 5. 新策略复制 `strategy_2` 模板后自动包含此段，无需额外操作。
@@ -346,7 +346,10 @@ signal = build_signal_dict(
 2. `DetectionResult`：检测层统一返回类型（matched / pattern_start_idx / pattern_end_idx / pattern_start_ts / pattern_end_ts / metrics）。
 3. `as_dict` / `as_bool` / `as_int` / `as_float`：参数安全转换工具。
 4. `connect_source_readonly(source_db_path)`：只读连接源行情库。
-5. `build_signal_dict(...)`：构建标准信号结构。7. `read_filter_st_params(group_params)`：读取 ST 过滤开关（由 TaskManager 使用）。
+5. `build_signal_dict(...)`：构建标准信号结构。
+6. `normalize_execution_params(group_params)`：标准执行参数规范化（仅 fallback_to_backtrader）。
+7. `read_filter_st_params(group_params)`：读取 ST 过滤开关（由 TaskManager 使用）。
+
 推荐做法：
 
 1. 所有用户输入参数都先走 `as_*` 规范化。

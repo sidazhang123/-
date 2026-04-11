@@ -76,6 +76,12 @@ _TF_BARS_PER_MONTH: dict[str, int] = {
     "d": 22,
 }
 
+# 各周期箱体搜索最大 bar 数上限（避免 O(n²) 退化）
+_MAX_BOX_BARS: dict[str, int] = {
+    "w": 220,   # ~4 年周线
+    "d": 1100,  # ~5 年日线
+}
+
 # 每周自然日数（时长换算常量）
 _DAYS_PER_WEEK = 7.0
 
@@ -263,7 +269,7 @@ def _evaluate_channel(
     if n < segment_count:
         return None
 
-    # 分段分位数边界构造
+    # 分段分位数边界（np.sort + 手动线性插值，避免 np.quantile 开销）
     seg_size = n / segment_count
     upper_vals: list[float] = []
     lower_vals: list[float] = []
@@ -272,63 +278,71 @@ def _evaluate_channel(
     for i in range(segment_count):
         seg_start = int(round(i * seg_size))
         seg_end = int(round((i + 1) * seg_size))
-        seg_end = min(seg_end, n)
+        if seg_end > n:
+            seg_end = n
         if seg_start >= seg_end:
             return None
 
-        seg_highs = highs[seg_start:seg_end]
-        seg_lows = lows[seg_start:seg_end]
+        m = seg_end - seg_start
+        sh = np.sort(highs[seg_start:seg_end])
+        sl = np.sort(lows[seg_start:seg_end])
 
-        upper_vals.append(float(np.quantile(seg_highs, 0.9)))
-        lower_vals.append(float(np.quantile(seg_lows, 0.1)))
+        hi_pos = 0.9 * (m - 1)
+        lo_pos = 0.1 * (m - 1)
+        hi_lo = int(hi_pos)
+        hi_hi = hi_lo + 1 if hi_lo < m - 1 else hi_lo
+        lo_lo = int(lo_pos)
+        lo_hi = lo_lo + 1 if lo_lo < m - 1 else lo_lo
+
+        upper_vals.append(float(sh[hi_lo]) + (hi_pos - hi_lo) * (float(sh[hi_hi]) - float(sh[hi_lo])))
+        lower_vals.append(float(sl[lo_lo]) + (lo_pos - lo_lo) * (float(sl[lo_hi]) - float(sl[lo_lo])))
         center_xs.append((seg_start + seg_end - 1) / 2.0)
 
-    xs = np.array(center_xs, dtype=np.float64)
-    us = np.array(upper_vals, dtype=np.float64)
-    ls = np.array(lower_vals, dtype=np.float64)
+    # ── 纯 Python 线性回归（避免 numpy 在 4 元素数组上的调用开销） ──
+    sc = segment_count
+    um = sum(upper_vals) / sc
+    lm = sum(lower_vals) / sc
+    xm = sum(center_xs) / sc
 
-    # 线性回归拟合
-    b_u, a_u = np.polyfit(xs, us, 1)
-    b_l, a_l = np.polyfit(xs, ls, 1)
-
-    # 参考价格（用于斜率标准化）
-    p_ref_u = float(np.mean(us))
-    p_ref_l = float(np.mean(ls))
-    if p_ref_u <= 0 or p_ref_l <= 0:
+    ss_xx = sum((x - xm) * (x - xm) for x in center_xs)
+    if ss_xx == 0.0:
         return None
 
-    # 单位斜率：每月涨跌幅百分比
-    upper_slope_unit = (b_u * bars_per_month) / p_ref_u * 100.0
-    lower_slope_unit = (b_l * bars_per_month) / p_ref_l * 100.0
+    b_u = sum((center_xs[j] - xm) * (upper_vals[j] - um) for j in range(sc)) / ss_xx
+    a_u = um - b_u * xm
+    b_l = sum((center_xs[j] - xm) * (lower_vals[j] - lm) for j in range(sc)) / ss_xx
+    a_l = lm - b_l * xm
 
-    # 水平性检查：上下沿的月斜率都不能超过 max_slope_pct
+    if um <= 0.0 or lm <= 0.0:
+        return None
+
+    upper_slope_unit = (b_u * bars_per_month) / um * 100.0
     if abs(upper_slope_unit) > max_slope_pct:
         return None
+
+    lower_slope_unit = (b_l * bars_per_month) / lm * 100.0
     if abs(lower_slope_unit) > max_slope_pct:
         return None
 
-    # 水平线价格：取各段代表值的均值
-    upper_level = float(np.mean(us))
-    lower_level = float(np.mean(ls))
-
-    if lower_level <= 0:
+    if lm <= 0.0:
         return None
 
-    # 区间幅度检查
-    range_pct = (upper_level - lower_level) / lower_level * 100.0
+    range_pct = (um - lm) / lm * 100.0
     if range_pct < range_pct_min or range_pct > range_pct_max:
         return None
 
     # 拟合误差（MARE）
-    fitted_upper = a_u + b_u * xs
-    fitted_lower = a_l + b_l * xs
-    upper_errors = np.abs(us - fitted_upper) / np.where(fitted_upper > 0, fitted_upper, 1.0)
-    lower_errors = np.abs(ls - fitted_lower) / np.where(fitted_lower > 0, fitted_lower, 1.0)
-    fit_error = float(np.mean(np.concatenate([upper_errors, lower_errors])))
+    total_err = 0.0
+    for j in range(sc):
+        fu = a_u + b_u * center_xs[j]
+        fl = a_l + b_l * center_xs[j]
+        total_err += abs(upper_vals[j] - fu) / fu if fu > 0.0 else abs(upper_vals[j] - fu)
+        total_err += abs(lower_vals[j] - fl) / fl if fl > 0.0 else abs(lower_vals[j] - fl)
+    fit_error = total_err / (2.0 * sc)
 
     return ChannelResult(
-        upper_level=round(upper_level, 4),
-        lower_level=round(lower_level, 4),
+        upper_level=round(um, 4),
+        lower_level=round(lm, 4),
         range_pct=round(range_pct, 2),
         upper_slope_unit=round(upper_slope_unit, 4),
         lower_slope_unit=round(lower_slope_unit, 4),
@@ -977,6 +991,52 @@ def _normalize_for_backtest(group_params: dict[str, Any], section_key: str) -> d
     }
 
 
+def _precompute_volume_spike_mask(
+    volumes: np.ndarray,
+    breakout_volume_pct: float,
+    min_box_bars: int,
+) -> np.ndarray:
+    """预计算放量候选掩码，快速排除不可能满足量能突破条件的位置。
+
+    原理：任意合法箱体的修剪均量（去掉最高/最低各 10%）≥ 该窗口 p10，
+    因此取前置窗口 p10 作为保守下界。若突破均量 < p10 × (1 + pct/100)，
+    则无论箱体如何选取都不可能通过量能突破检查。
+    同时考虑 nb=1/2/3 三种突破 bar 数，取最优均量作比较。
+
+    输入：
+    1. volumes: 全量成交量 numpy 数组。
+    2. breakout_volume_pct: 突破量能阈值百分比。
+    3. min_box_bars: 最小箱体 bar 数（≥ segment_count）。
+    输出：
+    1. 布尔数组，True 表示该位置可能为有效突破 bar。
+    """
+    n = len(volumes)
+    multiplier = 1.0 + breakout_volume_pct / 100.0
+    lookback = max(min_box_bars, 120)
+
+    # 前置窗口 p10（shift(1) 排除当前 bar，因为突破 bar 不属于箱体）
+    vol_series = pd.Series(volumes)
+    rolling_p10 = (
+        vol_series.shift(1)
+        .rolling(window=lookback, min_periods=max(min_box_bars, 5))
+        .quantile(0.1)
+        .values
+    )
+    threshold = rolling_p10 * multiplier
+
+    # 最佳突破均量 = max(nb=1 单根, nb=2 双根均值, nb=3 三根均值)
+    best_avg = volumes.copy().astype(np.float64)
+    if n > 1:
+        avg2 = (volumes[1:] + volumes[:-1]) / 2.0
+        best_avg[1:] = np.maximum(best_avg[1:], avg2)
+    if n > 2:
+        avg3 = (volumes[2:] + volumes[1:-1] + volumes[:-2]) / 3.0
+        best_avg[2:] = np.maximum(best_avg[2:], avg3)
+
+    valid = ~np.isnan(threshold) & (rolling_p10 > 0)
+    return valid & (best_avg >= threshold)
+
+
 def detect_handi_bacong_vectorized(
     code_frame: pd.DataFrame,
     tf_params: dict[str, Any],
@@ -988,6 +1048,13 @@ def detect_handi_bacong_vectorized(
     与 detect_handi_bacong 的区别：
     - detect_handi_bacong 仅检测尾部最新一次箱体突破（筛选模式）。
     - 本函数从头到尾扫描，收集所有不重叠命中（回测模式）。
+
+    性能优化：
+    1. 放量预过滤（_precompute_volume_spike_mask）排除低量位置。
+    2. 时间戳预转换为 int64 天数，消除内循环 pd.Timestamp 开销。
+    3. 箱体搜索长度上限（_MAX_BOX_BARS），避免 O(n²) 退化。
+    4. suffix max/min 价格范围预过滤，跳过明显非水平窗口。
+    5. 突破检查直接使用 numpy 数组，绕过 DataFrame 切片。
 
     输入：
     1. code_frame: 单只股票完整 OHLCV DataFrame（已按 ts 排序）。
@@ -1017,13 +1084,33 @@ def detect_handi_bacong_vectorized(
     ts_arr = window["ts"].values
     highs = window["high"].values.astype(np.float64)
     lows = window["low"].values.astype(np.float64)
+    closes = window["close"].values.astype(np.float64)
     volumes = window["volume"].values.astype(np.float64)
 
+    # ── 优化①: 时间戳预转换为 int64 天数，消除内循环 pd.Timestamp 开销 ──
+    ts_days = ts_arr.astype("datetime64[D]").astype(np.int64)
+    min_duration_days = min_duration_weeks * _DAYS_PER_WEEK
+
+    # ── 优化②: 箱体搜索长度上限 ──
+    max_box_bars = _MAX_BOX_BARS.get(tf_key, 1100)
+
+    # ── 放量预过滤 ──
+    spike_mask = _precompute_volume_spike_mask(
+        volumes, breakout_volume_pct, segment_count,
+    )
+
+    # ── 优化③: 价格范围预过滤宽松上界 ──
+    range_hi_cutoff = range_pct_max * 2.5
+
+    vol_multiplier = 1.0 + breakout_volume_pct / 100.0
+
     results: list[DetectionResult] = []
-    skip_until = 0  # 非重叠：pattern_end 必须 >= skip_until
+    skip_until = 0
 
     for e_idx in range(segment_count + 1, n):
         if e_idx < skip_until:
+            continue
+        if not spike_mask[e_idx]:
             continue
 
         best: tuple[int, int, int, ChannelResult, BreakoutResult] | None = None
@@ -1035,17 +1122,31 @@ def detect_handi_bacong_vectorized(
             if e_box < segment_count - 1:
                 continue
 
-            latest_ts = pd.Timestamp(ts_arr[e_box])
+            e_box_day = ts_days[e_box]
+            s_start = max(skip_until, e_box - max_box_bars + 1)
+
+            # ── 优化④: numpy suffix max(high)/min(low) 用于快速范围过滤 ──
+            h_slice = highs[s_start: e_box + 1]
+            l_slice = lows[s_start: e_box + 1]
+            sfx_max_h = np.maximum.accumulate(h_slice[::-1])[::-1]
+            sfx_min_l = np.minimum.accumulate(l_slice[::-1])[::-1]
 
             channel_found: tuple[ChannelResult, int] | None = None
-            for s_idx in range(skip_until, e_box):
-                ts_start = pd.Timestamp(ts_arr[s_idx])
-                window_weeks = (latest_ts - ts_start).days / _DAYS_PER_WEEK
-                if window_weeks < min_duration_weeks:
+            for s_idx in range(s_start, e_box):
+                if (e_box_day - ts_days[s_idx]) < min_duration_days:
                     break
 
                 window_len = e_box - s_idx + 1
                 if window_len < segment_count:
+                    continue
+
+                # 价格范围快速过滤
+                k = s_idx - s_start
+                mn = sfx_min_l[k]
+                if mn <= 0:
+                    continue
+                raw_range = (sfx_max_h[k] - mn) / mn * 100.0
+                if raw_range > range_hi_cutoff:
                     continue
 
                 channel = _evaluate_channel(
@@ -1066,18 +1167,45 @@ def detect_handi_bacong_vectorized(
 
             channel, s_idx = channel_found
 
-            breakout_frame = window.iloc[e_box + 1: e_idx + 1]
-            box_volumes = volumes[s_idx: e_box + 1]
+            # ── 优化⑤: 内联 numpy 突破检查，绕过 DataFrame.iloc ──
+            breakout_closes = closes[e_box + 1: e_idx + 1]
+            breakout_vols = volumes[e_box + 1: e_idx + 1]
 
-            breakout = _check_breakout(
-                box_volumes=box_volumes,
-                breakout_frame=breakout_frame,
-                channel=channel,
-                breakout_range_pct=breakout_range_pct,
-                breakout_volume_pct=breakout_volume_pct,
-            )
-            if breakout is None:
+            amplitude = channel.upper_level - channel.lower_level
+            if amplitude <= 0:
                 continue
+
+            max_close = float(np.max(breakout_closes))
+            breakout_threshold = channel.upper_level + (breakout_range_pct / 100.0) * amplitude
+            if max_close < breakout_threshold:
+                continue
+
+            box_vols = volumes[s_idx: e_box + 1]
+            sorted_vols = np.sort(box_vols)
+            n_box = len(sorted_vols)
+            trim_count = max(int(n_box * 0.1), 0)
+            if n_box - 2 * trim_count > 0:
+                trimmed = sorted_vols[trim_count: n_box - trim_count]
+            else:
+                trimmed = sorted_vols
+            trimmed_avg = float(np.mean(trimmed)) if len(trimmed) > 0 else 0.0
+            if trimmed_avg <= 0:
+                continue
+
+            avg_breakout_vol = float(np.mean(breakout_vols))
+            if avg_breakout_vol < trimmed_avg * vol_multiplier:
+                continue
+
+            volume_ratio = avg_breakout_vol / trimmed_avg
+
+            breakout = BreakoutResult(
+                breakout_bars=nb,
+                max_close=round(max_close, 4),
+                breakout_threshold=round(breakout_threshold, 4),
+                avg_breakout_volume=round(avg_breakout_vol, 2),
+                trimmed_avg_box_volume=round(trimmed_avg, 2),
+                volume_ratio=round(volume_ratio, 2),
+            )
 
             box_len = e_box - s_idx + 1
             if best is None or box_len > (best[1] - best[0] + 1):
@@ -1085,10 +1213,10 @@ def detect_handi_bacong_vectorized(
 
         if best is not None:
             s_idx, e_box, nb, channel, breakout = best
-            ts_s = window.iloc[s_idx]["ts"]
-            ts_e = window.iloc[e_idx]["ts"]
+            ts_s = ts_arr[s_idx]
+            ts_e = ts_arr[e_idx]
             duration_weeks = round(
-                (pd.Timestamp(ts_e) - pd.Timestamp(ts_s)).days / _DAYS_PER_WEEK, 1
+                (ts_days[e_idx] - ts_days[s_idx]) / _DAYS_PER_WEEK, 1
             )
             results.append(DetectionResult(
                 matched=True,

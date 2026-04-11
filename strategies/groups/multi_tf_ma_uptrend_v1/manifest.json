@@ -27,7 +27,9 @@
       "close_deviation_pct": 5.0,
       "consolidation_enabled": false,
       "consolidation_bars": 3,
-      "consolidation_max_amp_pct": 3.0
+      "consolidation_max_amp_pct": 3.0,
+      "max_close_deviation_enabled": false,
+      "max_close_deviation_pct": 20.0
     },
     "daily": {
       "scope_params": ["n"],
@@ -43,7 +45,9 @@
       "close_deviation_pct": 5.0,
       "consolidation_enabled": false,
       "consolidation_bars": 3,
-      "consolidation_max_amp_pct": 3.0
+      "consolidation_max_amp_pct": 3.0,
+      "max_close_deviation_enabled": false,
+      "max_close_deviation_pct": 20.0
     },
     "min60": {
       "scope_params": ["n"],
@@ -59,7 +63,9 @@
       "close_deviation_pct": 5.0,
       "consolidation_enabled": false,
       "consolidation_bars": 3,
-      "consolidation_max_amp_pct": 3.0
+      "consolidation_max_amp_pct": 3.0,
+      "max_close_deviation_enabled": false,
+      "max_close_deviation_pct": 20.0
     },
     "min15": {
       "scope_params": ["n"],
@@ -75,7 +81,9 @@
       "close_deviation_pct": 5.0,
       "consolidation_enabled": false,
       "consolidation_bars": 3,
-      "consolidation_max_amp_pct": 3.0
+      "consolidation_max_amp_pct": 3.0,
+      "max_close_deviation_enabled": false,
+      "max_close_deviation_pct": 20.0
     },
     "universe_filters": {
       "concepts": {
@@ -94,11 +102,13 @@
   "param_help": {
     "_overview": [
       "该策略支持周线、日线、60分钟线、15分钟线四个周期，每个周期可独立启用或关闭。",
+      "多周期之间为交集关系（AND）：仅当所有已启用周期全部通过时产生信号。",
       "均线斜率公式为百分比：100 × (MA当前 − MA过去) / (MA过去 × 间隔根数)，单位为 %/根。",
       "例如 slope_min=10, slope_max=20 表示斜率需在 10%~20% 之间。",
       "「连续筛选」开启后，若 n ≥ 2×slope_gap，会对所有不重叠窗口做斜率检查。",
       "收盘偏离：检查最后一根线收盘价是否在指定 MA 均线的正负百分比范围内。",
-      "收敛震荡：检查最后若干根线的最高-最低区间振幅是否小于阈值百分比。"
+      "收敛震荡：检查最后若干根线的最高-最低区间振幅是否小于阈值百分比。",
+      "收盘价偏离上限：检查扫描区间内每根线的收盘价是否在主 MA 均线的正负百分比范围内（仅筛选模式）。"
     ],
     "weekly": {
       "_render": "inline_template",
@@ -130,6 +140,11 @@
         {
           "text": "最后 {consolidation_bars} 根线在振幅< {consolidation_max_amp_pct} %的区间内收敛震荡",
           "toggle": "consolidation_enabled"
+        },
+        {
+          "text": "扫描区间内每根线的收盘价距离MA {ma_period} 均线偏离幅度 ≤ {max_close_deviation_pct} %",
+          "toggle": "max_close_deviation_enabled",
+          "help": "仅在筛选模式中生效。用于排除区间内曾大幅偏离均线的股票"
         }
       ]
     },
@@ -163,6 +178,11 @@
         {
           "text": "最后 {consolidation_bars} 根线在振幅< {consolidation_max_amp_pct} %的区间内收敛震荡",
           "toggle": "consolidation_enabled"
+        },
+        {
+          "text": "扫描区间内每根线的收盘价距离MA {ma_period} 均线偏离幅度 ≤ {max_close_deviation_pct} %",
+          "toggle": "max_close_deviation_enabled",
+          "help": "仅在筛选模式中生效。用于排除区间内曾大幅偏离均线的股票"
         }
       ]
     },
@@ -196,6 +216,11 @@
         {
           "text": "最后 {consolidation_bars} 根线在振幅< {consolidation_max_amp_pct} %的区间内收敛震荡",
           "toggle": "consolidation_enabled"
+        },
+        {
+          "text": "扫描区间内每根线的收盘价距离MA {ma_period} 均线偏离幅度 ≤ {max_close_deviation_pct} %",
+          "toggle": "max_close_deviation_enabled",
+          "help": "仅在筛选模式中生效。用于排除区间内曾大幅偏离均线的股票"
         }
       ]
     },
@@ -229,6 +254,11 @@
         {
           "text": "最后 {consolidation_bars} 根线在振幅< {consolidation_max_amp_pct} %的区间内收敛震荡",
           "toggle": "consolidation_enabled"
+        },
+        {
+          "text": "扫描区间内每根线的收盘价距离MA {ma_period} 均线偏离幅度 ≤ {max_close_deviation_pct} %",
+          "toggle": "max_close_deviation_enabled",
+          "help": "仅在筛选模式中生效。用于排除区间内曾大幅偏离均线的股票"
         }
       ]
     },
@@ -240,7 +270,7 @@
       }
     },
     "filter_st": {
-      "enabled": "是否在筛选时排除名称包含 ST（不分大小写）的股票。默认开启。"
+      "enabled": "是否在筛选时排除名称包含 ST（不分大小写）或包含“退”的股票。默认开启。"
     },
     "execution": {
       "fallback_to_backtrader": "specialized 失败后是否降级到 backtrader，默认 false。"

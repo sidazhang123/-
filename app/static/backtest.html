@@ -79,10 +79,11 @@
         </a>
         <ul class="topnav-links">
           <li><a href="/"><i data-lucide="activity" class="nav-icon"></i><span>任务监控</span></a></li>
-          <li><a href="/maintenance"><i data-lucide="database" class="nav-icon"></i><span>数据维护</span></a></li>
+          
           <li><a href="/results"><i data-lucide="bar-chart-3" class="nav-icon"></i><span>筛选结果</span></a></li>
           <li><a href="/backtest" class="active"><i data-lucide="flask-conical" class="nav-icon"></i><span>策略回测</span></a></li>
           <li><a href="/task-manager"><i data-lucide="trash-2" class="nav-icon"></i><span>任务管理</span></a></li>
+          <li><a href="/maintenance"><i data-lucide="database" class="nav-icon"></i><span>数据维护</span></a></li>
         </ul>
       </div>
     </nav>
@@ -108,6 +109,10 @@
           <label>
             策略组
             <select id="btStrategySelect"></select>
+          </label>
+          <label class="checkbox-inline" title="勾选后只要缓存文件存在就直接使用，不因K线数据更新而重算">
+            锁定前瞻缓存
+            <input type="checkbox" id="btLockFwdCache" checked />
           </label>
         </div>
 
@@ -167,7 +172,8 @@
             <div>状态: <strong id="btStatusText">-</strong></div>
             <div>进度: <strong id="btProgressText">0%</strong></div>
             <div>已处理: <strong id="btProcessedText">0 / 0</strong></div>
-            <div id="btComboRow" style="display:none;">参数组合: <strong id="btComboText">0 / 0</strong></div>
+            <div id="btComboRow" style="display:none;">已统计落盘组合: <strong id="btComboText">0 / 0</strong></div>
+            <div id="btPhaseRow" style="display:none;">当前阶段: <strong id="btPhaseText">-</strong></div>
           </div>
           <div class="progress-bar"><div id="btProgressBar"></div></div>
         </div>
@@ -205,7 +211,7 @@
           <div class="bt-sweep-fwd-tabs" id="btSweepFwdTabs"></div>
           <!-- 主图：散点图 (盈利 vs 回撤, 颜色=夏普) -->
           <div class="bt-stat-card" style="margin-bottom:12px;">
-            <h4>参数组合效果分布 <small style="font-weight:normal;color:var(--color-text-secondary);font-size:.78rem;">（右上=高盈利低回撤，颜色越绿=夏普越高，气泡越大=命中越多）</small></h4>
+            <h4>参数组合效果分布 <small style="font-weight:normal;color:var(--color-text-secondary);font-size:.78rem;">（右上=高盈利低回撤，颜色越绿=夏普越高，气泡越大=命中越多 · 按住 Shift 自由画笔圈选统计）</small></h4>
             <div id="btSweepScatterMain" style="width:100%;height:420px;"></div>
           </div>
           <!-- 综合评分排行 -->

@@ -505,9 +505,8 @@ def get_maintenance_runtime_metadata() -> dict[str, Any]:
     1. zsdtdx 未安装或连接异常时返回 error 字段。
     """
     try:
-        from zsdtdx.simple_api import get_client, get_runtime_metadata
-        with get_client():
-            meta = get_runtime_metadata()
+        from zsdtdx.simple_api import get_runtime_metadata
+        meta = get_runtime_metadata()
         return {"ok": True, "metadata": meta}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "metadata": {}}
@@ -663,12 +662,12 @@ def save_maintenance_ui_settings(payload: MaintenanceFormSettingsPayload, reques
 def create_task(payload: CreateTaskRequest, request: Request) -> CreateTaskResponse:
     """
     输入：
-    1. payload: 任务创建参数（股票、策略、时间窗口等）。
+    1. payload: 任务创建参数（策略、时间窗口等）。
     2. request: 请求上下文。
     输出：
     1. 新任务 ID。
     用途：
-    1. 创建筛选任务并异步执行。
+    1. 创建筛选任务并异步执行，默认全市场扫描。
     边界条件：
     1. 维护/概念任务运行中时返回 409；参数不合法返回 400。
     """
@@ -681,7 +680,7 @@ def create_task(payload: CreateTaskRequest, request: Request) -> CreateTaskRespo
         raise HTTPException(status_code=409, detail="概念更新任务运行中，当前禁止创建筛选任务")
     try:
         task_id = task_manager.create_task(
-            stocks=payload.stocks,
+            stocks=[],
             start_ts=payload.start_ts,
             end_ts=payload.end_ts,
             group_params=payload.group_params,
@@ -1937,6 +1936,7 @@ def create_backtest_job(
             param_ranges={
                 k: v.model_dump() for k, v in payload.param_ranges.items()
             } if payload.param_ranges else {},
+            lock_fwd_cache=payload.lock_fwd_cache,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2112,7 +2112,9 @@ async def backtest_event_stream(job_id: str, request: Request):
 
             status_key = (
                 status["status"], status["progress"],
-                status["processed_stocks"], status["combo_index"],
+                status["processed_stocks"], status["total_stocks"], status["combo_index"],
+                status.get("phase"), status.get("phase_label"),
+                status.get("phase_index"), status.get("phase_total"),
             )
             if status_key != last_status_key:
                 last_status_key = status_key

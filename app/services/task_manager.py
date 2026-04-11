@@ -95,7 +95,7 @@ class TaskManager:
     ) -> str:
         """
         输入：
-        1. stocks: 原始股票输入列表，可为代码或名称。
+        1. stocks: 保留参数，固定传空列表（全市场扫描）。
         2. start_ts/end_ts: 可选筛选时间窗口。
         3. group_params: 前端覆盖的策略参数。
         4. strategy_group_id: 目标策略组 ID。
@@ -330,6 +330,25 @@ class TaskManager:
             if token in {"0", "false", "no", "n", "off"}:
                 return False
         return bool(value)
+
+    @staticmethod
+    def _should_exclude_by_name_filter(stock_name: str) -> bool:
+        """判断股票名称是否应被 ST 过滤机制排除。
+
+        输入：
+        1. stock_name: 股票名称字符串。
+        输出：
+        1. 若名称中包含 `ST`（不分大小写）或包含 `退`，返回 True。
+        用途：
+        1. 由 TaskManager 在进入 engine 前统一执行名称过滤。
+        边界条件：
+        1. 空名称或非字符串输入时返回 False。
+        """
+        if not isinstance(stock_name, str) or not stock_name:
+            return False
+        lowered = stock_name.lower()
+        return ("st" in lowered) or ("退" in stock_name)
+
     def _required_timeframes_for_filtering(
         self,
         strategy_engine: str,
@@ -672,17 +691,20 @@ class TaskManager:
                                 },
                             )
 
-                    # ---- ST 股票名称过滤 ----
+                    # ---- ST / 退 股票名称过滤 ----
                     filter_st_raw = group_params.get("filter_st")
                     filter_st_enabled = (filter_st_raw.get("enabled", True) is True) if isinstance(filter_st_raw, dict) else True
                     if filter_st_enabled and codes:
                         raw_count = len(codes)
-                        st_excluded = [c for c in codes if "st" in code_to_name.get(c, "").lower()]
+                        st_excluded = [
+                            c for c in codes
+                            if self._should_exclude_by_name_filter(code_to_name.get(c, ""))
+                        ]
                         if st_excluded:
                             st_set = set(st_excluded)
                             codes = [c for c in codes if c not in st_set]
                             task_logger.info(
-                                "已过滤 ST 股票",
+                                "已过滤 ST/退 股票",
                                 {
                                     "raw_code_count": raw_count,
                                     "eligible_code_count": len(codes),

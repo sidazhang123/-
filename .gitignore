@@ -4,3 +4,5 @@ screening_state.duckdb
 screening_state.duckdb.wal
 .playwright-mcp/
 .vscode/
+/cache/
+/logs/

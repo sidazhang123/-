@@ -234,7 +234,15 @@ BACKTEST_HOOKS = {
 
 以下函数已提取到 `strategies/engine_commons.py`，新策略直接 import 即可：
 
-## 十一、K 线图辅助线（overlay_lines）
+1. `normalize_execution_params(group_params)` —— 标准执行参数规范化（仅 fallback_to_backtrader）。
+2. `read_universe_filter_params(group_params)` —— 概念预筛选参数读取（仅 metrics 用途）。
+3. `read_filter_st_params(group_params)` —— 读取 ST 过滤开关（由 TaskManager 使用）。
+4. `coarsest_tf(tfs)` —— 从周期列表中选出最粗粒度周期。
+5. `STANDARD_TF_ORDER` —— 标准周期粗细排序常量 `["w", "d", "60", "30", "15"]`。
+
+如策略有额外执行参数（如 `worker_count`），可保留本地版本的 `_normalize_execution_params`。
+
+## 十二、K 线图辅助线（overlay_lines）
 
 如果策略检测到可视化的几何线条（趋势线、支撑/阻力线、通道边界、三角形边沿等），可以通过信号 payload 的 `overlay_lines` 字段传递给前端。前端会自动在 K 线蜡烛图上用 ECharts markLine 渲染，支持缩放平移跟随。
 
@@ -275,14 +283,7 @@ BACKTEST_HOOKS = {
 3. 每条线的颜色独立控制，建议上沿/下沿用不同颜色以增强可读性。
 4. `overlay_lines` 为空列表或缺失时，前端不会绘制任何线条，无副作用。
 
-1. `normalize_execution_params(group_params)` —— 标准执行参数规范化（仅 fallback_to_backtrader）。
-2. `read_universe_filter_params(group_params)` —— 概念预筛选参数读取（仅 metrics 用途）。
-3. `coarsest_tf(tfs)` —— 从周期列表中选出最粗粒度周期。
-4. `STANDARD_TF_ORDER` —— 标准周期粗细排序常量 `["w", "d", "60", "30", "15"]`。
-
-如策略有额外执行参数（如 `worker_count`），可保留本地版本的 `_normalize_execution_params`。
-
-## 十一、简化执行清单
+## 十三、简化执行清单
 
 - [ ] 复制 `strategy_2` 为新目录。
 - [ ] 改 `manifest.json` 的 id/name/description/module/specialized_entry。
