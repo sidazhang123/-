@@ -218,7 +218,9 @@ def test_run_sweep_skips_disabled_sections_and_batches_only_enabled_combos(
         calls["load_codes"].append(table_name)
         return ["sh.600000", "sz.000001"]
 
-    def _fake_batch(**kwargs: Any) -> dict[int, list[dict[str, Any]]]:
+    def _fake_batch(**kwargs: Any) -> "backtest_engine.SweepHitsAccumulator":
+        from app.services import backtest_engine
+
         combo_params_list = kwargs["combo_params_list"]
         calls["batch"].append(
             {
@@ -226,28 +228,33 @@ def test_run_sweep_skips_disabled_sections_and_batches_only_enabled_combos(
                 "combo_indices": [idx for idx, _ in combo_params_list],
             }
         )
-        return {
-            idx: (
-                [
+        acc = backtest_engine.SweepHitsAccumulator()
+        for idx, _ in combo_params_list:
+            acc.ensure_combo(idx)
+        for idx, _ in combo_params_list:
+            if idx == 1:
+                acc.extend(idx, [
                     {
                         "code": "sh.600000",
                         "tf_key": kwargs["tf_key"],
                         "pattern_start_ts": "2026-01-01T00:00:00",
                         "pattern_end_ts": "2026-01-02T00:00:00",
                     }
-                ]
-                if idx == 1
-                else []
-            )
-            for idx, _ in combo_params_list
-        }
+                ])
+        return acc
 
     def _fake_resolve_hit_metrics(**kwargs: Any) -> pd.DataFrame:
         calls["resolved_hits"].append(len(kwargs["hits"]))
         return pd.DataFrame()
 
     def _fake_resolve_hit_metrics_sweep(**kwargs: Any) -> dict[int, pd.DataFrame]:
-        combo_hits_map = kwargs["combo_hits_map"]
+        hit_acc = kwargs.get("hit_accumulator")
+        combo_hits_map = kwargs.get("combo_hits_map")
+        if hit_acc is not None:
+            keys = list(hit_acc.keys())
+            for ci in sorted(keys):
+                calls["resolved_hits"].append(hit_acc.hit_counts.get(ci, 0))
+            return {ci: pd.DataFrame() for ci in keys}
         for ci in sorted(combo_hits_map):
             calls["resolved_hits"].append(len(combo_hits_map[ci]))
         return {ci: pd.DataFrame() for ci in combo_hits_map}

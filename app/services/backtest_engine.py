@@ -54,37 +54,47 @@ _HALF_MONTH_BARS: dict[str, int] = {
     "15": 160,
 }
 
+# 每根 K 线对应的秒数: 用于向量化去重
+_TF_BAR_SECONDS: dict[str, int] = {
+    "w": 7 * 86400,
+    "d": 86400,
+    "60": 3600,
+    "30": 1800,
+    "15": 900,
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SweepHitsAccumulator — 大规模 sweep 命中存储（内存 / DuckDB 双模式）
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SPILL_HARD_LIMIT = 20_000_000          # 总命中数硬上限，超过立即落盘
+_SPILL_HARD_LIMIT = 50_000_000          # 总命中数硬上限（~10GB），仅极端情况触发
 _SPILL_CHECK_INTERVAL = 500             # 每 N 次 extend 做一次 psutil 检查
-_SPILL_MIN_AVAILABLE_BYTES = 2 * 1024**3  # 可用内存低于 2GB 时触发落盘
-_SPILL_FLUSH_SIZE = 10_000              # 落盘模式攒多少行刷一次
+_SPILL_MIN_AVAILABLE_BYTES = 1536 * 1024**2  # 可用内存低于 1.5GB 时触发落盘
+_SPILL_FLUSH_SIZE = 100_000             # 落盘模式 pending 缓冲刷盘阈值
 
 
 class SweepHitsAccumulator:
-    """内存/DuckDB 自适应命中累积器。
+    """内存/pickle 自适应命中累积器。
 
     - 小 sweep: 全部在内存中，行为等同 ``dict[int, list[dict]]``。
-    - 大 sweep: 到达阈值后自动把已有数据落盘到临时 DuckDB，后续追加直接写盘。
+    - 大 sweep: 到达阈值后 pickle 到磁盘，后续追加缓冲后批量写盘。
     """
 
     def __init__(self, spill_dir: Path | None = None) -> None:
         self._mem: dict[int, list[dict]] = {}
         self._spilled = False
-        self._db: duckdb.DuckDBPyConnection | None = None
-        self._spill_path: Path | None = None
         self._spill_dir = spill_dir
+        self._spill_dir_actual: Path | None = None
 
         self.unique_keys: set[tuple] = set()      # (code, tf_key, pattern_end_ts)
         self.hit_counts: dict[int, int] = {}       # combo_idx → count
         self.total_hits: int = 0
 
         self._extend_calls: int = 0
-        self._pending_rows: list[tuple] = []       # 落盘模式的写缓冲
+        self._pending: dict[int, list[dict]] = {}
+        self._pending_count: int = 0
+        self._chunk_idx: int = 0
 
     # ── 公共接口 ──────────────────────────────────────────────────────────
 
@@ -94,7 +104,7 @@ class SweepHitsAccumulator:
 
     @property
     def spill_path(self) -> Path | None:
-        return self._spill_path
+        return self._spill_dir_actual
 
     def extend(self, combo_idx: int, hits: list[dict]) -> None:
         """追加一个 combo 的命中列表。"""
@@ -105,11 +115,15 @@ class SweepHitsAccumulator:
         self.hit_counts[combo_idx] = self.hit_counts.get(combo_idx, 0) + n
         self.total_hits += n
 
-        for h in hits:
-            self.unique_keys.add((h["code"], h["tf_key"], h["pattern_end_ts"]))
+        self.unique_keys.update(
+            (h["code"], h["tf_key"], h["pattern_end_ts"]) for h in hits
+        )
 
         if self._spilled:
-            self._append_to_db(combo_idx, hits)
+            self._pending.setdefault(combo_idx, []).extend(hits)
+            self._pending_count += n
+            if self._pending_count >= _SPILL_FLUSH_SIZE:
+                self._flush_pending()
         else:
             self._mem.setdefault(combo_idx, []).extend(hits)
             self._extend_calls += 1
@@ -138,49 +152,50 @@ class SweepHitsAccumulator:
         return self.hit_counts.keys()
 
     def query_combo_batch(self, combo_indices: list[int]) -> pd.DataFrame:
-        """从 DuckDB 查询一批 combo 的命中记录。"""
-        if not self._spilled or self._db is None:
-            # 内存模式 fallback — 构建 DataFrame
+        """查询一批 combo 的命中记录，返回 DataFrame。"""
+        cols = ["_combo_idx", "code", "tf_key", "pattern_start_ts", "pattern_end_ts"]
+
+        if not self._spilled:
             rows = []
             for ci in combo_indices:
                 for h in self._mem.get(ci, []):
                     rows.append((ci, h["code"], h["tf_key"],
                                  h["pattern_start_ts"], h["pattern_end_ts"]))
             if not rows:
-                return pd.DataFrame(columns=[
-                    "_combo_idx", "code", "tf_key", "pattern_start_ts", "pattern_end_ts"
-                ])
-            return pd.DataFrame(rows, columns=[
-                "_combo_idx", "code", "tf_key", "pattern_start_ts", "pattern_end_ts"
-            ])
+                return pd.DataFrame(columns=cols)
+            return pd.DataFrame(rows, columns=cols)
 
         self._flush_pending()
-        placeholders = ",".join(str(ci) for ci in combo_indices)
-        return self._db.execute(
-            f"SELECT combo_idx AS _combo_idx, code, tf_key, "
-            f"pattern_start_ts, pattern_end_ts "
-            f"FROM sweep_hits WHERE combo_idx IN ({placeholders})"
-        ).fetchdf()
+        ci_set = set(combo_indices)
+        rows = []
+        for chunk in self._iter_chunks():
+            for ci in combo_indices:
+                for h in chunk.get(ci, []):
+                    rows.append((ci, h["code"], h["tf_key"],
+                                 h["pattern_start_ts"], h["pattern_end_ts"]))
+        if not rows:
+            return pd.DataFrame(columns=cols)
+        return pd.DataFrame(rows, columns=cols)
+
+    def load_all_to_mem(self) -> dict[int, list[dict]]:
+        """将所有数据（含已落盘）加载回内存 dict。"""
+        if not self._spilled:
+            return dict(self._mem)
+        self._flush_pending()
+        result: dict[int, list[dict]] = {}
+        for chunk in self._iter_chunks():
+            for ci, hits in chunk.items():
+                result.setdefault(ci, []).extend(hits)
+        return result
 
     def close(self) -> None:
-        """关闭 DuckDB 连接并删除 spill 文件。"""
-        self._flush_pending()
-        if self._db is not None:
-            try:
-                self._db.close()
-            except Exception:
-                pass
-            self._db = None
-        if self._spill_path is not None:
-            for suffix in ("", ".wal"):
-                p = self._spill_path.parent / (self._spill_path.name + suffix)
-                try:
-                    p.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            self._spill_path = None
+        """删除 spill 文件。"""
         self._mem.clear()
-        self._pending_rows.clear()
+        self._pending.clear()
+        self._pending_count = 0
+        if self._spill_dir_actual is not None:
+            shutil.rmtree(self._spill_dir_actual, ignore_errors=True)
+            self._spill_dir_actual = None
 
     def __enter__(self):
         return self
@@ -200,65 +215,45 @@ class SweepHitsAccumulator:
         return False
 
     def _do_spill(self) -> None:
-        """将内存数据落盘到临时 DuckDB 文件。"""
-        spill_dir = self._spill_dir or (Path(settings.BACKTEST_CACHE_DIR) / "_spill")
-        spill_dir.mkdir(parents=True, exist_ok=True)
-        db_file = spill_dir / f"sweep_hits_{id(self)}_{time.monotonic_ns()}.duckdb"
-        self._spill_path = db_file
+        """将内存数据 pickle 到磁盘。"""
+        import pickle as _pickle
+        d = self._spill_dir or (Path(settings.BACKTEST_CACHE_DIR) / "_spill")
+        d.mkdir(parents=True, exist_ok=True)
+        self._spill_dir_actual = d / f"acc_{id(self)}_{time.monotonic_ns()}"
+        self._spill_dir_actual.mkdir(parents=True, exist_ok=True)
 
-        self._db = duckdb.connect(str(db_file))
-        self._db.execute("""
-            CREATE TABLE sweep_hits (
-                combo_idx   INTEGER,
-                code        VARCHAR,
-                tf_key      VARCHAR,
-                pattern_start_ts TIMESTAMP,
-                pattern_end_ts   TIMESTAMP
-            )
-        """)
-
-        # 分批写入内存中已有数据，避免一次性构建完整 rows 列表导致峰值内存翻倍
-        _SPILL_BATCH = 50_000
-        batch: list[tuple] = []
-        for combo_idx, hits in self._mem.items():
-            for h in hits:
-                batch.append((combo_idx, h["code"], h["tf_key"],
-                              h["pattern_start_ts"], h["pattern_end_ts"]))
-                if len(batch) >= _SPILL_BATCH:
-                    self._db.executemany(
-                        "INSERT INTO sweep_hits VALUES (?, ?, ?, ?, ?)", batch
-                    )
-                    batch.clear()
-        if batch:
-            self._db.executemany(
-                "INSERT INTO sweep_hits VALUES (?, ?, ?, ?, ?)", batch
-            )
-            batch.clear()
-        self._mem.clear()
+        if self._mem:
+            self._write_chunk(self._mem)
+            self._mem.clear()
         self._spilled = True
 
         avail_mb = psutil.virtual_memory().available / 1024**2
         logger.info(
-            "[SweepHitsAccumulator] 落盘触发: total_hits=%d, available_mb=%.0f, "
-            "spill_path=%s", self.total_hits, avail_mb, db_file,
+            "[SweepHitsAccumulator] pickle落盘: total_hits=%d, available_mb=%.0f, "
+            "spill_dir=%s", self.total_hits, avail_mb, self._spill_dir_actual,
         )
 
-    def _append_to_db(self, combo_idx: int, hits: list[dict]) -> None:
-        for h in hits:
-            self._pending_rows.append((
-                combo_idx, h["code"], h["tf_key"],
-                h["pattern_start_ts"], h["pattern_end_ts"],
-            ))
-        if len(self._pending_rows) >= _SPILL_FLUSH_SIZE:
-            self._flush_pending()
+    def _write_chunk(self, data: dict[int, list[dict]]) -> None:
+        import pickle as _pickle
+        path = self._spill_dir_actual / f"chunk_{self._chunk_idx:06d}.pkl"
+        with open(path, "wb") as f:
+            _pickle.dump(data, f, protocol=_pickle.HIGHEST_PROTOCOL)
+        self._chunk_idx += 1
 
     def _flush_pending(self) -> None:
-        if not self._pending_rows or self._db is None:
+        if not self._pending:
             return
-        self._db.executemany(
-            "INSERT INTO sweep_hits VALUES (?, ?, ?, ?, ?)", self._pending_rows
-        )
-        self._pending_rows.clear()
+        self._write_chunk(self._pending)
+        self._pending = {}
+        self._pending_count = 0
+
+    def _iter_chunks(self):
+        """逐个 yield 磁盘上的 chunk dict。"""
+        import pickle as _pickle
+        if self._spill_dir_actual and self._spill_dir_actual.exists():
+            for p in sorted(self._spill_dir_actual.glob("chunk_*.pkl")):
+                with open(p, "rb") as f:
+                    yield _pickle.load(f)
 
 
 def cleanup_spill_dir(spill_dir: Path | None = None) -> None:
@@ -446,6 +441,95 @@ def _dedup_nearby_hits(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 向量化 split + dedup (GPU sweep 专用, 消除逐-hit Python dict 循环)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _vectorized_split_dedup(
+    matched_cpu: np.ndarray,
+    boundaries: np.ndarray,
+    ts_flat: np.ndarray,
+    valid_codes: list[str],
+    tf_key: str,
+    pattern_span_fn,
+    detect_batch_fn,
+) -> list[dict[str, Any]]:
+    """向量化 split_batch_hits + _dedup_nearby_hits。
+
+    用 numpy 批量操作取代:
+      - split_batch_hits 的逐 segment / 逐 hit Python dict 循环
+      - _dedup_nearby_hits 的逐 stock 排序 + 聚簇
+    仅对去重后的命中创建 Python dict, 典型场景减少 10-50× 对象分配。
+    """
+    hit_global = np.where(matched_cpu)[0]
+    n_hits = hit_global.size
+    if n_hits == 0:
+        return []
+
+    # ── 全局索引 → segment / local ──
+    seg_idx = np.searchsorted(boundaries[1:], hit_global, side='right')
+    local_idx = hit_global - boundaries[seg_idx]
+
+    # ── pattern span (start / end) ──
+    if pattern_span_fn is not None:
+        cached_offsets = getattr(detect_batch_fn, '_cached_offsets', None)
+        if cached_offsets is not None:
+            if hasattr(cached_offsets, 'get'):       # CuPy → numpy
+                cached_offsets = cached_offsets.get()
+            gp = (boundaries[seg_idx] + local_idx).astype(np.intp)
+            offsets = cached_offsets[gp].astype(np.int64)
+            start_local = np.maximum(0, local_idx.astype(np.int64) + offsets)
+            end_local = local_idx
+        else:
+            start_local = np.empty(n_hits, dtype=np.intp)
+            end_local = np.empty(n_hits, dtype=np.intp)
+            for i in range(n_hits):
+                sl, el = pattern_span_fn(int(seg_idx[i]), int(local_idx[i]))
+                start_local[i] = sl
+                end_local[i] = el
+    else:
+        start_local = local_idx
+        end_local = local_idx
+
+    seg_base = boundaries[seg_idx]
+    start_ts = ts_flat[(seg_base + start_local).astype(np.intp)]
+    end_ts   = ts_flat[(seg_base + end_local).astype(np.intp)]
+
+    # ── 向量化 dedup: lexsort → diff → cluster → 取中位 ──
+    gap_bars = _HALF_MONTH_BARS.get(tf_key, 10)
+    bar_secs = _TF_BAR_SECONDS.get(tf_key, 86400)
+    gap_td = np.timedelta64(int(gap_bars * bar_secs), 's')
+
+    order = np.lexsort((end_ts.view(np.int64), seg_idx))
+
+    if n_hits == 1:
+        keep = order
+    else:
+        s_seg = seg_idx[order]
+        s_end = end_ts[order]
+        is_break = (np.diff(s_seg) != 0) | (np.diff(s_end) > gap_td)
+
+        cluster_id = np.empty(n_hits, dtype=np.int64)
+        cluster_id[0] = 0
+        cluster_id[1:] = np.cumsum(is_break)
+
+        _, first_pos, counts = np.unique(
+            cluster_id, return_index=True, return_counts=True,
+        )
+        keep = order[first_pos + counts // 2]
+
+    # ── 仅对 deduped hit 创建 dict (tolist 避免逐元素 numpy 标量开销) ──
+    k_seg   = seg_idx[keep].tolist()
+    k_start = start_ts[keep].tolist()
+    k_end   = end_ts[keep].tolist()
+
+    return [
+        {"code": valid_codes[k_seg[i]], "tf_key": tf_key,
+         "pattern_start_ts": k_start[i], "pattern_end_ts": k_end[i]}
+        for i in range(len(keep))
+    ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 阶段 B: 滑动检测
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -577,6 +661,7 @@ def _load_parquet_df(parquet_path: str, codes: list[str]) -> pd.DataFrame:
     """加载 Parquet 数据（供 GPU 批量路径使用）。"""
     con = duckdb.connect()
     try:
+        con.execute("SET memory_limit = '2GB'")
         codes_str = ", ".join(f"'{c}'" for c in codes)
         return con.execute(
             f"SELECT code, datetime AS ts, open, high, low, close, volume "
@@ -720,7 +805,6 @@ def _detect_gpu_batch_sweep(
     import json as _json
     from strategies.engine_commons import (
         assemble_batch,
-        split_batch_hits,
         to_cpu,
     )
     import cupy as cp
@@ -801,16 +885,20 @@ def _detect_gpu_batch_sweep(
             gpu_raw = {k: cp.asarray(v) for k, v in raw_dict.items()}
             del raw_dict, stock_dfs_r, ts_arrays_r
 
-            if log_fn:
-                vram_mb = sum(v.nbytes for v in gpu_raw.values()) / 1024**2
-                mem = _gpu_memory_snapshot(cp)
-                log_fn(
-                    "info",
-                    f"[阶段B-GPU-sweep] 原始OHLCV数组={vram_mb:.0f}MB, "
-                    f"CUDA已用={mem['device_used_mb']:.0f}MB, "
-                    f"CuPy池已用/保留={mem['pool_used_mb']:.0f}/{mem['pool_reserved_mb']:.0f}MB, "
-                    f"设备可用/总量={mem['device_free_mb']:.0f}/{mem['device_total_mb']:.0f}MB"
-                )
+        # GPU 路径已将原始数据上传显存，释放 CPU 端 df_all
+        if gpu_raw is not None:
+            del df_all
+
+        if prepare_batch_fn is not None and gpu_raw is not None and log_fn:
+            vram_mb = sum(v.nbytes for v in gpu_raw.values()) / 1024**2
+            mem = _gpu_memory_snapshot(cp)
+            log_fn(
+                "info",
+                f"[阶段B-GPU-sweep] 原始OHLCV数组={vram_mb:.0f}MB, "
+                f"CUDA已用={mem['device_used_mb']:.0f}MB, "
+                f"CuPy池已用/保留={mem['pool_used_mb']:.0f}/{mem['pool_reserved_mb']:.0f}MB, "
+                f"设备可用/总量={mem['device_free_mb']:.0f}/{mem['device_total_mb']:.0f}MB"
+            )
 
     for prep_idx, (pkey, combos_in_group) in enumerate(prepare_groups.items(), 1):
         # 取第一个 combo 的 params_for_prepare（同组 prepare 参数相同）
@@ -873,45 +961,71 @@ def _detect_gpu_batch_sweep(
         pattern_span_fn = getattr(detect_batch_fn, '_pattern_span_fn', None)
 
         # 逐 combo 执行 kernel
-        _group_reported = 0.0
         group_combo_done = 0
+        n_combos_in_group = len(combos_in_group)
+        t_combos = time.perf_counter()
+        _t_gpu_total = 0.0
+        _t_post_total = 0.0
+
+        if log_fn:
+            log_fn("info", f"[阶段B-GPU-sweep] prepare组 {prep_idx}/{n_prep_groups} "
+                   f"开始执行 {n_combos_in_group} combo 循环…")
+
         for combo_idx, det_kwargs in combos_in_group:
+            _tc0 = time.perf_counter()
             matched_gpu = detect_batch_fn(gpu_columns, boundaries, det_kwargs)
             matched_cpu = cp.asnumpy(matched_gpu).astype(bool)
+            _tc1 = time.perf_counter()
+            _t_gpu_total += _tc1 - _tc0
 
-            raw_hits = split_batch_hits(
+            deduped_hits = _vectorized_split_dedup(
                 matched_cpu, boundaries, ts_flat, valid_codes, tf_key,
-                pattern_span_fn=pattern_span_fn,
+                pattern_span_fn, detect_batch_fn,
             )
+            if deduped_hits:
+                accumulator.extend(combo_idx, deduped_hits)
 
-            # per-code dedup
-            code_hits_map: dict[str, list[dict]] = {}
-            for h in raw_hits:
-                code_hits_map.setdefault(h["code"], []).append(h)
-            for code, code_hits in code_hits_map.items():
-                accumulator.extend(combo_idx, _dedup_nearby_hits(code_hits, tf_key))
+            _t_post_total += time.perf_counter() - _tc1
 
             combo_done += 1
             group_combo_done += 1
-            if progress_queue is not None:
-                equiv = len(valid_codes) * group_combo_done / n_combos
-                increment = equiv - _group_reported
-                if increment > 0:
-                    progress_queue.put(increment)
-                    _group_reported = equiv
 
-        _total_reported += _group_reported
+            if log_fn and (group_combo_done <= 3
+                           or group_combo_done % 20 == 0
+                           or group_combo_done == n_combos_in_group):
+                _elapsed = round(time.perf_counter() - t_combos, 2)
+                _gpu_avg = _t_gpu_total / group_combo_done * 1000
+                _cpu_avg = _t_post_total / group_combo_done * 1000
+                log_fn("info",
+                       f"[阶段B-GPU-sweep] prepare组 {prep_idx}/{n_prep_groups} "
+                       f"combo {group_combo_done}/{n_combos_in_group} "
+                       f"({_elapsed}s, GPU均={_gpu_avg:.1f}ms CPU均={_cpu_avg:.1f}ms)")
+
+        # ── 进度上报：组完成后一次性写入 managed queue ──
+        group_equiv = len(valid_codes) * group_combo_done / n_combos
+        if progress_queue is not None and group_equiv > 0:
+            progress_queue.put(group_equiv)
+        _total_reported += group_equiv
+
+        combos_sec = round(time.perf_counter() - t_combos, 2)
+        if log_fn:
+            log_fn("info", f"[阶段B-GPU-sweep] prepare组 {prep_idx}/{n_prep_groups} "
+                   f"{n_combos_in_group}组合完成 总={combos_sec}s "
+                   f"(GPU+D2H={_t_gpu_total:.1f}s CPU后处理={_t_post_total:.1f}s) "
+                   f"累积命中={accumulator.total_hits}")
 
         # 释放本组特征显存（保留 gpu_raw 原始数据）
         if prepare_batch_fn is not None and gpu_raw is not None:
             for fk in [k for k in gpu_columns if k not in gpu_raw]:
                 del gpu_columns[fk]
         del gpu_columns
+        cp.cuda.Stream.null.synchronize()
         cp.get_default_memory_pool().free_all_blocks()
 
     # 释放原始显存
     if gpu_raw is not None:
         del gpu_raw
+        cp.cuda.Stream.null.synchronize()
         cp.get_default_memory_pool().free_all_blocks()
 
     # 最终修正 processed_count = 实际股票数
@@ -1393,6 +1507,7 @@ def _join_parquet_batched(
 
             con = duckdb.connect()
             try:
+                con.execute("SET memory_limit = '2GB'")
                 tbl = f"_bt_join_{tf_key}"
                 con.register(tbl, batch)
 
@@ -1770,8 +1885,10 @@ def _compute_metrics_gpu_batched(
             parts.append(chunk)
             pos = end
             oom_retries = 0
+            cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
         except cp.cuda.memory.OutOfMemoryError:
+            cp.cuda.Stream.null.synchronize()
             cp.get_default_memory_pool().free_all_blocks()
             batch_size = max(_GPU_MIN_BATCH, batch_size // 2)
             oom_retries += 1

@@ -473,22 +473,25 @@ class BacktestManager:
                     n_sec=len(active_sections),
                 ):
                     nonlocal processed_count
-                    while not done_evt.is_set():
-                        try:
-                            while True:
-                                q.get_nowait()
-                                processed_count += 1
-                        except Exception:
-                            pass
-                        sec_frac = processed_count / total if total > 0 else 0.0
-                        prog = detect_weight * ((si + sec_frac) / n_sec) if n_sec > 0 else 0.0
-                        self.state_db.update_backtest_job_fields(
-                            jid,
-                            progress=round(min(prog, detect_weight), 4),
-                            processed_stocks=processed_count,
-                            total_stocks=total,
-                        )
-                        time.sleep(2)
+                    try:
+                        while not done_evt.is_set():
+                            try:
+                                while True:
+                                    q.get_nowait()
+                                    processed_count += 1
+                            except Exception:
+                                pass
+                            sec_frac = processed_count / total if total > 0 else 0.0
+                            prog = detect_weight * ((si + sec_frac) / n_sec) if n_sec > 0 else 0.0
+                            self.state_db.update_backtest_job_fields(
+                                jid,
+                                progress=round(min(prog, detect_weight), 4),
+                                processed_stocks=processed_count,
+                                total_stocks=total,
+                            )
+                            done_evt.wait(timeout=0.5)
+                    except Exception:
+                        logger.exception("[_consume_progress] consumer thread crashed")
 
                 progress_thread = threading.Thread(target=_consume_progress, daemon=True)
                 progress_thread.start()
@@ -773,11 +776,14 @@ class BacktestManager:
                     current_index=sec_idx,
                     total_sections=n_active,
                 ) -> None:
-                    while not done_evt.is_set():
-                        _ = (jid, total, current_index, total_sections)
-                        _drain_progress_queue(q)
-                        _update_detect_status()
-                        time.sleep(2)
+                    try:
+                        while not done_evt.is_set():
+                            _ = (jid, total, current_index, total_sections)
+                            _drain_progress_queue(q)
+                            _update_detect_status()
+                            done_evt.wait(timeout=0.5)
+                    except Exception:
+                        logger.exception("[_consume_progress] consumer thread crashed")
 
                 _update_detect_status()
                 progress_thread = threading.Thread(target=_consume_progress, daemon=True)
@@ -904,7 +910,7 @@ class BacktestManager:
 
                 combo_label = {p: _get_nested(combo_params, p) for p in param_ranges}
                 combo_hit_count = merged_accumulator.hit_counts.get(combo_idx, 0)
-                hits_df = combo_metrics_map.get(combo_idx, pd.DataFrame())
+                hits_df = combo_metrics_map.pop(combo_idx, pd.DataFrame())
                 self._set_job_runtime_status(
                     job_id,
                     phase="stats",
@@ -1132,7 +1138,7 @@ def _intersect_hits_and_from_db(
     spill_dir: Path,
     log_fn: Callable[[str, str], None],
 ) -> backtest_engine.SweepHitsAccumulator:
-    """AND 交集的落盘模式版本：用 DuckDB 跨文件 JOIN 实现。"""
+    """AND 交集：将各 section 数据加载为 DataFrame，用内存 DuckDB 做 JOIN。"""
     import duckdb as _ddb
 
     # section_key -> tf_key
@@ -1150,62 +1156,45 @@ def _intersect_hits_and_from_db(
     finer_sks = sorted_sks[1:]
 
     if not finer_sks:
-        # 只有一个 section，直接返回
         return section_accumulators[coarsest_sk]
 
     coarsest_tf_key = section_tf[coarsest_sk]
     window = _TF_ALIGN_WINDOW.get(coarsest_tf_key, timedelta(days=7))
 
-    # 确保所有 section 的 DB 缓冲已刷盘
+    # 确保所有 section 的 pending 缓冲已写盘
     for acc in section_accumulators.values():
         acc._flush_pending()
 
-    # 创建合并用临时 DuckDB
+    # 将各 section 转为 DataFrame（load_all_to_mem 处理内存/pickle两种模式）
+    section_dfs: dict[str, pd.DataFrame] = {}
+    _cols = ["combo_idx", "code", "tf_key", "pattern_start_ts", "pattern_end_ts"]
+    for sk, acc in section_accumulators.items():
+        all_data = acc.load_all_to_mem()
+        rows = []
+        for ci, hits in all_data.items():
+            for h in hits:
+                rows.append((ci, h["code"], h["tf_key"],
+                             h["pattern_start_ts"], h["pattern_end_ts"]))
+        section_dfs[sk] = pd.DataFrame(rows, columns=_cols) if rows else pd.DataFrame(columns=_cols)
+
+    # 用纯内存 DuckDB 做 JOIN（无文件 IO）
     merged_acc = backtest_engine.SweepHitsAccumulator(spill_dir=spill_dir)
-
-    spill_dir.mkdir(parents=True, exist_ok=True)
-    merge_db_path = spill_dir / f"merge_and_{id(merged_acc)}_{time.monotonic_ns()}.duckdb"
-    merge_db = _ddb.connect(str(merge_db_path))
-
+    merge_db = _ddb.connect()
     try:
-        # ATTACH 各 section 的 DuckDB 文件
-        aliases: dict[str, str] = {}
-        for i, (sk, acc) in enumerate(section_accumulators.items()):
-            if acc.is_spilled and acc.spill_path:
-                alias = f"sec_{i}"
-                merge_db.execute(f"ATTACH '{acc.spill_path}' AS {alias} (READ_ONLY)")
-                aliases[sk] = alias
-            else:
-                # 内存模式的 section — 先临时写入文件再 ATTACH
-                alias = f"sec_{i}"
-                temp_path = spill_dir / f"temp_{alias}_{time.monotonic_ns()}.duckdb"
-                temp_db = _ddb.connect(str(temp_path))
-                temp_db.execute("""
-                    CREATE TABLE sweep_hits (
-                        combo_idx INTEGER, code VARCHAR, tf_key VARCHAR,
-                        pattern_start_ts TIMESTAMP, pattern_end_ts TIMESTAMP
-                    )
-                """)
-                rows = []
-                for ci, hits in acc._mem.items():
-                    for h in hits:
-                        rows.append((ci, h["code"], h["tf_key"],
-                                     h["pattern_start_ts"], h["pattern_end_ts"]))
-                if rows:
-                    temp_db.executemany("INSERT INTO sweep_hits VALUES (?,?,?,?,?)", rows)
-                temp_db.close()
-                merge_db.execute(f"ATTACH '{temp_path}' AS {alias} (READ_ONLY)")
-                aliases[sk] = alias
+        tbl_names: dict[str, str] = {}
+        for i, sk in enumerate(section_accumulators):
+            tbl = f"sec_{i}"
+            merge_db.register(tbl, section_dfs[sk])
+            tbl_names[sk] = tbl
 
-        coarsest_alias = aliases[coarsest_sk]
+        coarsest_tbl = tbl_names[coarsest_sk]
         window_interval = f"{int(window.total_seconds())} seconds"
 
-        # 构建 EXISTS 子句
         exists_clauses = []
         for sk in finer_sks:
-            finer_alias = aliases[sk]
+            finer_tbl = tbl_names[sk]
             exists_clauses.append(
-                f"EXISTS (SELECT 1 FROM {finer_alias}.sweep_hits f "
+                f"EXISTS (SELECT 1 FROM {finer_tbl} f "
                 f"WHERE f.combo_idx = c.combo_idx AND f.code = c.code "
                 f"AND f.pattern_end_ts >= c.pattern_end_ts - INTERVAL '{window_interval}' "
                 f"AND f.pattern_end_ts < c.pattern_end_ts + INTERVAL '1 day')"
@@ -1215,46 +1204,26 @@ def _intersect_hits_and_from_db(
         sql = (
             f"SELECT c.combo_idx, c.code, c.tf_key, "
             f"c.pattern_start_ts, c.pattern_end_ts "
-            f"FROM {coarsest_alias}.sweep_hits c "
+            f"FROM {coarsest_tbl} c "
             f"WHERE {where_clause}"
         )
 
         result_df = merge_db.execute(sql).fetchdf()
-
-        log_fn("info", f"tf_logic=and (DB): 交集结果 {len(result_df)} 行")
-
-        # 将结果写入 merged_accumulator
-        if not result_df.empty:
-            # 强制落盘模式（直接创建 spill）
-            merged_acc._spill_dir = spill_dir
-            merged_acc._do_spill()
-            # 用 DuckDB DataFrame 直接注入（远快于 executemany 逐行）
-            merged_acc._db.execute(
-                "INSERT INTO sweep_hits SELECT * FROM result_df"
-            )
-            # 向量化更新元数据
-            counts = result_df.groupby("combo_idx").size()
-            for ci, cnt in counts.items():
-                merged_acc.hit_counts[int(ci)] = int(cnt)
-            merged_acc.total_hits = int(counts.sum())
-            uk = result_df[["code", "tf_key", "pattern_end_ts"]].drop_duplicates()
-            merged_acc.unique_keys = set(uk.itertuples(index=False, name=None))
-
     finally:
         merge_db.close()
-        # 清理合并临时 DB
-        for suffix in ("", ".wal"):
-            p = merge_db_path.parent / (merge_db_path.name + suffix)
-            try:
-                p.unlink(missing_ok=True)
-            except Exception:
-                pass
-        # 清理内存模式 section 的临时文件
-        for f in spill_dir.glob("temp_sec_*.duckdb*"):
-            try:
-                f.unlink(missing_ok=True)
-            except Exception:
-                pass
+
+    log_fn("info", f"tf_logic=and: 交集结果 {len(result_df)} 行")
+
+    if not result_df.empty:
+        # 直接写入 merged_acc 内存（AND 结果通常远小于原始数据）
+        for ci_val, grp in result_df.groupby("combo_idx", sort=False):
+            ci = int(ci_val)
+            hits = grp[["code", "tf_key", "pattern_start_ts", "pattern_end_ts"]].to_dict("records")
+            merged_acc._mem[ci] = hits
+            merged_acc.hit_counts[ci] = len(hits)
+        merged_acc.total_hits = len(result_df)
+        uk = result_df[["code", "tf_key", "pattern_end_ts"]].drop_duplicates()
+        merged_acc.unique_keys = set(uk.itertuples(index=False, name=None))
 
     return merged_acc
 
